@@ -1,0 +1,7 @@
+# Build output
+bin/
+obj/
+*.user
+
+# SMAPI's build config copies the mod here on build
+[Bb]uild/
