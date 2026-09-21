@@ -83,6 +83,22 @@ namespace StardewLogistics.Framework
         /*********
         ** Private methods
         *********/
+        /// <summary>Builds a drawable icon for an ingredient, which may name a category rather than an item.</summary>
+        /// <remarks>Recipes can ask for "any egg", so the game resolves which sprite stands for the requirement.</remarks>
+        public Item CreateIngredientIcon(string ingredientId)
+        {
+            try
+            {
+                string resolved = this.Recipe.getSpriteIndexFromRawIndex(ingredientId);
+                return ItemRegistry.Create(resolved, 1, 0, allowNull: true)
+                    ?? ItemRegistry.Create(ingredientId, 1, 0, allowNull: true);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         /// <summary>Counts how much of one ingredient is reachable across the network and the player's bag.</summary>
         public long CountAvailable(string ingredientId, IEnumerable<IFilterableEntry> stock, bool includePlayerInventory)
         {

@@ -29,6 +29,8 @@ namespace StardewLogistics.Menus
         private ClickableTextureComponent CraftableOnlyButton;
         private bool CraftableOnly;
         private RecipeEntry HoverRecipe;
+        private int HoverX;
+        private int HoverY;
 
 
         /*********
@@ -293,18 +295,10 @@ namespace StardewLogistics.Menus
             if (this.HoverRecipe == null)
                 return;
 
-            // Three things matter here. An empty hoverText makes drawToolTip draw nothing at all, so the text
-            // has to be real. A long one overflows, because drawToolTip draws hoverText without measuring it
-            // when sizing the box. And passing hoveredItem as well as craftingIngredients adds a second,
-            // unmeasured description underneath. The recipe's own description with no hovered item is the
-            // combination the vanilla crafting menu uses, and it sizes correctly.
-            IClickableMenu.drawToolTip(
-                b,
-                this.HoverRecipe.Recipe.description,
-                this.HoverRecipe.DisplayName,
-                null,
-                craftingIngredients: this.HoverRecipe.Recipe
-            );
+            // Drawn by the mod rather than by drawToolTip: the vanilla panel counts ingredients against the
+            // player's own inventory, so every line read "0" however much the network held, and it drew the
+            // description a second time without measuring it.
+            RecipeTooltip.Draw(b, this.HoverRecipe, this.AllStock, this.Translations, this.HoverX, this.HoverY);
         }
     }
 }

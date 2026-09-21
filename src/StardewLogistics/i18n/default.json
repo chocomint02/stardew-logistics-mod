@@ -77,7 +77,7 @@
   "bulk.craftable": "{{count}} craftable",
   "bulk.craft": "Craft {{count}}",
   "bulk.craft-hint": "Craft {{count}} now.",
-  "bulk.resolved": "= {{count}}",
   "bulk.max": "Max",
-  "bulk.min": "Min"
+  "bulk.min": "Min",
+  "ui.ingredients": "Ingredients:"
 }

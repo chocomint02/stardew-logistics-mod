@@ -42,7 +42,12 @@ namespace StardewLogistics.Menus
         *********/
         private const int SlotSize = 64;
         private const int Columns = 13;
-        private const int HeaderHeight = 112;
+        /// <summary>Vertical space above the grid: the tab row, the control row, and the search row.</summary>
+        /// <remarks>
+        /// The search box has a row to itself so it can span the window. Sharing the control row meant it took
+        /// whatever was left over, which was never much and cut off longer queries.
+        /// </remarks>
+        private const int HeaderHeight = 168;
         /// <summary>Vertical space reserved for the player inventory.</summary>
         /// <remarks>
         /// InventoryMenu spaces its rows by more than the slot size and draws hotbar key labels above the first
@@ -134,7 +139,7 @@ namespace StardewLogistics.Menus
             this.SearchBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
             {
                 X = this.SearchBoxLeft,
-                Y = this.yPositionOnScreen + 64,
+                Y = this.yPositionOnScreen + 116,
                 Width = this.SearchBoxWidth,
                 Height = 40
             };
@@ -391,6 +396,8 @@ namespace StardewLogistics.Menus
             this.CraftableOnlyButton?.tryHover(x, y);
 
             this.HoverRecipe = null;
+            this.HoverX = x;
+            this.HoverY = y;
 
             if (this.Tab == TerminalTab.Craft)
             {
@@ -530,9 +537,9 @@ namespace StardewLogistics.Menus
             this.ModFilterButton = new ClickableComponent(new Rectangle(x, buttonY, modWidth, 44), "mod");
             x += modWidth + 10;
 
-            // The search box takes whatever is left, down to a floor that still shows its placeholder.
-            this.SearchBoxWidth = Math.Max(150, (this.xPositionOnScreen + this.width - 32) - x);
-            this.SearchBoxLeft = x;
+            // The search box sits on its own row and spans the full content width.
+            this.SearchBoxLeft = this.xPositionOnScreen + 32;
+            this.SearchBoxWidth = Columns * SlotSize;
         }
 
         /// <summary>The width a labelled header button needs to show a caption without truncating it.</summary>

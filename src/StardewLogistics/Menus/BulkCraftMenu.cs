@@ -69,7 +69,9 @@ namespace StardewLogistics.Menus
 
             this.Quantity = Math.Max(1, Math.Min(entry.CraftableCount, 1));
 
-            this.QuantityBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.dialogueFont, Game1.textColor)
+            // smallFont rather than dialogueFont: the larger face overflowed the box as soon as the value ran
+            // past two digits, and an expression like "1+18" never fitted at all.
+            this.QuantityBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
             {
                 X = this.xPositionOnScreen + (this.width / 2) - (QuantityBoxWidth / 2),
                 Y = this.yPositionOnScreen + 336,
@@ -366,13 +368,8 @@ namespace StardewLogistics.Menus
 
             this.QuantityBox.Draw(b);
 
-            // Show what an expression worked out to, so "10*2" visibly becomes 20 before committing.
-            if (!int.TryParse(this.QuantityBox.Text, out _))
-            {
-                string resolved = this.Translations.Get("bulk.resolved", new { count = this.Quantity });
-                Vector2 size = Game1.smallFont.MeasureString(resolved);
-                Utility.drawTextWithShadow(b, resolved, Game1.smallFont, new Vector2(this.QuantityBox.X + (this.QuantityBox.Width / 2) - (size.X / 2), this.QuantityBox.Y + 56), Game1.textColor * 0.8f);
-            }
+            // No separate "resolved value" line: the craft button already reads "Craft 19", which says the same
+            // thing in the place the player is about to click.
         }
 
         /// <summary>Draws the confirm button.</summary>
