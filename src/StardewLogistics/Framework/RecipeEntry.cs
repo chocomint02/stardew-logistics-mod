@@ -83,8 +83,8 @@ namespace StardewLogistics.Framework
         /*********
         ** Private methods
         *********/
-        /// <summary>Counts how much of one ingredient is reachable.</summary>
-        private long CountAvailable(string ingredientId, IEnumerable<IFilterableEntry> stock, bool includePlayerInventory)
+        /// <summary>Counts how much of one ingredient is reachable across the network and the player's bag.</summary>
+        public long CountAvailable(string ingredientId, IEnumerable<IFilterableEntry> stock, bool includePlayerInventory)
         {
             long total = 0;
 

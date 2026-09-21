@@ -32,6 +32,9 @@ namespace StardewLogistics.Framework
         /// <summary>The cable floor's tilesheet, holding the sixteen connection variants.</summary>
         public const string CableFloorTexture = ModId + "/CableFloor";
 
+        /// <summary>The terminal's own UI icons, drawn rather than cropped out of the game's shared cursor sheet.</summary>
+        public const string UiIconsTexture = ModId + "/UiIcons";
+
         /*********
         ** modData keys
         *********/

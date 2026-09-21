@@ -110,9 +110,12 @@ namespace StardewLogistics.Menus
                 );
             }
 
-            this.SortButton.draw(b);
+            this.DrawFilterButton(b, this.SortButton, this.Translations.Get("ui.sort-label", new
+            {
+                mode = this.Translations.Get("sort." + this.Sort.ToString().ToLowerInvariant())
+            }), active: false);
 
-            // The second slot is "deposit everything" while browsing stock, and "only show what I can make"
+            // The second slot is "deposit everything" while browsing stock, and "show craftable only"
             // while browsing recipes.
             if (this.Tab == TerminalTab.Craft)
                 this.CraftableOnlyButton.draw(b, this.CraftableOnly ? Color.White : Color.White * 0.5f, 0.9f);

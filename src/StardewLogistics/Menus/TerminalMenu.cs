@@ -41,7 +41,7 @@ namespace StardewLogistics.Menus
         ** Fields
         *********/
         private const int SlotSize = 64;
-        private const int Columns = 12;
+        private const int Columns = 13;
         private const int HeaderHeight = 112;
         private const int InventoryHeight = 3 * SlotSize + 28;
 
@@ -69,7 +69,7 @@ namespace StardewLogistics.Menus
         private readonly InventoryMenu PlayerInventory;
         private readonly TextBox SearchBox;
         private ClickableComponent SearchBoxBounds;
-        private ClickableTextureComponent SortButton;
+        private ClickableComponent SortButton;
         private ClickableTextureComponent DepositAllButton;
         private ClickableComponent TypeFilterButton;
         private ClickableComponent ModFilterButton;
@@ -114,17 +114,19 @@ namespace StardewLogistics.Menus
             this.xPositionOnScreen = (Game1.uiViewport.Width - this.width) / 2;
             this.yPositionOnScreen = (Game1.uiViewport.Height - this.height) / 2;
 
+            // The player's inventory is always 12 slots wide; the grid above it is not, so centre it rather than
+            // left-aligning it under a wider grid.
             this.PlayerInventory = new InventoryMenu(
-                this.xPositionOnScreen + 32,
+                this.xPositionOnScreen + ((this.width - (12 * SlotSize)) / 2),
                 this.yPositionOnScreen + this.height - InventoryHeight + 24,
                 playerInventory: true
             );
 
             this.SearchBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
             {
-                X = this.xPositionOnScreen + this.width - 288,
+                X = this.xPositionOnScreen + this.width - 252,
                 Y = this.yPositionOnScreen + 64,
-                Width = 256,
+                Width = 220,
                 Height = 40
             };
 
@@ -306,7 +308,7 @@ namespace StardewLogistics.Menus
             {
                 RecipeEntry recipe = this.GetRecipeAt(x, y);
                 if (recipe != null)
-                    this.CraftRecipe(recipe, int.MaxValue);
+                    this.OpenBulkCraft(recipe);
                 return;
             }
 
@@ -376,8 +378,8 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            this.SortButton?.tryHover(x, y);
             this.DepositAllButton?.tryHover(x, y);
+            this.CraftableOnlyButton?.tryHover(x, y);
 
             this.HoverRecipe = null;
 
@@ -492,28 +494,29 @@ namespace StardewLogistics.Menus
             }
 
             int buttonY = this.yPositionOnScreen + 64;
-            this.SortButton = new ClickableTextureComponent(
-                new Rectangle(this.xPositionOnScreen + 32, buttonY, 44, 44),
-                Game1.mouseCursors,
-                new Rectangle(162, 440, 16, 16),
-                2.75f
-            );
+
+            // Icons come from the mod's own sheet: picking rectangles out of the game's shared cursor texture is
+            // guesswork, and a wrong guess renders as a meaningless crop rather than failing visibly.
+            Texture2D icons = Game1.content.Load<Texture2D>(ModIds.UiIconsTexture);
+
+            this.SortButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 32, buttonY, 176, 44), "sort");
+
             this.DepositAllButton = new ClickableTextureComponent(
-                new Rectangle(this.xPositionOnScreen + 88, buttonY, 44, 44),
-                Game1.mouseCursors,
-                new Rectangle(526, 218, 16, 16),
-                2.75f
+                new Rectangle(this.xPositionOnScreen + 218, buttonY, 44, 44),
+                icons,
+                new Rectangle(32, 0, 16, 16),
+                2.5f
             );
 
             this.CraftableOnlyButton = new ClickableTextureComponent(
-                new Rectangle(this.xPositionOnScreen + 88, buttonY, 44, 44),
-                Game1.mouseCursors,
-                new Rectangle(253, 1957, 16, 16),
-                2.75f
+                new Rectangle(this.xPositionOnScreen + 218, buttonY, 44, 44),
+                icons,
+                new Rectangle(0, 0, 16, 16),
+                2.5f
             );
 
-            this.TypeFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 148, buttonY, 200, 44), "type");
-            this.ModFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 356, buttonY, 200, 44), "mod");
+            this.TypeFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 272, buttonY, 190, 44), "type");
+            this.ModFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 472, buttonY, 190, 44), "mod");
         }
 
         /// <summary>Whether the current tab uses the search box and filter dropdowns.</summary>

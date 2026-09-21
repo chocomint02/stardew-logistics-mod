@@ -252,6 +252,40 @@ namespace StardewLogistics.Menus
                 total = this.Recipes.All.Count
             });
             Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 8), Game1.textColor);
+
+            // The click hint lives here rather than in the tooltip: it is the same for every recipe, and a long
+            // line of it inside drawToolTip overflows the box that the ingredient panel sized.
+            string hint = this.Translations.Get("ui.craft-footer");
+            Vector2 hintSize = Game1.smallFont.MeasureString(hint);
+            Utility.drawTextWithShadow(b, hint, Game1.smallFont, new Vector2(grid.Right - hintSize.X, grid.Bottom + 8), Game1.textColor * 0.6f);
+        }
+
+        /// <summary>Opens the quantity dialog for a recipe, returning to the terminal when it closes.</summary>
+        private void OpenBulkCraft(RecipeEntry entry)
+        {
+            if (this.Network == null)
+            {
+                this.ShowError(this.Translations.Get("error.not-connected"));
+                return;
+            }
+
+            if (!entry.CanCraft)
+            {
+                this.ShowError(this.Translations.Get("error.missing-ingredients"));
+                return;
+            }
+
+            this.ReleaseKeyboard();
+
+            TerminalMenu parent = this;
+            BulkCraftMenu dialog = new(entry, this.AllStock, this.Translations, count => parent.CraftRecipe(entry, count));
+
+            // Restoring the terminal on exit covers both paths: confirming runs this first and then crafts, and
+            // closing with the X or escape lands the player back where they were rather than in the world.
+            dialog.exitFunction = () => Game1.activeClickableMenu = parent;
+
+            Game1.playSound("smallSelect");
+            Game1.activeClickableMenu = dialog;
         }
 
         /// <summary>Draws the hovered recipe's tooltip, including the vanilla ingredient panel.</summary>
@@ -260,11 +294,11 @@ namespace StardewLogistics.Menus
             if (this.HoverRecipe == null)
                 return;
 
+            // drawToolTip sizes its box from the item and the ingredient panel; a long hoverText is drawn but
+            // not measured, which is what pushed text outside the frame. Keep the text out of it entirely.
             IClickableMenu.drawToolTip(
                 b,
-                this.HoverRecipe.CanCraft
-                    ? this.Translations.Get("ui.craft-hint")
-                    : this.Translations.Get("ui.craft-missing"),
+                "",
                 this.HoverRecipe.DisplayName,
                 this.HoverRecipe.Output,
                 craftingIngredients: this.HoverRecipe.Recipe

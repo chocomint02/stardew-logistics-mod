@@ -74,6 +74,8 @@ namespace StardewLogistics
                 e.LoadFromModFile<Texture2D>("assets/craftables.png", AssetLoadPriority.Medium);
             else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.CableFloorTexture))
                 e.LoadFromModFile<Texture2D>("assets/cable-floor.png", AssetLoadPriority.Medium);
+            else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.UiIconsTexture))
+                e.LoadFromModFile<Texture2D>("assets/ui-icons.png", AssetLoadPriority.Medium);
         }
 
 
