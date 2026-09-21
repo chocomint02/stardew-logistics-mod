@@ -16,7 +16,7 @@ namespace StardewLogistics.Menus
         /*********
         ** Fields
         *********/
-        private const int RowHeight = 84;
+        private const int RowHeight = 104;
         private const int FilterSlotSize = 32;
 
         private readonly List<ConfigRow> ConfigRows = new();
@@ -214,10 +214,17 @@ namespace StardewLogistics.Menus
 
             if (this.VisibleStock.Count == 0)
             {
-                string message = string.IsNullOrWhiteSpace(this.SearchBox.Text)
-                    ? this.Translations.Get("ui.empty-network")
-                    : this.Translations.Get("ui.no-results");
-                this.DrawCentredMessage(b, grid, message);
+                // Only explain something the player can act on. A network with chests attached and nothing in them
+                // is working exactly as intended, so it gets an empty grid rather than a message telling the player
+                // to do what they have already done.
+                string message = null;
+                if (this.Network.Storages.Count == 0)
+                    message = this.Translations.Get("ui.no-storage");
+                else if (!this.Filter.IsEmpty)
+                    message = this.Translations.Get("ui.no-results");
+
+                if (message != null)
+                    this.DrawCentredMessage(b, grid, message);
             }
 
             int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
@@ -295,8 +302,8 @@ namespace StardewLogistics.Menus
 
                 drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), grid.X, y, grid.Width, RowHeight - 8, Color.White * 0.9f, 1f, drawShadow: false);
 
-                Utility.drawTextWithShadow(b, row.Title, Game1.smallFont, new Vector2(grid.X + 20, y + 14), Game1.textColor);
-                Utility.drawTextWithShadow(b, row.Subtitle, Game1.smallFont, new Vector2(grid.X + 20, y + 42), Game1.textColor * 0.6f);
+                Utility.drawTextWithShadow(b, row.Title, Game1.smallFont, new Vector2(grid.X + 18, y + 16), Game1.textColor);
+                Utility.drawTextWithShadow(b, row.Subtitle, Game1.smallFont, new Vector2(grid.X + 18, y + 52), Game1.textColor * 0.6f);
 
                 // Priority controls
                 if (row.HasPriority)
@@ -309,17 +316,20 @@ namespace StardewLogistics.Menus
 
                     string priority = row.Entry.Priority.ToString();
                     Vector2 size = Game1.smallFont.MeasureString(priority);
-                    Utility.drawTextWithShadow(b, priority, Game1.smallFont, new Vector2(minus.Right + 20 - (size.X / 2), y + 26), Game1.textColor);
+                    Utility.drawTextWithShadow(b, priority, Game1.smallFont, new Vector2(minus.Right + 16 - (size.X / 2), y + 36), Game1.textColor);
                 }
 
                 // Allow/deny toggle
                 Rectangle mode = this.GetModeButton(grid, y);
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), mode.X, mode.Y, mode.Width, mode.Height, Color.White, 2f, drawShadow: false);
+
+                string modeLabel = this.Translations.Get(row.Filter.Mode == FilterMode.Allow ? "filter.allow" : "filter.deny");
+                Vector2 modeSize = Game1.smallFont.MeasureString(modeLabel);
                 Utility.drawTextWithShadow(
                     b,
-                    this.Translations.Get(row.Filter.Mode == FilterMode.Allow ? "filter.allow" : "filter.deny"),
-                    Game1.tinyFont,
-                    new Vector2(mode.X + 8, mode.Y + 10),
+                    modeLabel,
+                    Game1.smallFont,
+                    new Vector2(mode.Center.X - (modeSize.X / 2), mode.Center.Y - (modeSize.Y / 2)),
                     Game1.textColor
                 );
 
@@ -352,19 +362,24 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>The bounds of a priority button on a row.</summary>
+        /// <remarks>
+        /// The columns below are laid out against the 768px content width: label 18-260, priority 270-358,
+        /// allow/deny 370-460, then nine 32px filter slots ending at 760. Widening any of them pushes the
+        /// filter slots off the panel, which is what clipped them before.
+        /// </remarks>
         private Rectangle GetPriorityButton(Rectangle grid, int rowY, bool increase)
         {
-            int x = grid.X + 300 + (increase ? 72 : 0);
-            return new Rectangle(x, rowY + 24, 28, 32);
+            int x = grid.X + 270 + (increase ? 60 : 0);
+            return new Rectangle(x, rowY + 32, 28, 32);
         }
 
         /// <summary>The bounds of the allow/deny toggle on a row.</summary>
-        private Rectangle GetModeButton(Rectangle grid, int rowY) => new(grid.X + 400, rowY + 20, 64, 40);
+        private Rectangle GetModeButton(Rectangle grid, int rowY) => new(grid.X + 370, rowY + 28, 90, 44);
 
         /// <summary>The bounds of one filter slot on a row.</summary>
         private Rectangle GetFilterSlot(Rectangle grid, int rowY, int slot)
         {
-            return new Rectangle(grid.X + 480 + (slot * FilterSlotSize), rowY + 22, FilterSlotSize, FilterSlotSize);
+            return new Rectangle(grid.X + 472 + (slot * FilterSlotSize), rowY + 32, FilterSlotSize, FilterSlotSize);
         }
 
 

@@ -44,6 +44,17 @@ namespace StardewLogistics.Menus
         private const int HeaderHeight = 112;
         private const int InventoryHeight = 3 * SlotSize + 28;
 
+        /// <summary>Vertical space between the grid and the player inventory.</summary>
+        /// <remarks>
+        /// This has to clear two things, not one: the summary line the terminal draws, and the row of hotbar key
+        /// labels ("1 2 3 ... 0 - =") that <see cref="InventoryMenu"/> draws above its own top row. Sizing it for
+        /// the summary alone puts the two on top of each other.
+        /// </remarks>
+        private const int SummaryBand = 76;
+
+        /// <summary>The most grid rows to show, when the window is tall enough for them.</summary>
+        private const int MaxRows = 8;
+
         private readonly ITranslationHelper Translations;
         private readonly NetworkManager Networks;
         private readonly GameLocation TerminalLocation;
@@ -93,12 +104,12 @@ namespace StardewLogistics.Menus
             this.TerminalTile = tile;
             this.CanCraft = canCraft;
 
-            // Shrink the grid on small windows rather than overflowing off-screen.
-            int available = Game1.uiViewport.Height - (HeaderHeight + InventoryHeight + 160);
-            this.Rows = Math.Clamp(available / SlotSize, 3, 6);
+            // Grow the grid to fill a tall window, but shrink it rather than overflowing a short one.
+            int available = Game1.uiViewport.Height - (HeaderHeight + SummaryBand + InventoryHeight + 120);
+            this.Rows = Math.Clamp(available / SlotSize, 3, MaxRows);
 
             this.width = (Columns * SlotSize) + 96;
-            this.height = HeaderHeight + (this.Rows * SlotSize) + 32 + InventoryHeight;
+            this.height = HeaderHeight + (this.Rows * SlotSize) + SummaryBand + InventoryHeight;
             this.xPositionOnScreen = (Game1.uiViewport.Width - this.width) / 2;
             this.yPositionOnScreen = (Game1.uiViewport.Height - this.height) / 2;
 
@@ -110,7 +121,7 @@ namespace StardewLogistics.Menus
 
             this.SearchBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
             {
-                X = this.xPositionOnScreen + this.width - 300,
+                X = this.xPositionOnScreen + this.width - 288,
                 Y = this.yPositionOnScreen + 64,
                 Width = 256,
                 Height = 40
@@ -359,7 +370,9 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
+            if (this.SearchBoxBounds.containsPoint(x, y))
+                this.HoverText = this.Translations.Get("ui.search-help");
+            else if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.filter-hint");
             else if (this.SortButton.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.sort-by", new { mode = this.Translations.Get("sort." + this.Sort.ToString().ToLowerInvariant()) });
@@ -457,8 +470,8 @@ namespace StardewLogistics.Menus
                 2.75f
             );
 
-            this.TypeFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 148, buttonY, 168, 44), "type");
-            this.ModFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 324, buttonY, 168, 44), "mod");
+            this.TypeFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 148, buttonY, 200, 44), "type");
+            this.ModFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 356, buttonY, 200, 44), "mod");
         }
 
         /// <summary>The tabs this terminal shows, which depends on whether it can craft.</summary>
