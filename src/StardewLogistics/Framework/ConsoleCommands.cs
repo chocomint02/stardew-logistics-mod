@@ -107,11 +107,15 @@ namespace StardewLogistics.Framework
             IReadOnlyList<IFilterableEntry> stock = this.GetStock();
             this.Crafting.Refresh(stock);
 
+            IReadOnlyCollection<string> availableMachines = this.GetAvailableMachines();
+
             CraftPlanner planner = new(this.Crafting, this.Machines, this.Config.MaxCraftDepth);
-            CraftPlan plan = planner.Plan(itemId, count, stock);
+            CraftPlan plan = planner.Plan(itemId, count, stock, preferredMachines: null, availableMachines: availableMachines);
 
             StringBuilder output = new();
-            output.AppendLine($"Plan for {count}x {GetName(itemId)} against {stock.Count} kinds in storage:");
+            output.AppendLine($"Plan for {count}x {GetName(itemId)}");
+            output.AppendLine($"  storage: {stock.Count} kinds   known recipes: {this.Crafting.All.Count}   machines on network: "
+                + (availableMachines.Count == 0 ? "none" : string.Join(", ", availableMachines.Select(GetName))));
             Describe(plan.Root, output);
 
             output.AppendLine($"  steps: {plan.StepCount}   worst-case time: {FormatTime(plan.WorstCaseMinutes, 0)}");
@@ -144,6 +148,24 @@ namespace StardewLogistics.Framework
             Log.Debug(output.ToString());
         }
 
+        /// <summary>Returns the qualified IDs of machines wired to any network in the player's location.</summary>
+        private IReadOnlyCollection<string> GetAvailableMachines()
+        {
+            HashSet<string> ids = new(StringComparer.OrdinalIgnoreCase);
+
+            foreach (StorageNetwork network in this.Networks.GetNetworks(Game1.currentLocation))
+            {
+                foreach (NetworkNode machine in network.Machines)
+                {
+                    string id = machine.Object?.QualifiedItemId;
+                    if (id != null)
+                        ids.Add(id);
+                }
+            }
+
+            return ids;
+        }
+
         /// <summary>Returns the stock of the first network in the player's current location.</summary>
         private IReadOnlyList<IFilterableEntry> GetStock()
         {
@@ -166,6 +188,20 @@ namespace StardewLogistics.Framework
                     + (node.Alternatives.Count > 1 ? $" ({node.Alternatives.Count} machines could)" : ""),
                 _ => "MISSING"
             };
+
+            if (node.Kind == PlanStepKind.Missing)
+            {
+                detail += node.Reason switch
+                {
+                    MissingReason.NotEnoughStock => " (not in storage, and nothing makes it)",
+                    MissingReason.NoRecipe => " (no recipe you know produces it)",
+                    MissingReason.NoMachineAvailable => " (a machine could, but none is on the network)",
+                    MissingReason.DepthLimit => " (hit the depth limit)",
+                    MissingReason.RecipeLoop => " (recipe loops back on itself)",
+                    MissingReason.NotAnItem => " (recipe asks for a category, not an item)",
+                    _ => ""
+                };
+            }
 
             string supply = node.FromStock > 0 && node.Kind != PlanStepKind.FromStock
                 ? $" ({node.FromStock} from stock)"

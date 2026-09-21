@@ -24,6 +24,9 @@ namespace StardewLogistics.Framework
         private readonly MachineRecipeIndex Machines;
         private readonly int MaxDepth;
 
+        /// <summary>Machines wired to the network, or <c>null</c> to plan with any machine in the game.</summary>
+        private HashSet<string> Available;
+
 
         /*********
         ** Public methods
@@ -40,10 +43,13 @@ namespace StardewLogistics.Framework
         /// <param name="count">How many are wanted.</param>
         /// <param name="stock">The network's aggregated stock.</param>
         /// <param name="preferredMachines">The player's chosen machine per output item, keyed by qualified item ID.</param>
-        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null)
+        /// <param name="availableMachines">The qualified IDs of machines wired to the network. When given, only
+        /// those are planned with; a plan built around a machine the player doesn't own can't be carried out.</param>
+        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, IReadOnlyCollection<string> availableMachines = null)
         {
             Ledger ledger = new(stock);
             CraftPlan plan = new() { RequestedCount = count };
+            this.Available = availableMachines == null ? null : new HashSet<string>(availableMachines, StringComparer.OrdinalIgnoreCase);
 
             PlanNode root = this.Resolve(targetId, count, ledger, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0, preferredMachines, plan);
             return new CraftPlan { Root = root, RequestedCount = count, HitDepthLimit = plan.HitDepthLimit };
@@ -81,6 +87,7 @@ namespace StardewLogistics.Framework
             {
                 node.Kind = PlanStepKind.Missing;
                 node.Missing = remaining;
+                node.Reason = MissingReason.NotAnItem;
                 return node;
             }
 
@@ -89,6 +96,7 @@ namespace StardewLogistics.Framework
                 plan.HitDepthLimit = true;
                 node.Kind = PlanStepKind.Missing;
                 node.Missing = remaining;
+                node.Reason = MissingReason.DepthLimit;
                 return node;
             }
 
@@ -98,15 +106,17 @@ namespace StardewLogistics.Framework
             {
                 node.Kind = PlanStepKind.Missing;
                 node.Missing = remaining;
+                node.Reason = MissingReason.RecipeLoop;
                 return node;
             }
 
             try
             {
-                if (!this.TryPlanProduction(node, itemId, remaining, ledger, inProgress, depth, preferred, plan))
+                if (!this.TryPlanProduction(node, itemId, remaining, ledger, inProgress, depth, preferred, plan, out MissingReason reason))
                 {
                     node.Kind = PlanStepKind.Missing;
                     node.Missing = remaining;
+                    node.Reason = reason;
                 }
             }
             finally
@@ -119,8 +129,10 @@ namespace StardewLogistics.Framework
 
         /// <summary>Fills in a node with whichever recipe can make the item, crafting preferred over processing.</summary>
         /// <returns>Whether a producer was found.</returns>
-        private bool TryPlanProduction(PlanNode node, string itemId, int remaining, Ledger ledger, HashSet<string> inProgress, int depth, IReadOnlyDictionary<string, string> preferred, CraftPlan plan)
+        private bool TryPlanProduction(PlanNode node, string itemId, int remaining, Ledger ledger, HashSet<string> inProgress, int depth, IReadOnlyDictionary<string, string> preferred, CraftPlan plan, out MissingReason reason)
         {
+            reason = MissingReason.NoRecipe;
+
             // Crafting is instant and needs no machine, so it wins when both are possible.
             RecipeEntry craft = this.Crafting?.FindByOutput(itemId);
             if (craft != null)
@@ -140,9 +152,25 @@ namespace StardewLogistics.Framework
                 return true;
             }
 
-            IReadOnlyList<MachineRecipe> options = this.Machines?.GetRecipesFor(itemId) ?? Array.Empty<MachineRecipe>();
-            if (options.Count == 0)
+            IReadOnlyList<MachineRecipe> known = this.Machines?.GetRecipesFor(itemId) ?? Array.Empty<MachineRecipe>();
+            if (known.Count == 0)
+            {
+                // Nothing produces it, and the player has no recipe either, so it can only come from stock.
+                reason = MissingReason.NotEnoughStock;
                 return false;
+            }
+
+            // Only plan around machines the network actually has. Picking the Heavy Furnace on throughput when
+            // the player owns none produces a plan that looks fine and can never run.
+            List<MachineRecipe> options = this.Available == null
+                ? known.ToList()
+                : known.Where(option => this.Available.Contains(option.MachineId)).ToList();
+
+            if (options.Count == 0)
+            {
+                reason = MissingReason.NoMachineAvailable;
+                return false;
+            }
 
             MachineRecipe chosen = ChooseMachine(options, itemId, preferred);
             int outputPerBatch = Math.Max(1, chosen.OutputCount);
