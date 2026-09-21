@@ -98,7 +98,7 @@
   "auto.step-missing": "can't be supplied",
   "auto.nothing": "Nothing can be autocrafted yet. Wire up a machine, or learn a recipe.",
   "auto.tab-summary": "{{shown}} of {{total}} things this network could make",
-  "auto.tab-hint": "Click to plan a job.   Dimmed: short of materials.   Blue corner: needs a machine.",
+  "auto.tab-hint": "Click to plan.   Dimmed: short of materials.   Blue corner: needs a machine.",
   "auto.target-hint": "{{count}} in storage. Click to plan an autocrafting job.",
   "jobs.none": "No autocrafting jobs running.",
   "jobs.cancel": "Cancel",

@@ -156,7 +156,7 @@ namespace StardewLogistics.Menus
                 try
                 {
                     // Same rule as an order: "can make one" means can produce one, not "there's one on the shelf".
-                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, availableMachines, useStockForTarget: false).IsSatisfied;
+                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, availableMachines).IsSatisfied;
                 }
                 catch
                 {
@@ -286,7 +286,7 @@ namespace StardewLogistics.Menus
                 new Vector2(grid.X, grid.Bottom + 6),
                 Game1.textColor
             );
-            Utility.drawTextWithShadow(b, this.Translations.Get("auto.tab-hint"), Game1.smallFont, new Vector2(grid.X, grid.Bottom + 42), Game1.textColor * 0.6f);
+            DrawClipped(b, this.Translations.Get("auto.tab-hint"), new Vector2(grid.X, grid.Bottom + 42), grid.Width, Game1.textColor * 0.6f);
         }
 
         /// <summary>Draws the list of running jobs.</summary>
@@ -325,7 +325,9 @@ namespace StardewLogistics.Menus
 
                 // Progress bar
                 int barX = grid.X + 420;
-                int barWidth = grid.Width - 620;
+                // Leaves room for "100%" between the bar and the Cancel/Clear button; at the old width the
+                // percentage ran under the button.
+                int barWidth = grid.Width - 700;
                 b.Draw(Game1.staminaRect, new Rectangle(barX, y + 22, barWidth, 22), new Color(60, 44, 32) * 0.55f);
                 b.Draw(Game1.staminaRect, new Rectangle(barX, y + 22, (int)(barWidth * job.Progress), 22), new Color(104, 196, 112));
 
@@ -376,6 +378,26 @@ namespace StardewLogistics.Menus
                     Game1.playSound("trashcan");
                 return;
             }
+        }
+
+        /// <summary>Draws a line of text, shortened if it would run past a width.</summary>
+        /// <remarks>
+        /// A footer legend is the kind of string that grows when reworded or translated, and it sits right on the
+        /// panel edge. Clamping it here means no wording can push it outside the frame.
+        /// </remarks>
+        private static void DrawClipped(SpriteBatch b, string text, Vector2 position, int maxWidth, Color colour)
+        {
+            if (string.IsNullOrEmpty(text))
+                return;
+
+            if (Game1.smallFont.MeasureString(text).X > maxWidth)
+            {
+                while (text.Length > 1 && Game1.smallFont.MeasureString(text + "...").X > maxWidth)
+                    text = text.Substring(0, text.Length - 1);
+                text += "...";
+            }
+
+            Utility.drawTextWithShadow(b, text, Game1.smallFont, position, colour);
         }
 
         /// <summary>The bounds of a job row's cancel button.</summary>

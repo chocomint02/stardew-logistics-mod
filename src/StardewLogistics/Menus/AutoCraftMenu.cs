@@ -273,7 +273,7 @@ namespace StardewLogistics.Menus
                 StringComparer.OrdinalIgnoreCase);
 
             CraftPlanner planner = new(this.Crafting, this.MachineRecipes, this.Config.MaxCraftDepth);
-            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, available, useStockForTarget: false);
+            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, available);
 
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));

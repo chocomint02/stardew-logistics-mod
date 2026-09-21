@@ -27,9 +27,6 @@ namespace StardewLogistics.Framework
         /// <summary>Machines wired to the network, or <c>null</c> to plan with any machine in the game.</summary>
         private HashSet<string> Available;
 
-        /// <summary>Whether stock already held counts towards the item being ordered.</summary>
-        private bool UseStockForTarget = true;
-
 
         /*********
         ** Public methods
@@ -48,17 +45,17 @@ namespace StardewLogistics.Framework
         /// <param name="preferredMachines">The player's chosen machine per output item, keyed by qualified item ID.</param>
         /// <param name="availableMachines">The qualified IDs of machines wired to the network. When given, only
         /// those are planned with; a plan built around a machine the player doesn't own can't be carried out.</param>
-        /// <param name="useStockForTarget">
-        /// Whether stock already held counts towards the requested item. False for an autocrafting order, where
-        /// "make me five" means produce five: otherwise ordering five with five already in storage plans nothing
-        /// at all and looks broken. Intermediates always draw on stock either way.
-        /// </param>
-        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, IReadOnlyCollection<string> availableMachines = null, bool useStockForTarget = true)
+        /// <remarks>
+        /// An order for five means produce five: stock already held never counts towards the requested item, or
+        /// ordering five with five on the shelf would plan nothing and look broken. Intermediates always draw on
+        /// stock, which is what the ledger is for. This is deliberately not a parameter -- it was one, and the
+        /// two call sites that forgot to pass it produced a plan preview that disagreed with the queued job.
+        /// </remarks>
+        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, IReadOnlyCollection<string> availableMachines = null)
         {
             Ledger ledger = new(stock);
             CraftPlan plan = new() { RequestedCount = count };
             this.Available = availableMachines == null ? null : new HashSet<string>(availableMachines, StringComparer.OrdinalIgnoreCase);
-            this.UseStockForTarget = useStockForTarget;
 
             PlanNode root = this.Resolve(targetId, count, ledger, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0, preferredMachines, plan);
             return new CraftPlan { Root = root, RequestedCount = count, HitDepthLimit = plan.HitDepthLimit };
@@ -82,7 +79,7 @@ namespace StardewLogistics.Framework
             // Spend what's already in storage first. This is what stops two branches both planning around the
             // same hundred stone. The item being ordered can be exempt, so that an order for five produces five
             // rather than pointing at the five already on the shelf.
-            int taken = depth == 0 && !this.UseStockForTarget ? 0 : ledger.Take(itemId, needed);
+            int taken = depth == 0 ? 0 : ledger.Take(itemId, needed);
             node.FromStock = taken;
 
             int remaining = needed - taken;
