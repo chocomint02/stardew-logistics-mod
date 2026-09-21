@@ -659,8 +659,8 @@ namespace StardewLogistics.Menus
                 this.width,
                 this.height,
                 cooking: false,
-                standalone_menu: true,
-                material_containers: this.Network.GetMaterialInventories()
+                standaloneMenu: true,
+                materialContainers: this.Network.GetMaterialInventories()
             );
         }
 

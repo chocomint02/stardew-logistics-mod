@@ -134,14 +134,14 @@ namespace StardewLogistics.Network
 
         /// <summary>Returns the attached chests' inventories, for APIs such as the vanilla crafting page that take material containers.</summary>
         /// <remarks>
-        /// Stardew Valley 1.6 changed the crafting page's material containers from <c>List&lt;Chest&gt;</c> to
-        /// <c>List&lt;IInventory&gt;</c>. If a future version changes it back, this is the one place to adjust.
+        /// The crafting page takes <c>List&lt;IInventory&gt;</c>, while <see cref="StardewValley.Objects.Chest.Items"/>
+        /// is the concrete <c>Inventory</c>, so the projection needs an explicit cast to land on the right list type.
         /// </remarks>
         public List<IInventory> GetMaterialInventories()
         {
             return this.Storages
                 .Where(entry => !entry.IsBusy)
-                .Select(entry => entry.Chest.Items)
+                .Select(entry => (IInventory)entry.Chest.Items)
                 .ToList();
         }
 
