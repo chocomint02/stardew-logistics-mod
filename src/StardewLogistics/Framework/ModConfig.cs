@@ -8,15 +8,6 @@ namespace StardewLogistics.Framework
         /*********
         ** Network rules
         *********/
-        /// <summary>Whether devices consume channels, so a network needs a controller to grow past a handful of devices.</summary>
-        public bool EnableChannelLimits { get; set; } = true;
-
-        /// <summary>How many devices a network without a controller supports.</summary>
-        public int AdHocDeviceLimit { get; set; } = 8;
-
-        /// <summary>How many devices each controller adds to the network's budget.</summary>
-        public int ChannelsPerController { get; set; } = 32;
-
         /// <summary>The most cable tiles a single network may span, as a safety valve against runaway scans.</summary>
         public int MaxNetworkSize { get; set; } = 20000;
 
@@ -44,8 +35,6 @@ namespace StardewLogistics.Framework
         /// <summary>Clamps every setting to a usable range, so a hand-edited config can't break the mod.</summary>
         public void Normalise()
         {
-            this.AdHocDeviceLimit = Clamp(this.AdHocDeviceLimit, 1, 1000);
-            this.ChannelsPerController = Clamp(this.ChannelsPerController, 1, 10000);
             this.MaxNetworkSize = Clamp(this.MaxNetworkSize, 64, 200000);
             this.BusIntervalTicks = Clamp(this.BusIntervalTicks, 6, 3600);
             this.BusItemsPerRun = Clamp(this.BusItemsPerRun, 1, 999);

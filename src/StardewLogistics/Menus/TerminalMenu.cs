@@ -59,6 +59,11 @@ namespace StardewLogistics.Menus
         private ClickableComponent SearchBoxBounds;
         private ClickableTextureComponent SortButton;
         private ClickableTextureComponent DepositAllButton;
+        private ClickableComponent TypeFilterButton;
+        private ClickableComponent ModFilterButton;
+        private readonly DropdownPopup Dropdown = new();
+        private readonly StockFilter Filter = new();
+        private string OpenDropdownName;
         private readonly List<ClickableComponent> TabButtons = new();
 
         private int Rows;
@@ -125,6 +130,7 @@ namespace StardewLogistics.Menus
             if (this.SearchBox.Text != this.LastSearch)
             {
                 this.LastSearch = this.SearchBox.Text;
+                this.Filter.SetSearch(this.SearchBox.Text);
                 this.ScrollOffset = 0;
                 this.ApplyFilterAndSort();
             }
@@ -155,6 +161,20 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveLeftClick(int x, int y, bool playSound = true)
         {
+            // An open dropdown sits above everything else, so it consumes the click either way.
+            if (this.Dropdown.IsOpen)
+            {
+                bool wasChoosing = this.OpenDropdownName != null;
+                if (this.Dropdown.ReceiveLeftClick(x, y, out object chosen))
+                {
+                    if (wasChoosing && chosen != null)
+                        this.ApplyDropdownChoice(chosen);
+                    else if (wasChoosing && !this.Dropdown.IsOpen)
+                        this.ApplyDropdownChoice(null);
+                    return;
+                }
+            }
+
             if (this.upperRightCloseButton?.containsPoint(x, y) == true)
             {
                 this.exitThisMenu();
@@ -191,6 +211,22 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            if (this.TypeFilterButton.containsPoint(x, y))
+            {
+                this.OpenDropdownName = "type";
+                this.Dropdown.Open(this.BuildTypeOptions(), this.TypeFilterButton.bounds);
+                Game1.playSound("shwip");
+                return;
+            }
+
+            if (this.ModFilterButton.containsPoint(x, y))
+            {
+                this.OpenDropdownName = "mod";
+                this.Dropdown.Open(this.BuildModOptions(), this.ModFilterButton.bounds);
+                Game1.playSound("shwip");
+                return;
+            }
+
             if (this.SortButton.containsPoint(x, y))
             {
                 this.Sort = (SortMode)(((int)this.Sort + 1) % 3);
@@ -223,6 +259,31 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveRightClick(int x, int y, bool playSound = true)
         {
+            if (this.Dropdown.IsOpen)
+            {
+                this.Dropdown.Close();
+                this.OpenDropdownName = null;
+                return;
+            }
+
+            // Right-clicking a filter button clears it, rather than making the player reopen the list to pick "all".
+            if (this.Tab == TerminalTab.Items && this.TypeFilterButton.containsPoint(x, y))
+            {
+                this.Filter.Category = null;
+                this.Filter.CategoryLabel = null;
+                this.ApplyFilterAndSort();
+                Game1.playSound("trashcan");
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Items && this.ModFilterButton.containsPoint(x, y))
+            {
+                this.Filter.Mod = null;
+                this.ApplyFilterAndSort();
+                Game1.playSound("trashcan");
+                return;
+            }
+
             if (this.Tab != TerminalTab.Items)
             {
                 this.ReceiveClickOnTab(x, y, rightClick: true);
@@ -244,6 +305,9 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveScrollWheelAction(int direction)
         {
+            if (this.Dropdown.ReceiveScroll(direction))
+                return;
+
             int rows = this.Tab == TerminalTab.Items ? this.Rows : 1;
             int step = direction > 0 ? -1 : 1;
             this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset + step, Math.Max(0, this.GetMaxScroll(rows))));
@@ -280,6 +344,12 @@ namespace StardewLogistics.Menus
             this.HoverText = "";
             this.HoverItem = null;
 
+            if (this.Dropdown.IsOpen)
+            {
+                this.Dropdown.PerformHover(x, y);
+                return;
+            }
+
             this.SortButton?.tryHover(x, y);
             this.DepositAllButton?.tryHover(x, y);
 
@@ -289,7 +359,9 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.SortButton.containsPoint(x, y))
+            if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
+                this.HoverText = this.Translations.Get("ui.filter-hint");
+            else if (this.SortButton.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.sort-by", new { mode = this.Translations.Get("sort." + this.Sort.ToString().ToLowerInvariant()) });
             else if (this.DepositAllButton.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.deposit-all");
@@ -343,6 +415,7 @@ namespace StardewLogistics.Menus
 
             this.PlayerInventory.draw(b);
             this.upperRightCloseButton?.draw(b);
+            this.Dropdown.Draw(b);
 
             if (this.HoverItem != null)
                 drawToolTip(b, this.HoverText, this.HoverItem.DisplayName, this.HoverItem);
@@ -383,6 +456,9 @@ namespace StardewLogistics.Menus
                 new Rectangle(526, 218, 16, 16),
                 2.75f
             );
+
+            this.TypeFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 148, buttonY, 168, 44), "type");
+            this.ModFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 324, buttonY, 168, 44), "mod");
         }
 
         /// <summary>The tabs this terminal shows, which depends on whether it can craft.</summary>
@@ -453,9 +529,8 @@ namespace StardewLogistics.Menus
         {
             IEnumerable<NetworkItemStack> query = this.AllStock;
 
-            string search = this.SearchBox?.Text?.Trim();
-            if (!string.IsNullOrEmpty(search))
-                query = query.Where(entry => Matches(entry, search));
+            if (!this.Filter.IsEmpty)
+                query = query.Where(entry => this.Filter.Matches(entry));
 
             query = this.Sort switch
             {
@@ -468,31 +543,63 @@ namespace StardewLogistics.Menus
             this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset, this.GetMaxScroll(this.Rows)));
         }
 
-        /// <summary>Whether a stock entry matches the search box.</summary>
-        /// <remarks>Supports a plain name search, <c>#tag</c> for context tags, and <c>@category</c> for categories.</remarks>
-        private static bool Matches(NetworkItemStack entry, string search)
+        /// <summary>Builds the choices for the type filter, counting how many kinds of item each category holds.</summary>
+        private IEnumerable<(string Label, object Value)> BuildTypeOptions()
         {
-            if (search.StartsWith("#") && search.Length > 1)
+            yield return (this.Translations.Get("ui.filter-all-types"), null);
+
+            foreach (IGrouping<int, NetworkItemStack> group in this.AllStock.GroupBy(entry => entry.Category).OrderBy(group => group.Key))
             {
-                string tag = search.Substring(1);
-                try
-                {
-                    return entry.Sample.GetContextTags().Any(value => value.Contains(tag, StringComparison.OrdinalIgnoreCase));
-                }
-                catch
-                {
-                    return false;
-                }
+                string name = group.First().Sample.getCategoryName();
+                if (string.IsNullOrWhiteSpace(name))
+                    name = this.Translations.Get("ui.filter-no-category");
+
+                yield return ($"{name} ({group.Count()})", group.Key);
+            }
+        }
+
+        /// <summary>Builds the choices for the mod filter.</summary>
+        private IEnumerable<(string Label, object Value)> BuildModOptions()
+        {
+            yield return (this.Translations.Get("ui.filter-all-mods"), null);
+
+            foreach (IGrouping<string, NetworkItemStack> group in this.AllStock.GroupBy(entry => entry.SourceMod).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+                yield return ($"{group.Key} ({group.Count()})", group.Key);
+        }
+
+        /// <summary>Applies a choice made in an open dropdown.</summary>
+        private void ApplyDropdownChoice(object value)
+        {
+            if (this.OpenDropdownName == "type")
+            {
+                this.Filter.Category = value as int?;
+                this.Filter.CategoryLabel = value == null
+                    ? null
+                    : this.AllStock.FirstOrDefault(entry => entry.Category == (int)value)?.Sample.getCategoryName();
+            }
+            else if (this.OpenDropdownName == "mod")
+            {
+                this.Filter.Mod = value as string;
             }
 
-            if (search.StartsWith("@") && search.Length > 1)
+            this.OpenDropdownName = null;
+            this.ScrollOffset = 0;
+            this.ApplyFilterAndSort();
+        }
+
+        /// <summary>The label shown on a filter button, including its current selection.</summary>
+        private string GetFilterButtonLabel(string which)
+        {
+            if (which == "type")
             {
-                string category = search.Substring(1);
-                string name = entry.Sample.getCategoryName();
-                return !string.IsNullOrEmpty(name) && name.Contains(category, StringComparison.OrdinalIgnoreCase);
+                string type = this.Filter.Category == null
+                    ? this.Translations.Get("ui.filter-all-types")
+                    : this.Filter.CategoryLabel ?? this.Translations.Get("ui.filter-no-category");
+                return this.Translations.Get("ui.filter-type", new { value = type });
             }
 
-            return entry.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase);
+            string mod = this.Filter.Mod ?? this.Translations.Get("ui.filter-all-mods");
+            return this.Translations.Get("ui.filter-mod", new { value = mod });
         }
 
 
@@ -504,9 +611,9 @@ namespace StardewLogistics.Menus
         /// <param name="requested">The most items to withdraw; pass <see cref="int.MaxValue"/> to fill the inventory.</param>
         private void Withdraw(NetworkItemStack entry, int requested)
         {
-            if (this.Network?.IsOnline != true)
+            if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.offline"));
+                this.ShowError(this.Translations.Get("error.not-connected"));
                 return;
             }
 
@@ -546,9 +653,9 @@ namespace StardewLogistics.Menus
         /// <param name="singleItem">Whether to send a single item rather than the whole stack.</param>
         private void DepositSlot(int slot, bool allOfType, bool singleItem = false)
         {
-            if (this.Network?.IsOnline != true)
+            if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.offline"));
+                this.ShowError(this.Translations.Get("error.not-connected"));
                 return;
             }
 
@@ -612,9 +719,9 @@ namespace StardewLogistics.Menus
         /// <summary>Sends the player's whole inventory to the network, keeping tools and equipped items.</summary>
         private void DepositAll()
         {
-            if (this.Network?.IsOnline != true)
+            if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.offline"));
+                this.ShowError(this.Translations.Get("error.not-connected"));
                 return;
             }
 
@@ -645,9 +752,9 @@ namespace StardewLogistics.Menus
         /// </remarks>
         private void OpenCraftingPage()
         {
-            if (this.Network?.IsOnline != true)
+            if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.offline"));
+                this.ShowError(this.Translations.Get("error.not-connected"));
                 return;
             }
 

@@ -7,16 +7,6 @@ using StardewValley.Inventories;
 
 namespace StardewLogistics.Network
 {
-    /// <summary>Why a network isn't working.</summary>
-    internal enum NetworkStatus
-    {
-        /// <summary>Everything is connected and within its channel budget.</summary>
-        Online,
-
-        /// <summary>More devices are attached than the network has channels for.</summary>
-        Overloaded
-    }
-
     /// <summary>One connected storage network: a set of cables plus every device and chest touching them.</summary>
     /// <remarks>
     /// A network is rebuilt from the world by <see cref="NetworkScanner"/> whenever the tiles around it change, so it
@@ -37,21 +27,6 @@ namespace StardewLogistics.Network
         /// <summary>Every chest attached to the network, ordered by descending priority.</summary>
         public IReadOnlyList<StorageEntry> Storages { get; }
 
-        /// <summary>How many channels the network's devices consume.</summary>
-        public int UsedChannels { get; }
-
-        /// <summary>How many channels the network provides.</summary>
-        public int ChannelCapacity { get; }
-
-        /// <summary>Whether the network is working.</summary>
-        public NetworkStatus Status { get; }
-
-        /// <summary>Whether items can be moved right now.</summary>
-        public bool IsOnline => this.Status == NetworkStatus.Online;
-
-        /// <summary>The number of controllers on the network.</summary>
-        public int ControllerCount { get; }
-
         /// <summary>The total number of stacks the attached chests can hold.</summary>
         public int TotalSlots => this.Storages.Sum(entry => entry.Capacity);
 
@@ -65,20 +40,11 @@ namespace StardewLogistics.Network
         /*********
         ** Public methods
         *********/
-        public StorageNetwork(GameLocation location, List<NetworkNode> nodes, List<StorageEntry> storages, int channelCapacity, bool enforceChannels)
+        public StorageNetwork(GameLocation location, List<NetworkNode> nodes, List<StorageEntry> storages)
         {
             this.Location = location;
             this.Nodes = nodes;
             this.Storages = storages.OrderByDescending(entry => entry.Priority).ToList();
-            this.ControllerCount = nodes.Count(node => node.Kind == NodeKind.Controller);
-
-            // Every consumer spends a channel: terminals, buses, and each attached chest. Cables and controllers
-            // carry the network rather than drawing on it, matching how Applied Energistics counts devices.
-            this.UsedChannels = nodes.Count(node => node.UsesChannel) + storages.Count;
-            this.ChannelCapacity = channelCapacity;
-            this.Status = enforceChannels && this.UsedChannels > channelCapacity
-                ? NetworkStatus.Overloaded
-                : NetworkStatus.Online;
         }
 
         /// <summary>Returns every node of a given role.</summary>
@@ -154,7 +120,7 @@ namespace StardewLogistics.Network
         /// <returns>The number of items stored.</returns>
         public int Insert(Item item)
         {
-            if (!this.IsOnline || item == null || item.Stack <= 0)
+            if (item == null || item.Stack <= 0)
                 return 0;
 
             int remaining = item.Stack;
@@ -180,7 +146,7 @@ namespace StardewLogistics.Network
         public List<Item> Extract(ItemKey key, Item sample, int count)
         {
             List<Item> results = new();
-            if (!this.IsOnline || count <= 0 || !key.IsValid)
+            if (count <= 0 || !key.IsValid)
                 return results;
 
             int remaining = count;

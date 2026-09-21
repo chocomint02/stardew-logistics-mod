@@ -25,7 +25,6 @@ namespace StardewLogistics.Integrations
             ["Storage Terminal"] = 4,
             ["Import Bus"] = 5,
             ["Export Bus"] = 5,
-            ["Logistics Controller"] = 7,
             ["Crafting Terminal"] = 8
         };
 
@@ -42,7 +41,6 @@ namespace StardewLogistics.Integrations
         public void EditBigCraftables(IDictionary<string, BigCraftableData> data)
         {
             this.Add(data, ModIds.Cable, "cable", spriteIndex: 0, price: 30);
-            this.Add(data, ModIds.Controller, "controller", spriteIndex: 1, price: 800);
             this.Add(data, ModIds.Terminal, "terminal", spriteIndex: 2, price: 500);
             this.Add(data, ModIds.CraftingTerminal, "crafting-terminal", spriteIndex: 3, price: 900);
             this.Add(data, ModIds.ImportBus, "import-bus", spriteIndex: 4, price: 220);
@@ -63,7 +61,6 @@ namespace StardewLogistics.Integrations
             data["Storage Terminal"] = $"335 2 338 5 709 10/Home/{ModIds.Terminal} 1/true/null/{this.Name("terminal")}";
             data["Import Bus"] = $"335 2 338 2 390 20/Home/{ModIds.ImportBus} 1/true/null/{this.Name("import-bus")}";
             data["Export Bus"] = $"335 2 338 2 390 20/Home/{ModIds.ExportBus} 1/true/null/{this.Name("export-bus")}";
-            data["Logistics Controller"] = $"337 1 787 2 336 5/Home/{ModIds.Controller} 1/true/null/{this.Name("controller")}";
             data["Crafting Terminal"] = $"336 3 338 10 787 1/Home/{ModIds.CraftingTerminal} 1/true/null/{this.Name("crafting-terminal")}";
         }
 
@@ -71,6 +68,8 @@ namespace StardewLogistics.Integrations
         /*********
         ** Private methods
         *********/
+        /// <remarks>Sprite index 1 in the spritesheet is deliberately left unused; it is reserved for the
+        /// storage controller that will host storage drives.</remarks>
         /// <summary>Adds one big craftable entry.</summary>
         private void Add(IDictionary<string, BigCraftableData> data, string id, string translationKey, int spriteIndex, int price)
         {

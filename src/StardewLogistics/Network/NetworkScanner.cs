@@ -65,7 +65,6 @@ namespace StardewLogistics.Network
                 List<NetworkNode> nodes = new();
                 List<StorageEntry> storages = new();
                 HashSet<Vector2> attached = new();
-                int controllers = 0;
 
                 queue.Clear();
                 queue.Enqueue(seed);
@@ -74,10 +73,7 @@ namespace StardewLogistics.Network
                 while (queue.Count > 0)
                 {
                     Vector2 tile = queue.Dequeue();
-                    NetworkNode conductor = conductors[tile];
-                    nodes.Add(conductor);
-                    if (conductor.Kind == NodeKind.Controller)
-                        controllers++;
+                    nodes.Add(conductors[tile]);
 
                     // A pathological cable run shouldn't be able to stall the game; stop growing and work with
                     // what we have, which still leaves the player a usable (if truncated) network.
@@ -105,8 +101,7 @@ namespace StardewLogistics.Network
                     }
                 }
 
-                int capacity = config.AdHocDeviceLimit + (controllers * config.ChannelsPerController);
-                networks.Add(new StorageNetwork(location, nodes, storages, capacity, config.EnableChannelLimits));
+                networks.Add(new StorageNetwork(location, nodes, storages));
             }
 
             return networks;

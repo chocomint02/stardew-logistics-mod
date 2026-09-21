@@ -16,7 +16,6 @@ namespace StardewLogistics.Framework
         ** Item IDs
         *********/
         public const string Cable = ModId + "_Cable";
-        public const string Controller = ModId + "_Controller";
         public const string Terminal = ModId + "_Terminal";
         public const string CraftingTerminal = ModId + "_CraftingTerminal";
         public const string ImportBus = ModId + "_ImportBus";
@@ -44,7 +43,6 @@ namespace StardewLogistics.Framework
         public static bool IsModDevice(string itemId)
         {
             return itemId == Cable
-                || itemId == Controller
                 || itemId == Terminal
                 || itemId == CraftingTerminal
                 || itemId == ImportBus

@@ -10,9 +10,6 @@ namespace StardewLogistics.Network
         /// <summary>A cable: carries the network between tiles but does nothing on its own.</summary>
         Cable,
 
-        /// <summary>A controller: conducts like a cable and raises the network's channel budget.</summary>
-        Controller,
-
         /// <summary>An access terminal: opens the storage UI.</summary>
         Terminal,
 
@@ -41,11 +38,8 @@ namespace StardewLogistics.Network
         /// <summary>The placed object itself.</summary>
         public SObject Object { get; }
 
-        /// <summary>Whether the node conducts the network to its neighbours, rather than just consuming it.</summary>
-        public bool IsConductive => this.Kind is NodeKind.Cable or NodeKind.Controller;
-
-        /// <summary>Whether the node spends one of the network's channels.</summary>
-        public bool UsesChannel => !this.IsConductive;
+        /// <summary>Whether the node carries the network to its neighbours, rather than just attaching to it.</summary>
+        public bool IsConductive => this.Kind is NodeKind.Cable;
 
 
         /*********
@@ -85,7 +79,6 @@ namespace StardewLogistics.Network
             return itemId switch
             {
                 ModIds.Cable => NodeKind.Cable,
-                ModIds.Controller => NodeKind.Controller,
                 ModIds.Terminal => NodeKind.Terminal,
                 ModIds.CraftingTerminal => NodeKind.CraftingTerminal,
                 ModIds.ImportBus => NodeKind.ImportBus,

@@ -23,6 +23,9 @@ namespace StardewLogistics.Framework
         /// <summary>The item's category, used for sorting and grouping.</summary>
         public int Category { get; }
 
+        /// <summary>The display name of the mod that added this item, for the terminal's mod filter.</summary>
+        public string SourceMod { get; }
+
 
         /*********
         ** Public methods
@@ -34,6 +37,7 @@ namespace StardewLogistics.Framework
             this.Count = count;
             this.DisplayName = sample?.DisplayName ?? sample?.Name ?? "???";
             this.Category = sample?.Category ?? 0;
+            this.SourceMod = ItemSource.GetSourceName(sample);
         }
     }
 }

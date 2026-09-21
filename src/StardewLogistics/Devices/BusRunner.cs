@@ -59,9 +59,6 @@ namespace StardewLogistics.Devices
         /// <summary>Runs the buses attached to one network.</summary>
         private void RunNetwork(StorageNetwork network)
         {
-            if (!network.IsOnline)
-                return;
-
             foreach (NetworkNode bus in network.GetNodes(NodeKind.ImportBus))
                 this.RunImportBus(network, bus);
 

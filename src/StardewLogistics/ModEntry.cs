@@ -35,6 +35,8 @@ namespace StardewLogistics
             this.Config = helper.ReadConfig<ModConfig>();
             this.Config.Normalise();
 
+            ItemSource.Initialise(helper.ModRegistry);
+
             this.Networks = new NetworkManager(this.Config);
             this.Buses = new BusRunner(this.Networks, this.Config);
             this.Content = new ContentInjector(helper.Translation);
@@ -90,11 +92,6 @@ namespace StardewLogistics
                     this.Networks.InvalidateAll();
                 }
             );
-
-            api.AddSectionTitle(this.ModManifest, () => i18n.Get("config.section.network"));
-            api.AddBoolOption(this.ModManifest, () => this.Config.EnableChannelLimits, value => this.Config.EnableChannelLimits = value, () => i18n.Get("config.channels.name"), () => i18n.Get("config.channels.tooltip"));
-            api.AddNumberOption(this.ModManifest, () => this.Config.AdHocDeviceLimit, value => this.Config.AdHocDeviceLimit = value, () => i18n.Get("config.adhoc.name"), () => i18n.Get("config.adhoc.tooltip"), 1, 64);
-            api.AddNumberOption(this.ModManifest, () => this.Config.ChannelsPerController, value => this.Config.ChannelsPerController = value, () => i18n.Get("config.controller-channels.name"), () => i18n.Get("config.controller-channels.tooltip"), 8, 512);
 
             api.AddSectionTitle(this.ModManifest, () => i18n.Get("config.section.automation"));
             api.AddNumberOption(this.ModManifest, () => this.Config.BusIntervalTicks, value => this.Config.BusIntervalTicks = value, () => i18n.Get("config.bus-interval.name"), () => i18n.Get("config.bus-interval.tooltip"), 6, 600);

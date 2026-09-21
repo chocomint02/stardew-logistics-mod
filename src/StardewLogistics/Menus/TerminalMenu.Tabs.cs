@@ -111,15 +111,44 @@ namespace StardewLogistics.Menus
             this.SortButton.draw(b);
             this.DepositAllButton.draw(b);
 
-            long totalItems = this.AllStock.Sum(entry => entry.Count);
-            string summary = this.Translations.Get("ui.summary", new
-            {
-                types = NumberFormat.Full(this.AllStock.Count),
-                items = NumberFormat.Full(totalItems),
-                free = NumberFormat.Full(this.Network?.FreeSlots ?? 0)
-            });
+            this.DrawFilterButton(b, this.TypeFilterButton, this.GetFilterButtonLabel("type"), this.Filter.Category != null);
+            this.DrawFilterButton(b, this.ModFilterButton, this.GetFilterButtonLabel("mod"), this.Filter.Mod != null);
+        }
 
-            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(this.xPositionOnScreen + 148, this.yPositionOnScreen + 76), Game1.textColor);
+        /// <summary>Draws one of the header's dropdown filter buttons.</summary>
+        /// <param name="active">Whether the filter is currently restricting anything, which tints the button.</param>
+        private void DrawFilterButton(SpriteBatch b, ClickableComponent button, string label, bool active)
+        {
+            drawTextureBox(
+                b,
+                Game1.mouseCursors,
+                new Rectangle(384, 396, 15, 15),
+                button.bounds.X,
+                button.bounds.Y,
+                button.bounds.Width,
+                button.bounds.Height,
+                active ? Color.Wheat : Color.White,
+                3f,
+                drawShadow: false
+            );
+
+            // Clip the label so a long mod name can't spill past the button edge.
+            string text = label;
+            int room = button.bounds.Width - 40;
+            while (text.Length > 1 && Game1.smallFont.MeasureString(text).X > room)
+                text = text.Substring(0, text.Length - 1);
+            if (text != label && text.Length > 1)
+                text = text.Substring(0, text.Length - 1) + "..";
+
+            Utility.drawTextWithShadow(b, text, Game1.smallFont, new Vector2(button.bounds.X + 14, button.bounds.Y + 10), Game1.textColor);
+
+            // A small caret marking it as a dropdown.
+            b.Draw(
+                Game1.mouseCursors,
+                new Rectangle(button.bounds.Right - 26, button.bounds.Y + 16, 16, 12),
+                new Rectangle(421, 472, 12, 9),
+                Color.White
+            );
         }
 
         /// <summary>Draws a vertical scrollbar beside a scrollable area.</summary>
@@ -158,12 +187,6 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (!this.Network.IsOnline)
-            {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.overloaded", new { used = this.Network.UsedChannels, capacity = this.Network.ChannelCapacity }));
-                return;
-            }
-
             int firstIndex = this.ScrollOffset * Columns;
 
             for (int row = 0; row < this.Rows; row++)
@@ -199,6 +222,19 @@ namespace StardewLogistics.Menus
 
             int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
             this.DrawScrollbar(b, grid, this.Rows, totalRows);
+
+            long totalItems = this.AllStock.Sum(entry => entry.Count);
+            string summary = this.Translations.Get("ui.summary", new
+            {
+                types = NumberFormat.Full(this.AllStock.Count),
+                items = NumberFormat.Full(totalItems),
+                free = NumberFormat.Full(this.Network?.FreeSlots ?? 0)
+            });
+
+            if (this.VisibleStock.Count != this.AllStock.Count)
+                summary += this.Translations.Get("ui.summary-filtered", new { shown = NumberFormat.Full(this.VisibleStock.Count) });
+
+            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 8), Game1.textColor);
         }
 
 
@@ -348,10 +384,6 @@ namespace StardewLogistics.Menus
 
             List<string> lines = new()
             {
-                this.Translations.Get(this.Network.IsOnline ? "network.status-online" : "network.status-overloaded"),
-                "",
-                this.Translations.Get("network.channels", new { used = this.Network.UsedChannels, capacity = this.Network.ChannelCapacity }),
-                this.Translations.Get("network.controllers", new { count = this.Network.ControllerCount }),
                 this.Translations.Get("network.cables", new { count = this.Network.GetNodes(NodeKind.Cable).Count() }),
                 this.Translations.Get("network.terminals", new { count = this.Network.GetNodes(NodeKind.Terminal).Count() + this.Network.GetNodes(NodeKind.CraftingTerminal).Count() }),
                 this.Translations.Get("network.buses", new
@@ -368,12 +400,6 @@ namespace StardewLogistics.Menus
                     items = NumberFormat.Full(this.AllStock.Sum(entry => entry.Count))
                 })
             };
-
-            if (!this.Network.IsOnline)
-            {
-                lines.Add("");
-                lines.Add(this.Translations.Get("network.overload-hint"));
-            }
 
             int y = grid.Y + 8;
             foreach (string line in lines)
