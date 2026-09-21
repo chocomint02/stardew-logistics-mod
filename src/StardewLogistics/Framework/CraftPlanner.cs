@@ -168,6 +168,8 @@ namespace StardewLogistics.Framework
 
             if (options.Count == 0)
             {
+                // Record what could have done it, so the caller can name the machine the player is missing.
+                node.Alternatives = known;
                 reason = MissingReason.NoMachineAvailable;
                 return false;
             }

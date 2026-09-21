@@ -195,7 +195,9 @@ namespace StardewLogistics.Framework
                 {
                     MissingReason.NotEnoughStock => " (not in storage, and nothing makes it)",
                     MissingReason.NoRecipe => " (no recipe you know produces it)",
-                    MissingReason.NoMachineAvailable => " (a machine could, but none is on the network)",
+                    MissingReason.NoMachineAvailable => " (needs "
+                        + string.Join(" or ", node.Alternatives.Select(option => option.MachineName).Distinct().Take(3))
+                        + ", not on the network)",
                     MissingReason.DepthLimit => " (hit the depth limit)",
                     MissingReason.RecipeLoop => " (recipe loops back on itself)",
                     MissingReason.NotAnItem => " (recipe asks for a category, not an item)",
