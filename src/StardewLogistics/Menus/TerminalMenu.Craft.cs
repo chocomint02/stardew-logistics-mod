@@ -251,13 +251,12 @@ namespace StardewLogistics.Menus
                 craftable = this.Recipes.All.Count(entry => entry.CanCraft),
                 total = this.Recipes.All.Count
             });
-            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 8), Game1.textColor);
+            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 6), Game1.textColor);
 
-            // The click hint lives here rather than in the tooltip: it is the same for every recipe, and a long
-            // line of it inside drawToolTip overflows the box that the ingredient panel sized.
+            // The click hint gets its own line. Sharing one with the summary let the two run into each other
+            // whenever either was long.
             string hint = this.Translations.Get("ui.craft-footer");
-            Vector2 hintSize = Game1.smallFont.MeasureString(hint);
-            Utility.drawTextWithShadow(b, hint, Game1.smallFont, new Vector2(grid.Right - hintSize.X, grid.Bottom + 8), Game1.textColor * 0.6f);
+            Utility.drawTextWithShadow(b, hint, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 42), Game1.textColor * 0.6f);
         }
 
         /// <summary>Opens the quantity dialog for a recipe, returning to the terminal when it closes.</summary>
@@ -294,13 +293,16 @@ namespace StardewLogistics.Menus
             if (this.HoverRecipe == null)
                 return;
 
-            // drawToolTip sizes its box from the item and the ingredient panel; a long hoverText is drawn but
-            // not measured, which is what pushed text outside the frame. Keep the text out of it entirely.
+            // Three things matter here. An empty hoverText makes drawToolTip draw nothing at all, so the text
+            // has to be real. A long one overflows, because drawToolTip draws hoverText without measuring it
+            // when sizing the box. And passing hoveredItem as well as craftingIngredients adds a second,
+            // unmeasured description underneath. The recipe's own description with no hovered item is the
+            // combination the vanilla crafting menu uses, and it sizes correctly.
             IClickableMenu.drawToolTip(
                 b,
-                "",
+                this.HoverRecipe.Recipe.description,
                 this.HoverRecipe.DisplayName,
-                this.HoverRecipe.Output,
+                null,
                 craftingIngredients: this.HoverRecipe.Recipe
             );
         }

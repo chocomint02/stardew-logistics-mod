@@ -22,11 +22,18 @@ namespace StardewLogistics.Menus
         /*********
         ** Fields
         *********/
-        /// <summary>The step sizes offered either side of the quantity box.</summary>
+        /// <summary>The step sizes offered either side of the quantity box, innermost first.</summary>
         private static readonly int[] Steps = { 1, 10, 25, 50, 100 };
 
-        private const int MenuWidth = 800;
+        /// <summary>Sentinel deltas for the buttons that jump straight to a limit rather than stepping.</summary>
+        private const int JumpToMax = int.MaxValue;
+        private const int JumpToMin = int.MinValue;
+
+        private const int MenuWidth = 1000;
         private const int MenuHeight = 520;
+        private const int StepButtonWidth = 58;
+        private const int StepButtonGap = 6;
+        private const int QuantityBoxWidth = 180;
 
         private readonly RecipeEntry Entry;
         private readonly IReadOnlyList<IFilterableEntry> Stock;
@@ -64,9 +71,9 @@ namespace StardewLogistics.Menus
 
             this.QuantityBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.dialogueFont, Game1.textColor)
             {
-                X = this.xPositionOnScreen + (this.width / 2) - 84,
+                X = this.xPositionOnScreen + (this.width / 2) - (QuantityBoxWidth / 2),
                 Y = this.yPositionOnScreen + 336,
-                Width = 168,
+                Width = QuantityBoxWidth,
                 Height = 48,
                 Text = this.Quantity.ToString()
             };
@@ -104,7 +111,12 @@ namespace StardewLogistics.Menus
                 if (!bounds.Contains(x, y))
                     continue;
 
-                this.SetQuantity(this.Quantity + delta);
+                this.SetQuantity(delta switch
+                {
+                    JumpToMax => this.Entry.CraftableCount,
+                    JumpToMin => 1,
+                    _ => this.Quantity + delta
+                });
                 Game1.playSound("drumkit6");
                 return;
             }
@@ -208,26 +220,36 @@ namespace StardewLogistics.Menus
         ** Private methods: layout
         *********/
         /// <summary>Builds the increment buttons and the craft button.</summary>
+        /// <remarks>
+        /// The row is laid out left to right as a single strip rather than growing outwards from the box, which
+        /// is what pushed the outermost buttons through the menu's edge.
+        /// </remarks>
         private void BuildButtons()
         {
-            const int buttonWidth = 62;
-            const int gap = 6;
+            // Decrements descend towards the box; increments ascend away from it. Min and Max sit furthest out.
+            List<int> left = new() { JumpToMin };
+            left.AddRange(Steps.Reverse().Select(step => -step));
+
+            List<int> right = new(Steps) { JumpToMax };
+
+            int stride = StepButtonWidth + StepButtonGap;
+            int rowWidth = ((left.Count + right.Count) * stride) + QuantityBoxWidth + StepButtonGap;
+            int x = this.xPositionOnScreen + ((this.width - rowWidth) / 2);
             int y = this.yPositionOnScreen + 340;
 
-            // Decrements run leftwards from the box in descending size, so the widest jump sits furthest out.
-            int leftEdge = this.QuantityBox.X - gap;
-            foreach (int step in Steps)
+            foreach (int delta in left)
             {
-                leftEdge -= buttonWidth;
-                this.StepButtons.Add((new Rectangle(leftEdge, y, buttonWidth, 40), -step));
-                leftEdge -= gap;
+                this.StepButtons.Add((new Rectangle(x, y, StepButtonWidth, 40), delta));
+                x += stride;
             }
 
-            int rightEdge = this.QuantityBox.X + this.QuantityBox.Width + gap;
-            foreach (int step in Steps)
+            this.QuantityBox.X = x;
+            x += QuantityBoxWidth + StepButtonGap;
+
+            foreach (int delta in right)
             {
-                this.StepButtons.Add((new Rectangle(rightEdge, y, buttonWidth, 40), step));
-                rightEdge += buttonWidth + gap;
+                this.StepButtons.Add((new Rectangle(x, y, StepButtonWidth, 40), delta));
+                x += stride;
             }
 
             this.QuantityBounds = new ClickableComponent(new Rectangle(this.QuantityBox.X, this.QuantityBox.Y, this.QuantityBox.Width, this.QuantityBox.Height), "quantity");
@@ -332,7 +354,12 @@ namespace StardewLogistics.Menus
             {
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
 
-                string label = delta > 0 ? "+" + delta : delta.ToString();
+                string label = delta switch
+                {
+                    JumpToMax => this.Translations.Get("bulk.max"),
+                    JumpToMin => this.Translations.Get("bulk.min"),
+                    _ => delta > 0 ? "+" + delta : delta.ToString()
+                };
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
             }

@@ -43,7 +43,12 @@ namespace StardewLogistics.Menus
         private const int SlotSize = 64;
         private const int Columns = 13;
         private const int HeaderHeight = 112;
-        private const int InventoryHeight = 3 * SlotSize + 28;
+        /// <summary>Vertical space reserved for the player inventory.</summary>
+        /// <remarks>
+        /// InventoryMenu spaces its rows by more than the slot size and draws hotbar key labels above the first
+        /// row, so reserving exactly three slots' worth pushes the bottom row through the menu's own border.
+        /// </remarks>
+        private const int InventoryHeight = 3 * SlotSize + 84;
 
         /// <summary>Vertical space between the grid and the player inventory.</summary>
         /// <remarks>
@@ -51,7 +56,7 @@ namespace StardewLogistics.Menus
         /// labels ("1 2 3 ... 0 - =") that <see cref="InventoryMenu"/> draws above its own top row. Sizing it for
         /// the summary alone puts the two on top of each other.
         /// </remarks>
-        private const int SummaryBand = 76;
+        private const int SummaryBand = 112;
 
         /// <summary>The most grid rows to show, when the window is tall enough for them.</summary>
         private const int MaxRows = 8;
@@ -80,6 +85,8 @@ namespace StardewLogistics.Menus
 
         private int Rows;
         private int ScrollOffset;
+        private int SearchBoxLeft;
+        private int SearchBoxWidth;
         private SortMode Sort = SortMode.Name;
         private TerminalTab Tab = TerminalTab.Items;
         private string HoverText = "";
@@ -122,15 +129,17 @@ namespace StardewLogistics.Menus
                 playerInventory: true
             );
 
+            this.SetUpComponents();
+
             this.SearchBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
             {
-                X = this.xPositionOnScreen + this.width - 252,
+                X = this.SearchBoxLeft,
                 Y = this.yPositionOnScreen + 64,
-                Width = 220,
+                Width = this.SearchBoxWidth,
                 Height = 40
             };
+            this.SearchBoxBounds = new ClickableComponent(new Rectangle(this.SearchBox.X, this.SearchBox.Y, this.SearchBox.Width, this.SearchBox.Height), "search");
 
-            this.SetUpComponents();
             this.RefreshStock();
             this.initializeUpperRightCloseButton();
 
@@ -482,8 +491,6 @@ namespace StardewLogistics.Menus
         /// <summary>Builds the clickable components whose positions never change.</summary>
         private void SetUpComponents()
         {
-            this.SearchBoxBounds = new ClickableComponent(new Rectangle(this.SearchBox.X, this.SearchBox.Y, this.SearchBox.Width, this.SearchBox.Height), "search");
-
             int tabX = this.xPositionOnScreen + 32;
             int tabY = this.yPositionOnScreen + 16;
             foreach (string name in this.GetTabNames())
@@ -499,25 +506,44 @@ namespace StardewLogistics.Menus
             // guesswork, and a wrong guess renders as a meaningless crop rather than failing visibly.
             Texture2D icons = Game1.content.Load<Texture2D>(ModIds.UiIconsTexture);
 
-            this.SortButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 32, buttonY, 176, 44), "sort");
+            // Size each labelled button to its widest possible caption rather than a fixed width, so the sort
+            // mode never has to be abbreviated. Measuring every sort option keeps the row from shifting about
+            // as the player cycles through them.
+            int sortWidth = this.GetNames<SortMode>()
+                .Select(mode => MeasureButton(this.Translations.Get("ui.sort-label", new { mode = this.Translations.Get("sort." + mode.ToLowerInvariant()) })))
+                .Max();
+            int typeWidth = MeasureButton(this.Translations.Get("ui.filter-type", new { value = this.Translations.Get("ui.filter-all-types") }));
+            int modWidth = MeasureButton(this.Translations.Get("ui.filter-mod", new { value = this.Translations.Get("ui.filter-all-mods") }));
 
-            this.DepositAllButton = new ClickableTextureComponent(
-                new Rectangle(this.xPositionOnScreen + 218, buttonY, 44, 44),
-                icons,
-                new Rectangle(32, 0, 16, 16),
-                2.5f
-            );
+            int x = this.xPositionOnScreen + 32;
 
-            this.CraftableOnlyButton = new ClickableTextureComponent(
-                new Rectangle(this.xPositionOnScreen + 218, buttonY, 44, 44),
-                icons,
-                new Rectangle(0, 0, 16, 16),
-                2.5f
-            );
+            this.SortButton = new ClickableComponent(new Rectangle(x, buttonY, sortWidth, 44), "sort");
+            x += sortWidth + 10;
 
-            this.TypeFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 272, buttonY, 190, 44), "type");
-            this.ModFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 472, buttonY, 190, 44), "mod");
+            this.DepositAllButton = new ClickableTextureComponent(new Rectangle(x, buttonY, 44, 44), icons, new Rectangle(32, 0, 16, 16), 2.5f);
+            this.CraftableOnlyButton = new ClickableTextureComponent(new Rectangle(x, buttonY, 44, 44), icons, new Rectangle(0, 0, 16, 16), 2.5f);
+            x += 54;
+
+            this.TypeFilterButton = new ClickableComponent(new Rectangle(x, buttonY, typeWidth, 44), "type");
+            x += typeWidth + 10;
+
+            this.ModFilterButton = new ClickableComponent(new Rectangle(x, buttonY, modWidth, 44), "mod");
+            x += modWidth + 10;
+
+            // The search box takes whatever is left, down to a floor that still shows its placeholder.
+            this.SearchBoxWidth = Math.Max(150, (this.xPositionOnScreen + this.width - 32) - x);
+            this.SearchBoxLeft = x;
         }
+
+        /// <summary>The width a labelled header button needs to show a caption without truncating it.</summary>
+        private static int MeasureButton(string label)
+        {
+            // Text inset plus room for the dropdown caret on the right.
+            return (int)Game1.smallFont.MeasureString(label).X + 54;
+        }
+
+        /// <summary>The names of an enum's values, for measuring every caption a button might show.</summary>
+        private IEnumerable<string> GetNames<T>() where T : struct, Enum => Enum.GetNames<T>();
 
         /// <summary>Whether the current tab uses the search box and filter dropdowns.</summary>
         private bool TabHasSearch => this.Tab is TerminalTab.Items or TerminalTab.Craft;

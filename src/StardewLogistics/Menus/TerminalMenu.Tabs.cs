@@ -252,7 +252,7 @@ namespace StardewLogistics.Menus
             if (this.VisibleStock.Count != this.AllStock.Count)
                 summary += this.Translations.Get("ui.summary-filtered", new { shown = NumberFormat.Full(this.VisibleStock.Count) });
 
-            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 8), Game1.textColor);
+            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 6), Game1.textColor);
         }
 
 
