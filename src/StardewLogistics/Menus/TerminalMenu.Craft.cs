@@ -231,11 +231,7 @@ namespace StardewLogistics.Menus
                     );
 
                     if (entry.CanCraft)
-                    {
-                        string count = NumberFormat.Abbreviate(entry.CraftableCount);
-                        Vector2 size = Game1.tinyFont.MeasureString(count);
-                        Utility.drawTextWithShadow(b, count, Game1.tinyFont, new Vector2(x + SlotSize - size.X - 6, y + SlotSize - size.Y - 4), Color.White);
-                    }
+                        DrawSlotCount(b, NumberFormat.Abbreviate(entry.CraftableCount), x, y);
                 }
             }
 

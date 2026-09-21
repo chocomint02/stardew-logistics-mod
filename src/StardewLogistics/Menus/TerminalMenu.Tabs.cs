@@ -217,9 +217,7 @@ namespace StardewLogistics.Menus
                     entry.Sample.drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: true);
 
                     // Vanilla stack numbers max out long before a network does, so draw the count ourselves.
-                    string count = NumberFormat.Abbreviate(entry.Count);
-                    Vector2 size = Game1.tinyFont.MeasureString(count);
-                    Utility.drawTextWithShadow(b, count, Game1.tinyFont, new Vector2(x + SlotSize - size.X - 6, y + SlotSize - size.Y - 4), Color.White);
+                    DrawSlotCount(b, NumberFormat.Abbreviate(entry.Count), x, y);
                 }
             }
 
@@ -387,6 +385,38 @@ namespace StardewLogistics.Menus
                     Game1.textColor
                 );
             }
+        }
+
+        /// <summary>Draws a quantity in the corner of a grid slot.</summary>
+        /// <remarks>
+        /// The number sits on a dark plate rather than relying on text colour alone. No single colour works: white
+        /// disappears against the menu's light background, and black disappears against dark items like coal or
+        /// iron bars. A plate behind the text makes the contrast independent of whatever it covers.
+        /// </remarks>
+        private static void DrawSlotCount(SpriteBatch b, string text, int slotX, int slotY)
+        {
+            const float scale = 0.75f;
+            const int padX = 5;
+            const int padY = 2;
+
+            Vector2 size = Game1.smallFont.MeasureString(text) * scale;
+            int width = (int)size.X + (padX * 2);
+            int height = (int)size.Y + (padY * 2);
+            int x = slotX + SlotSize - width - 4;
+            int y = slotY + SlotSize - height - 4;
+
+            b.Draw(Game1.staminaRect, new Rectangle(x, y, width, height), new Color(26, 22, 32) * 0.78f);
+            b.DrawString(
+                Game1.smallFont,
+                text,
+                new Vector2(x + padX, y + padY),
+                Color.White,
+                0f,
+                Vector2.Zero,
+                scale,
+                SpriteEffects.None,
+                0.95f
+            );
         }
 
         /// <summary>Draws an item centred inside a slot smaller than a normal inventory square.</summary>
