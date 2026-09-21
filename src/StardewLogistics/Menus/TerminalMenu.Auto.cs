@@ -155,7 +155,8 @@ namespace StardewLogistics.Menus
 
                 try
                 {
-                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, availableMachines).IsSatisfied;
+                    // Same rule as an order: "can make one" means can produce one, not "there's one on the shelf".
+                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, availableMachines, useStockForTarget: false).IsSatisfied;
                 }
                 catch
                 {

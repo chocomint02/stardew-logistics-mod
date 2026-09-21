@@ -273,7 +273,7 @@ namespace StardewLogistics.Menus
                 StringComparer.OrdinalIgnoreCase);
 
             CraftPlanner planner = new(this.Crafting, this.MachineRecipes, this.Config.MaxCraftDepth);
-            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, available);
+            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, available, useStockForTarget: false);
 
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));
@@ -302,6 +302,33 @@ namespace StardewLogistics.Menus
         private void SetMachines(int value)
         {
             this.MaxMachines = Math.Clamp(value, 1, this.MachinesAvailable);
+        }
+
+        /// <summary>How many machines a step will actually occupy.</summary>
+        /// <remarks>
+        /// Bounded three ways: what the network has, what the player allowed, and how many runs there are. Showing
+        /// the run count instead would claim six furnaces for a six-run job on a farm with five.
+        /// </remarks>
+        private int GetMachinesUsed(PlanNode node)
+        {
+            int owned = this.CountMachines(node.MachineRecipe?.MachineId);
+            return Math.Max(1, Math.Min(Math.Min(owned, this.MaxMachines), Math.Max(1, node.Batches)));
+        }
+
+        /// <summary>How long a processing step takes once its runs are spread across the machines it gets.</summary>
+        private int GetStepMinutes(PlanNode node)
+        {
+            int machines = this.GetMachinesUsed(node);
+            int waves = (int)Math.Ceiling(Math.Max(1, node.Batches) / (double)machines);
+            return waves * (node.MinutesPerBatch + (node.DaysPerBatch * CraftPlan.MinutesPerDay));
+        }
+
+        /// <summary>The whole plan's processing time, with each step spread across its machines.</summary>
+        private int GetTotalMinutes()
+        {
+            return this.Rows
+                .Where(node => node.Kind == PlanStepKind.Process)
+                .Sum(this.GetStepMinutes);
         }
 
         /// <summary>Counts how many of one kind of machine the network has.</summary>
@@ -491,14 +518,7 @@ namespace StardewLogistics.Menus
         private void DrawFooter(SpriteBatch b)
         {
             Rectangle tree = this.GetTreeBounds();
-            string summary = this.Plan == null
-                ? ""
-                : this.Translations.Get("auto.summary", new
-                {
-                    steps = this.Plan.StepCount,
-                    time = FormatTime(this.Plan.WorstCaseMinutes, 0)
-                });
-
+            string summary = this.Plan == null ? "" : FormatTotal(this.GetTotalMinutes());
             Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 20), Game1.textColor);
 
             if (this.Plan?.IsSatisfied == false)
@@ -529,8 +549,8 @@ namespace StardewLogistics.Menus
                 PlanStepKind.Process => this.Translations.Get("auto.step-process", new
                 {
                     machine = node.MachineRecipe.MachineName,
-                    count = node.Batches,
-                    time = FormatTime(node.MinutesPerBatch, node.DaysPerBatch)
+                    count = this.GetMachinesUsed(node),
+                    time = FormatTotal(this.GetStepMinutes(node))
                 }),
                 _ => this.Translations.Get("auto.step-missing")
             };
@@ -570,16 +590,32 @@ namespace StardewLogistics.Menus
             return icon;
         }
 
-        /// <summary>Formats an in-game duration.</summary>
-        private static string FormatTime(int minutes, int days)
+        /// <summary>Formats a total duration as days, hours and minutes, dropping empty leading units.</summary>
+        private static string FormatTotal(int minutes)
         {
-            if (days > 0)
-                return days == 1 ? "overnight" : $"{days}d";
             if (minutes <= 0)
                 return "instant";
-            if (minutes < 60)
-                return $"{minutes}m";
-            return minutes % 60 == 0 ? $"{minutes / 60}h" : $"{minutes / 60}h {minutes % 60}m";
+
+            int days = minutes / CraftPlan.MinutesPerDay;
+            int rest = minutes % CraftPlan.MinutesPerDay;
+            int hours = rest / 60;
+            int mins = rest % 60;
+
+            List<string> parts = new();
+            if (days > 0)
+                parts.Add($"{days}d");
+            if (hours > 0)
+                parts.Add($"{hours}h");
+            if (mins > 0 || parts.Count == 0)
+                parts.Add($"{mins}m");
+
+            return string.Join(" ", parts);
+        }
+
+        /// <summary>Formats a single batch's duration, used in the machine picker.</summary>
+        private static string FormatTime(int minutes, int days)
+        {
+            return FormatTotal(minutes + (days * CraftPlan.MinutesPerDay));
         }
 
         /// <summary>The display name for an item ID.</summary>
