@@ -1,0 +1,10 @@
+# Build output
+bin/
+obj/
+*.user
+
+# SMAPI's build config copies the mod here on build
+[Bb]uild/
+
+# Derived preview from tools/make_sprites.py --preview
+tools/preview.png
