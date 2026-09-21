@@ -97,6 +97,9 @@ namespace StardewLogistics.Menus
                 );
             }
 
+            if (this.Tab != TerminalTab.Items)
+                return;
+
             this.SearchBox.Draw(b);
             if (string.IsNullOrEmpty(this.SearchBox.Text) && !this.SearchBox.Selected)
             {
@@ -108,9 +111,6 @@ namespace StardewLogistics.Menus
                     Game1.textColor * 0.45f
                 );
             }
-
-            if (this.Tab != TerminalTab.Items)
-                return;
 
             this.SortButton.draw(b);
             this.DepositAllButton.draw(b);
@@ -364,7 +364,7 @@ namespace StardewLogistics.Menus
                     b.Draw(Game1.menuTexture, bounds, Game1.getSourceRectForStandardTileSheet(Game1.menuTexture, 10), pending ? Color.Gold : Color.White);
 
                     if (slot < samples.Count && samples[slot] != null)
-                        samples[slot].drawInMenu(b, new Vector2(bounds.X, bounds.Y), 0.5f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+                        DrawItemInSlot(b, samples[slot], bounds);
                 }
             }
 
@@ -380,6 +380,23 @@ namespace StardewLogistics.Menus
                     Game1.textColor
                 );
             }
+        }
+
+        /// <summary>Draws an item centred inside a slot smaller than a normal inventory square.</summary>
+        /// <remarks>
+        /// <see cref="Item.drawInMenu(SpriteBatch, Vector2, float, float, float, StackDrawType, Color, bool)"/>
+        /// centres the sprite on <c>position + (32, 32)</c> within a 64px cell, so passing a small slot's top-left
+        /// corner pushes the icon half a cell down and right, over its neighbour. Offsetting back by half a cell
+        /// puts it where it belongs. Big craftables are 16x32 rather than 16x16, so they need half the scale again
+        /// or they overflow the slot vertically.
+        /// </remarks>
+        private static void DrawItemInSlot(SpriteBatch b, Item item, Rectangle slot)
+        {
+            bool tall = item is SObject obj && obj.bigCraftable.Value;
+            float scale = (slot.Height / 64f) * (tall ? 0.5f : 1f);
+            Vector2 position = new(slot.Center.X - 32, slot.Center.Y - 32);
+
+            item.drawInMenu(b, position, scale, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
         }
 
         /// <summary>The bounds of a priority button on a row.</summary>

@@ -208,15 +208,26 @@ namespace StardewLogistics.Menus
 
                 this.Tab = Enum.Parse<TerminalTab>(tab.name);
                 this.ScrollOffset = 0;
+
+                // Don't leave the search box holding the keyboard on a tab that has no search box.
+                if (this.Tab != TerminalTab.Items)
+                {
+                    this.SearchBox.Selected = false;
+                    this.ReleaseKeyboard();
+                }
+
                 Game1.playSound("smallSelect");
                 return;
             }
 
-            // Search box
-            bool clickedSearch = this.SearchBoxBounds.containsPoint(x, y);
-            this.SearchBox.Selected = clickedSearch;
-            if (clickedSearch)
-                return;
+            // Search box. It only filters the item grid, so it isn't offered on the other tabs.
+            if (this.Tab == TerminalTab.Items)
+            {
+                bool clickedSearch = this.SearchBoxBounds.containsPoint(x, y);
+                this.SearchBox.Selected = clickedSearch;
+                if (clickedSearch)
+                    return;
+            }
 
             if (this.Tab != TerminalTab.Items)
             {
@@ -372,7 +383,7 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.SearchBoxBounds.containsPoint(x, y))
+            if (this.Tab == TerminalTab.Items && this.SearchBoxBounds.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.search-help");
             else if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.filter-hint");
@@ -797,7 +808,8 @@ namespace StardewLogistics.Menus
 
             this.ReleaseKeyboard();
             Game1.playSound("bigSelect");
-            Game1.activeClickableMenu = new CraftingPage(
+
+            CraftingPage page = new(
                 this.xPositionOnScreen,
                 this.yPositionOnScreen,
                 this.width,
@@ -806,6 +818,22 @@ namespace StardewLogistics.Menus
                 standaloneMenu: true,
                 materialContainers: this.Network.GetMaterialInventories()
             );
+
+            // The vanilla crafting page is a whole menu, not something that can be drawn inside a tab, so opening
+            // it replaces the terminal. Reopen the terminal when it closes, otherwise finishing a craft drops the
+            // player back to the world and they have to walk up to the terminal again.
+            page.exitFunction = () =>
+            {
+                Game1.activeClickableMenu = new TerminalMenu(
+                    this.Networks,
+                    this.Translations,
+                    this.TerminalLocation,
+                    this.TerminalTile,
+                    this.CanCraft
+                );
+            };
+
+            Game1.activeClickableMenu = page;
         }
 
         /// <summary>How many of an item the player's inventory could still take.</summary>
