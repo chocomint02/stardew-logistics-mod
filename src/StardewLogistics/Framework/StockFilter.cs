@@ -73,8 +73,8 @@ namespace StardewLogistics.Framework
             this.Mod = null;
         }
 
-        /// <summary>Whether a stock entry passes every restriction.</summary>
-        public bool Matches(NetworkItemStack entry)
+        /// <summary>Whether an entry passes every restriction.</summary>
+        public bool Matches(IFilterableEntry entry)
         {
             if (entry?.Sample == null)
                 return false;
@@ -198,14 +198,14 @@ namespace StardewLogistics.Framework
             }
 
             /// <summary>Whether an entry satisfies this term.</summary>
-            public bool Matches(NetworkItemStack entry)
+            public bool Matches(IFilterableEntry entry)
             {
                 bool result = this.Evaluate(entry);
                 return this.Negated ? !result : result;
             }
 
             /// <summary>Evaluates the term before negation is applied.</summary>
-            private bool Evaluate(NetworkItemStack entry)
+            private bool Evaluate(IFilterableEntry entry)
             {
                 switch (this.Type)
                 {

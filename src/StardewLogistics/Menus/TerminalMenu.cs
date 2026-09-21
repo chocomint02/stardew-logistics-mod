@@ -24,6 +24,7 @@ namespace StardewLogistics.Menus
     internal enum TerminalTab
     {
         Items,
+        Craft,
         Storage,
         Network
     }
@@ -200,17 +201,11 @@ namespace StardewLogistics.Menus
                 if (!tab.containsPoint(x, y))
                     continue;
 
-                if (tab.name == "craft")
-                {
-                    this.OpenCraftingPage();
-                    return;
-                }
-
                 this.Tab = Enum.Parse<TerminalTab>(tab.name);
                 this.ScrollOffset = 0;
 
                 // Don't leave the search box holding the keyboard on a tab that has no search box.
-                if (this.Tab != TerminalTab.Items)
+                if (!this.TabHasSearch)
                 {
                     this.SearchBox.Selected = false;
                     this.ReleaseKeyboard();
@@ -220,13 +215,33 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            // Search box. It only filters the item grid, so it isn't offered on the other tabs.
-            if (this.Tab == TerminalTab.Items)
+            // Search box. It filters the item grid and the recipe grid, but nothing on the other tabs.
+            if (this.TabHasSearch)
             {
                 bool clickedSearch = this.SearchBoxBounds.containsPoint(x, y);
                 this.SearchBox.Selected = clickedSearch;
                 if (clickedSearch)
                     return;
+            }
+
+            if (this.Tab == TerminalTab.Craft)
+            {
+                if (this.CraftableOnlyButton.containsPoint(x, y))
+                {
+                    this.CraftableOnly = !this.CraftableOnly;
+                    this.ScrollOffset = 0;
+                    this.ApplyRecipeFilter();
+                    Game1.playSound("smallSelect");
+                    return;
+                }
+
+                if (this.HandleSharedHeaderClick(x, y))
+                    return;
+
+                RecipeEntry recipe = this.GetRecipeAt(x, y);
+                if (recipe != null)
+                    this.CraftRecipe(recipe, IsShiftDown() ? 5 : 1);
+                return;
             }
 
             if (this.Tab != TerminalTab.Items)
@@ -235,29 +250,8 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.TypeFilterButton.containsPoint(x, y))
-            {
-                this.OpenDropdownName = "type";
-                this.Dropdown.Open(this.BuildTypeOptions(), this.TypeFilterButton.bounds);
-                Game1.playSound("shwip");
+            if (this.HandleSharedHeaderClick(x, y))
                 return;
-            }
-
-            if (this.ModFilterButton.containsPoint(x, y))
-            {
-                this.OpenDropdownName = "mod";
-                this.Dropdown.Open(this.BuildModOptions(), this.ModFilterButton.bounds);
-                Game1.playSound("shwip");
-                return;
-            }
-
-            if (this.SortButton.containsPoint(x, y))
-            {
-                this.Sort = (SortMode)(((int)this.Sort + 1) % 3);
-                this.ApplyFilterAndSort();
-                Game1.playSound("shwip");
-                return;
-            }
 
             if (this.DepositAllButton.containsPoint(x, y))
             {
@@ -308,6 +302,14 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            if (this.Tab == TerminalTab.Craft)
+            {
+                RecipeEntry recipe = this.GetRecipeAt(x, y);
+                if (recipe != null)
+                    this.CraftRecipe(recipe, int.MaxValue);
+                return;
+            }
+
             if (this.Tab != TerminalTab.Items)
             {
                 this.ReceiveClickOnTab(x, y, rightClick: true);
@@ -332,7 +334,7 @@ namespace StardewLogistics.Menus
             if (this.Dropdown.ReceiveScroll(direction))
                 return;
 
-            int rows = this.Tab == TerminalTab.Items ? this.Rows : 1;
+            int rows = this.Tab is TerminalTab.Items or TerminalTab.Craft ? this.Rows : 1;
             int step = direction > 0 ? -1 : 1;
             this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset + step, Math.Max(0, this.GetMaxScroll(rows))));
             Game1.playSound("shiny4");
@@ -377,13 +379,28 @@ namespace StardewLogistics.Menus
             this.SortButton?.tryHover(x, y);
             this.DepositAllButton?.tryHover(x, y);
 
+            this.HoverRecipe = null;
+
+            if (this.Tab == TerminalTab.Craft)
+            {
+                if (this.CraftableOnlyButton.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.craftable-only");
+                else if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.filter-hint");
+                else if (this.TabHasSearch && this.SearchBoxBounds.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.search-help");
+                else
+                    this.HoverRecipe = this.GetRecipeAt(x, y);
+                return;
+            }
+
             if (this.Tab != TerminalTab.Items)
             {
                 this.PerformHoverOnTab(x, y);
                 return;
             }
 
-            if (this.Tab == TerminalTab.Items && this.SearchBoxBounds.containsPoint(x, y))
+            if (this.TabHasSearch && this.SearchBoxBounds.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.search-help");
             else if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.filter-hint");
@@ -431,6 +448,9 @@ namespace StardewLogistics.Menus
                 case TerminalTab.Items:
                     this.DrawItemsTab(b);
                     break;
+                case TerminalTab.Craft:
+                    this.DrawCraftTab(b);
+                    break;
                 case TerminalTab.Storage:
                     this.DrawStorageTab(b);
                     break;
@@ -443,7 +463,9 @@ namespace StardewLogistics.Menus
             this.upperRightCloseButton?.draw(b);
             this.Dropdown.Draw(b);
 
-            if (this.HoverItem != null)
+            if (this.HoverRecipe != null)
+                this.DrawRecipeTooltip(b);
+            else if (this.HoverItem != null)
                 drawToolTip(b, this.HoverText, this.HoverItem.DisplayName, this.HoverItem);
             else if (!string.IsNullOrEmpty(this.HoverText))
                 drawHoverText(b, this.HoverText, Game1.smallFont);
@@ -483,8 +505,49 @@ namespace StardewLogistics.Menus
                 2.75f
             );
 
+            this.CraftableOnlyButton = new ClickableTextureComponent(
+                new Rectangle(this.xPositionOnScreen + 88, buttonY, 44, 44),
+                Game1.mouseCursors,
+                new Rectangle(253, 1957, 16, 16),
+                2.75f
+            );
+
             this.TypeFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 148, buttonY, 200, 44), "type");
             this.ModFilterButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + 356, buttonY, 200, 44), "mod");
+        }
+
+        /// <summary>Whether the current tab uses the search box and filter dropdowns.</summary>
+        private bool TabHasSearch => this.Tab is TerminalTab.Items or TerminalTab.Craft;
+
+        /// <summary>Handles a click on the controls shared by the Items and Craft tabs.</summary>
+        /// <returns>Whether the click was consumed.</returns>
+        private bool HandleSharedHeaderClick(int x, int y)
+        {
+            if (this.TypeFilterButton.containsPoint(x, y))
+            {
+                this.OpenDropdownName = "type";
+                this.Dropdown.Open(this.BuildTypeOptions(), this.TypeFilterButton.bounds);
+                Game1.playSound("shwip");
+                return true;
+            }
+
+            if (this.ModFilterButton.containsPoint(x, y))
+            {
+                this.OpenDropdownName = "mod";
+                this.Dropdown.Open(this.BuildModOptions(), this.ModFilterButton.bounds);
+                Game1.playSound("shwip");
+                return true;
+            }
+
+            if (this.SortButton.containsPoint(x, y))
+            {
+                this.Sort = (SortMode)(((int)this.Sort + 1) % 3);
+                this.ApplyFilterAndSort();
+                Game1.playSound("shwip");
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>The tabs this terminal shows, which depends on whether it can craft.</summary>
@@ -492,7 +555,7 @@ namespace StardewLogistics.Menus
         {
             yield return nameof(TerminalTab.Items);
             if (this.CanCraft)
-                yield return "craft";
+                yield return nameof(TerminalTab.Craft);
             yield return nameof(TerminalTab.Storage);
             yield return nameof(TerminalTab.Network);
         }
@@ -533,6 +596,9 @@ namespace StardewLogistics.Menus
             if (this.Tab != TerminalTab.Items)
                 return this.GetMaxScrollForTab();
 
+            if (this.Tab == TerminalTab.Craft)
+                return this.GetMaxRecipeScroll();
+
             int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
             return Math.Max(0, totalRows - rows);
         }
@@ -569,6 +635,7 @@ namespace StardewLogistics.Menus
             this.Network = this.Networks.GetNetworkAt(this.TerminalLocation, this.TerminalTile);
             this.AllStock = this.Network?.Aggregate() ?? new List<NetworkItemStack>();
             this.RefreshConfigRows();
+            this.RefreshRecipes();
             this.ApplyFilterAndSort();
         }
 
@@ -588,6 +655,7 @@ namespace StardewLogistics.Menus
             };
 
             this.VisibleStock = query.ToList();
+            this.ApplyRecipeFilter();
             this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset, this.GetMaxScroll(this.Rows)));
         }
 
@@ -791,49 +859,6 @@ namespace StardewLogistics.Menus
                 Game1.playSound("Ship");
                 this.RefreshStock();
             }
-        }
-
-        /// <summary>Opens the vanilla crafting page backed by the network's chests.</summary>
-        /// <remarks>
-        /// The game's own crafting menu already knows how to craft from a list of nearby chests, so the crafting
-        /// terminal hands it every chest on the network instead of reimplementing recipe matching.
-        /// </remarks>
-        private void OpenCraftingPage()
-        {
-            if (this.Network == null)
-            {
-                this.ShowError(this.Translations.Get("error.not-connected"));
-                return;
-            }
-
-            this.ReleaseKeyboard();
-            Game1.playSound("bigSelect");
-
-            CraftingPage page = new(
-                this.xPositionOnScreen,
-                this.yPositionOnScreen,
-                this.width,
-                this.height,
-                cooking: false,
-                standaloneMenu: true,
-                materialContainers: this.Network.GetMaterialInventories()
-            );
-
-            // The vanilla crafting page is a whole menu, not something that can be drawn inside a tab, so opening
-            // it replaces the terminal. Reopen the terminal when it closes, otherwise finishing a craft drops the
-            // player back to the world and they have to walk up to the terminal again.
-            page.exitFunction = () =>
-            {
-                Game1.activeClickableMenu = new TerminalMenu(
-                    this.Networks,
-                    this.Translations,
-                    this.TerminalLocation,
-                    this.TerminalTile,
-                    this.CanCraft
-                );
-            };
-
-            Game1.activeClickableMenu = page;
         }
 
         /// <summary>How many of an item the player's inventory could still take.</summary>

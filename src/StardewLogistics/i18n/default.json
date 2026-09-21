@@ -64,5 +64,13 @@
   "config.recipes.name": "Unlock all recipes",
   "config.recipes.tooltip": "Teach every logistics recipe immediately instead of gating them behind Mining levels.",
   "config.terminal-key.name": "Open terminal key",
-  "config.terminal-key.tooltip": "An optional key that opens the terminal under your cursor."
+  "config.terminal-key.tooltip": "An optional key that opens the terminal under your cursor.",
+  "ui.craftable-only": "Show only what the network can make right now.",
+  "ui.craft-hint": "Click to craft one. Shift-click for five, right-click for as many as possible.",
+  "ui.craft-missing": "Not enough materials on the network.",
+  "ui.craft-summary": "{{shown}} shown  ·  {{craftable}} of {{total}} recipes makeable",
+  "ui.no-recipes": "You haven't learned any crafting recipes yet.",
+  "ui.no-recipe-results": "No recipes match that search.",
+  "error.missing-ingredients": "Not enough materials on the network.",
+  "error.craft-failed": "That recipe couldn't be crafted. Check the SMAPI log."
 }

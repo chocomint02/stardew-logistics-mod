@@ -71,9 +71,7 @@ namespace StardewLogistics.Menus
         {
             foreach (ClickableComponent tab in this.TabButtons)
             {
-                bool active = tab.name == "craft"
-                    ? false
-                    : this.Tab.ToString() == tab.name;
+                bool active = this.Tab.ToString() == tab.name;
 
                 drawTextureBox(
                     b,
@@ -97,7 +95,7 @@ namespace StardewLogistics.Menus
                 );
             }
 
-            if (this.Tab != TerminalTab.Items)
+            if (!this.TabHasSearch)
                 return;
 
             this.SearchBox.Draw(b);
@@ -113,7 +111,13 @@ namespace StardewLogistics.Menus
             }
 
             this.SortButton.draw(b);
-            this.DepositAllButton.draw(b);
+
+            // The second slot is "deposit everything" while browsing stock, and "only show what I can make"
+            // while browsing recipes.
+            if (this.Tab == TerminalTab.Craft)
+                this.CraftableOnlyButton.draw(b, this.CraftableOnly ? Color.White : Color.White * 0.5f, 0.9f);
+            else
+                this.DepositAllButton.draw(b);
 
             this.DrawFilterButton(b, this.TypeFilterButton, this.GetFilterButtonLabel("type"), this.Filter.Category != null);
             this.DrawFilterButton(b, this.ModFilterButton, this.GetFilterButtonLabel("mod"), this.Filter.Mod != null);

@@ -3,7 +3,7 @@ using StardewValley;
 namespace StardewLogistics.Framework
 {
     /// <summary>One row in the terminal: every item on the network sharing an <see cref="ItemKey"/>, counted together.</summary>
-    internal class NetworkItemStack
+    internal class NetworkItemStack : IFilterableEntry
     {
         /*********
         ** Accessors
