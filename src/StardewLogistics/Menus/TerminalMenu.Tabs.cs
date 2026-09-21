@@ -119,8 +119,10 @@ namespace StardewLogistics.Menus
             // while browsing recipes.
             if (this.Tab == TerminalTab.Craft)
                 this.CraftableOnlyButton.draw(b, this.CraftableOnly ? Color.White : Color.White * 0.5f, 0.9f);
-            else
+            else if (this.Tab == TerminalTab.Items)
                 this.DepositAllButton.draw(b);
+            // Neither control means anything on the Auto tab, so the slot is left empty rather than showing a
+            // button that does nothing when clicked.
 
             this.DrawFilterButton(b, this.TypeFilterButton, this.GetFilterButtonLabel("type"), this.Filter.Category != null);
             this.DrawFilterButton(b, this.ModFilterButton, this.GetFilterButtonLabel("mod"), this.Filter.Mod != null);

@@ -50,6 +50,9 @@ namespace StardewLogistics.Menus
 
             /// <summary>Whether a machine is needed, as opposed to a plain crafting recipe.</summary>
             public bool NeedsMachine { get; init; }
+
+            /// <summary>Whether the network currently holds enough to make at least one.</summary>
+            public bool CanMake { get; set; }
         }
 
 
@@ -124,7 +127,41 @@ namespace StardewLogistics.Menus
                 target.Count = stock.TryGetValue(target.ItemId, out long have) ? have : 0;
 
             this.AllTargets = targets.Values.ToList();
+            this.RefreshFeasibility(available);
             this.ApplyTargetFilter();
+        }
+
+        /// <summary>Works out which targets the network could actually make one of right now.</summary>
+        /// <remarks>
+        /// This costs one plan per target, which is why it runs on the refresh timer rather than per frame. The
+        /// list is bounded by what the player knows plus what their machines produce, so it stays small; the cap
+        /// is a guard against a heavily modded save turning this into a stall.
+        /// </remarks>
+        private void RefreshFeasibility(HashSet<string> availableMachines)
+        {
+            const int cap = 400;
+
+            IReadOnlyList<IFilterableEntry> stock = this.AllStock.Cast<IFilterableEntry>().ToList();
+            CraftPlanner planner = new(this.Recipes, this.MachineRecipes, this.Config.MaxCraftDepth);
+
+            int planned = 0;
+            foreach (AutoTarget target in this.AllTargets)
+            {
+                if (planned++ >= cap)
+                {
+                    target.CanMake = true;
+                    continue;
+                }
+
+                try
+                {
+                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, availableMachines).IsSatisfied;
+                }
+                catch
+                {
+                    target.CanMake = false;
+                }
+            }
         }
 
         /// <summary>Applies the search box and dropdowns to the target list.</summary>
@@ -222,7 +259,10 @@ namespace StardewLogistics.Menus
                         continue;
 
                     AutoTarget target = this.VisibleTargets[index];
-                    target.Sample.drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: true);
+
+                    // Dimmed rather than hidden, matching the Craft tab: the player can still see what exists
+                    // and open it to find out what it is short of.
+                    target.Sample.drawInMenu(b, new Vector2(x, y), 1f, target.CanMake ? 1f : 0.3f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: target.CanMake);
 
                     if (target.Count > 0)
                         DrawSlotCount(b, NumberFormat.Abbreviate(target.Count), x, y);
@@ -297,14 +337,12 @@ namespace StardewLogistics.Menus
                     Utility.drawTextWithShadow(b, eta, Game1.smallFont, new Vector2(barX, y + 52), Game1.textColor * 0.7f);
                 }
 
-                Rectangle cancel = GetCancelBounds(grid, y);
-                if (job.Status is JobStatus.Running or JobStatus.Pending or JobStatus.Blocked)
-                {
-                    drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), cancel.X, cancel.Y, cancel.Width, cancel.Height, Color.White, 2f, drawShadow: false);
-                    string label = this.Translations.Get("jobs.cancel");
-                    Vector2 size = Game1.smallFont.MeasureString(label);
-                    Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(cancel.Center.X - (size.X / 2), cancel.Center.Y - (size.Y / 2)), Game1.textColor);
-                }
+                Rectangle button = GetCancelBounds(grid, y);
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), button.X, button.Y, button.Width, button.Height, Color.White, 2f, drawShadow: false);
+
+                string buttonLabel = this.Translations.Get(job.Status is JobStatus.Complete or JobStatus.Cancelled ? "jobs.clear" : "jobs.cancel");
+                Vector2 buttonSize = Game1.smallFont.MeasureString(buttonLabel);
+                Utility.drawTextWithShadow(b, buttonLabel, Game1.smallFont, new Vector2(button.Center.X - (buttonSize.X / 2), button.Center.Y - (buttonSize.Y / 2)), Game1.textColor);
             }
 
             this.DrawScrollbar(b, grid, visible, jobs.Count);
@@ -328,7 +366,12 @@ namespace StardewLogistics.Menus
                 if (!GetCancelBounds(grid, grid.Y + (i * rowHeight)).Contains(x, y))
                     continue;
 
-                if (this.Jobs.Cancel(jobs[index].Id))
+                CraftJob job = jobs[index];
+                bool acted = job.Status is JobStatus.Complete or JobStatus.Cancelled
+                    ? this.Jobs.Dismiss(job.Id)
+                    : this.Jobs.Cancel(job.Id);
+
+                if (acted)
                     Game1.playSound("trashcan");
                 return;
             }

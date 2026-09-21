@@ -84,7 +84,7 @@
   "tab.jobs": "Jobs",
   "auto.title": "Autocraft: {{name}}",
   "auto.quantity": "How many",
-  "auto.machines": "Machines per step",
+  "auto.machines": "Run at once",
   "auto.start": "Start job",
   "auto.start-hint": "Queue this job on the network.",
   "auto.cannot-start": "Something in the plan can't be supplied.",
@@ -99,7 +99,7 @@
   "auto.step-missing": "can't be supplied",
   "auto.nothing": "Nothing can be autocrafted yet. Wire up a machine, or learn a recipe.",
   "auto.tab-summary": "{{shown}} of {{total}} things this network could make",
-  "auto.tab-hint": "Click an item to plan a job.   Blue corner = needs a machine.",
+  "auto.tab-hint": "Click an item to plan a job.   Dimmed = not enough materials.   Blue corner = needs a machine.",
   "auto.target-hint": "{{count}} in storage. Click to plan an autocrafting job.",
   "jobs.none": "No autocrafting jobs running.",
   "jobs.cancel": "Cancel",
@@ -108,5 +108,7 @@
   "jobs.status-running": "Running",
   "jobs.status-complete": "Done",
   "jobs.status-blocked": "Blocked",
-  "jobs.status-cancelled": "Cancelled"
+  "jobs.status-cancelled": "Cancelled",
+  "jobs.clear": "Clear",
+  "auto.machines-available": "{{count}} on network"
 }

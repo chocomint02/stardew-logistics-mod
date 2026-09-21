@@ -49,10 +49,16 @@ namespace StardewLogistics.Menus
         private readonly List<(Rectangle Bounds, int Delta)> StepButtons = new();
         private readonly DropdownPopup Dropdown = new();
 
+        /// <summary>Icons by item ID. Building one per row per frame would be wasteful; they never change.</summary>
+        private static readonly Dictionary<string, Item> IconCache = new(StringComparer.OrdinalIgnoreCase);
+
         private CraftPlan Plan;
         private List<PlanNode> Rows = new();
         private int Quantity = 1;
         private int MaxMachines = 1;
+
+        /// <summary>How many machines of the kind this plan needs are wired up, which caps the control.</summary>
+        private int MachinesAvailable = 1;
         private int Scroll;
         private string LastText = "1";
         private string HoverText = "";
@@ -271,6 +277,16 @@ namespace StardewLogistics.Menus
 
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));
+
+            // Cap the machine control at what the plan could actually occupy. Offering "use 9 furnaces" when
+            // three are wired up promises throughput the network can't deliver.
+            this.MachinesAvailable = Math.Max(1, this.Rows
+                .Where(node => node.Kind == PlanStepKind.Process && node.MachineRecipe != null)
+                .Select(node => CountMachines(node.MachineRecipe.MachineId))
+                .DefaultIfEmpty(1)
+                .Max());
+
+            this.MaxMachines = Math.Clamp(this.MaxMachines, 1, this.MachinesAvailable);
         }
 
         /// <summary>Sets the quantity and re-plans.</summary>
@@ -285,7 +301,17 @@ namespace StardewLogistics.Menus
         /// <summary>Sets how many machines each processing step may occupy at once.</summary>
         private void SetMachines(int value)
         {
-            this.MaxMachines = Math.Clamp(value, 1, 99);
+            this.MaxMachines = Math.Clamp(value, 1, this.MachinesAvailable);
+        }
+
+        /// <summary>Counts how many of one kind of machine the network has.</summary>
+        private int CountMachines(string machineId)
+        {
+            if (this.Network == null || machineId == null)
+                return 0;
+
+            return this.Network.Machines.Count(node =>
+                string.Equals(node.Object?.QualifiedItemId, machineId, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>Queues the job and closes.</summary>
@@ -316,8 +342,10 @@ namespace StardewLogistics.Menus
         /// <summary>Builds the quantity and machine-count buttons.</summary>
         private void BuildButtons()
         {
+            // Two rows rather than one. Sharing a row meant the quantity stepper and the machine control ran
+            // into each other as soon as either label was more than a word or two.
             int y = this.yPositionOnScreen + 86;
-            int x = this.xPositionOnScreen + 150;
+            int x = this.xPositionOnScreen + 200;
 
             foreach (int step in new[] { -10, -1 })
             {
@@ -325,23 +353,27 @@ namespace StardewLogistics.Menus
                 x += 70;
             }
 
-            x = this.QuantityBox.X + this.QuantityBox.Width + 10;
+            this.QuantityBox.X = x + 6;
+            this.QuantityBox.Y = y + 2;
+            x = this.QuantityBox.X + this.QuantityBox.Width + 12;
+
             foreach (int step in new[] { 1, 10 })
             {
                 this.StepButtons.Add((new Rectangle(x, y, 64, 40), step));
                 x += 70;
             }
 
-            // Machine allowance, using sentinel deltas so one click handler covers both rows.
-            this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 700, y, 44, 40), 0));
-            this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 806, y, 44, 40), int.MaxValue));
+            // Machine allowance, on its own row, using sentinel deltas so one click handler covers both.
+            int machineY = y + 52;
+            this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 200, machineY, 44, 40), 0));
+            this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 306, machineY, 44, 40), int.MaxValue));
 
             this.QuantityBounds = new ClickableComponent(new Rectangle(this.QuantityBox.X, this.QuantityBox.Y, this.QuantityBox.Width, this.QuantityBox.Height), "quantity");
             this.StartButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + (this.width / 2) - 130, this.yPositionOnScreen + this.height - 88, 260, 64), "start");
         }
 
         /// <summary>The area the tree is drawn in.</summary>
-        private Rectangle GetTreeBounds() => new(this.xPositionOnScreen + 28, this.yPositionOnScreen + 150, this.width - 56, this.height - 150 - 108);
+        private Rectangle GetTreeBounds() => new(this.xPositionOnScreen + 28, this.yPositionOnScreen + 204, this.width - 56, this.height - 204 - 108);
 
         /// <summary>How many tree rows fit.</summary>
         private int GetVisibleRows() => Math.Max(1, this.GetTreeBounds().Height / RowHeight);
@@ -375,7 +407,7 @@ namespace StardewLogistics.Menus
             Utility.drawTextWithShadow(b, title, Game1.dialogueFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 24), Game1.textColor);
 
             Utility.drawTextWithShadow(b, this.Translations.Get("auto.quantity"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 96), Game1.textColor);
-            Utility.drawTextWithShadow(b, this.Translations.Get("auto.machines"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 560, this.yPositionOnScreen + 96), Game1.textColor);
+            Utility.drawTextWithShadow(b, this.Translations.Get("auto.machines"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 148), Game1.textColor);
 
             foreach ((Rectangle bounds, int delta) in this.StepButtons)
             {
@@ -395,7 +427,16 @@ namespace StardewLogistics.Menus
 
             string machines = this.MaxMachines.ToString();
             Vector2 machineSize = Game1.smallFont.MeasureString(machines);
-            Utility.drawTextWithShadow(b, machines, Game1.smallFont, new Vector2(this.xPositionOnScreen + 778 - (machineSize.X / 2), this.yPositionOnScreen + 96), Game1.textColor);
+            Utility.drawTextWithShadow(b, machines, Game1.smallFont, new Vector2(this.xPositionOnScreen + 278 - (machineSize.X / 2), this.yPositionOnScreen + 148), Game1.textColor);
+
+            // Say what the ceiling is, so a greyed-out "+" is explained rather than just unresponsive.
+            Utility.drawTextWithShadow(
+                b,
+                this.Translations.Get("auto.machines-available", new { count = this.MachinesAvailable }),
+                Game1.smallFont,
+                new Vector2(this.xPositionOnScreen + 366, this.yPositionOnScreen + 148),
+                Game1.textColor * 0.6f
+            );
         }
 
         /// <summary>Draws the plan as an indented tree.</summary>
@@ -422,12 +463,21 @@ namespace StardewLogistics.Menus
                 if (node.Depth > 0)
                     Utility.drawTextWithShadow(b, "└", Game1.smallFont, new Vector2(row.X + indent - 20, row.Y + 6), Game1.textColor * 0.5f);
 
+                // Item icon, so the tree can be read at a glance rather than by reading every name.
+                DrawIcon(b, GetIcon(node.ItemId), row.X + indent, row.Y + 4, node.Kind == PlanStepKind.Missing ? 0.4f : 1f);
+
                 string label = $"{node.Requested}x {node.DisplayName}";
-                Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(row.X + indent, row.Y + 6), colour);
+                Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(row.X + indent + 38, row.Y + 6), colour);
 
                 string detail = this.DescribeStep(node);
                 Vector2 detailSize = Game1.smallFont.MeasureString(detail);
-                Utility.drawTextWithShadow(b, detail, Game1.smallFont, new Vector2(row.Right - detailSize.X - 16, row.Y + 6), colour * 0.85f);
+                float detailX = row.Right - detailSize.X - 16;
+                Utility.drawTextWithShadow(b, detail, Game1.smallFont, new Vector2(detailX, row.Y + 6), colour * 0.85f);
+
+                // And the machine's own icon next to its name, which is the quickest way to tell a Heavy
+                // Furnace step from a plain one.
+                if (node.Kind == PlanStepKind.Process && node.MachineRecipe != null)
+                    DrawIcon(b, GetIcon(node.MachineRecipe.MachineId), (int)detailX - 40, row.Y + 4, 1f);
             }
 
             if (this.Rows.Count > visible)
@@ -484,6 +534,40 @@ namespace StardewLogistics.Menus
                 }),
                 _ => this.Translations.Get("auto.step-missing")
             };
+        }
+
+        /// <summary>Draws a small item icon inside a tree row.</summary>
+        private static void DrawIcon(SpriteBatch b, Item icon, int x, int y, float alpha)
+        {
+            if (icon == null)
+                return;
+
+            // drawInMenu centres on position + (32,32) in a 64px cell, so offset back to land a 32px icon here.
+            bool tall = icon is StardewValley.Object obj && obj.bigCraftable.Value;
+            icon.drawInMenu(b, new Vector2(x - 16, y - 16), tall ? 0.25f : 0.5f, alpha, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+        }
+
+        /// <summary>Builds a drawable icon for an item ID, cached for the life of the menu.</summary>
+        private static Item GetIcon(string qualifiedId)
+        {
+            if (string.IsNullOrEmpty(qualifiedId))
+                return null;
+
+            if (IconCache.TryGetValue(qualifiedId, out Item cached))
+                return cached;
+
+            Item icon = null;
+            try
+            {
+                icon = ItemRegistry.Create(qualifiedId, 1, 0, allowNull: true);
+            }
+            catch
+            {
+                // A category ID or a removed mod's item; the row still reads fine without a picture.
+            }
+
+            IconCache[qualifiedId] = icon;
+            return icon;
         }
 
         /// <summary>Formats an in-game duration.</summary>

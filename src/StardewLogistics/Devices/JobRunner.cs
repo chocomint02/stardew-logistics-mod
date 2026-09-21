@@ -130,7 +130,19 @@ namespace StardewLogistics.Devices
             }
 
             job.Status = JobStatus.Cancelled;
+
+            // Drop it straight away. Leaving a cancelled job on the list reads as "still there", and there is
+            // nothing left to tell the player about it.
+            this.JobList.Remove(job);
             return true;
+        }
+
+        /// <summary>Removes one finished job from the list.</summary>
+        public bool Dismiss(string jobId)
+        {
+            return this.JobList.RemoveAll(job =>
+                string.Equals(job.Id, jobId, StringComparison.OrdinalIgnoreCase)
+                && job.Status is JobStatus.Complete or JobStatus.Cancelled) > 0;
         }
 
         /// <summary>Removes finished and cancelled jobs from the list.</summary>
