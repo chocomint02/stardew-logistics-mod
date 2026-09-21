@@ -22,12 +22,23 @@ namespace StardewLogistics.Framework
 
         private List<RecipeEntry> Entries = new();
 
+        /// <summary>Recipes by the qualified item ID they produce, for the planner.</summary>
+        private Dictionary<string, RecipeEntry> ByOutput = new(StringComparer.OrdinalIgnoreCase);
+
 
         /*********
         ** Public methods
         *********/
         /// <summary>The indexed recipes.</summary>
         public IReadOnlyList<RecipeEntry> All => this.Entries;
+
+        /// <summary>Returns the known recipe producing an item, or <c>null</c> if the player can't craft it.</summary>
+        public RecipeEntry FindByOutput(string qualifiedItemId)
+        {
+            return qualifiedItemId != null && this.ByOutput.TryGetValue(qualifiedItemId, out RecipeEntry entry)
+                ? entry
+                : null;
+        }
 
         /// <summary>Rebuilds the recipe list if the player has learned or forgotten any, then refreshes availability.</summary>
         /// <param name="stock">The network's aggregated stock, used to work out what's makeable.</param>
@@ -41,6 +52,15 @@ namespace StardewLogistics.Framework
             {
                 this.Entries = this.Build();
                 this.KnownRecipeCount = known;
+
+                // First recipe wins where two produce the same item, which keeps the choice stable between rebuilds.
+                this.ByOutput = new Dictionary<string, RecipeEntry>(StringComparer.OrdinalIgnoreCase);
+                foreach (RecipeEntry entry in this.Entries)
+                {
+                    string id = entry.Output?.QualifiedItemId;
+                    if (id != null)
+                        this.ByOutput.TryAdd(id, entry);
+                }
             }
 
             foreach (RecipeEntry entry in this.Entries)

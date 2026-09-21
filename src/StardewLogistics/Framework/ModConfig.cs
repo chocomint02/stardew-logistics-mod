@@ -8,6 +8,10 @@ namespace StardewLogistics.Framework
         /*********
         ** Network rules
         *********/
+        /// <summary>How many recipe steps deep autocrafting may plan.</summary>
+        /// <remarks>Ore to bar to a crafted item is three; beyond about six the plans stop being comprehensible.</remarks>
+        public int MaxCraftDepth { get; set; } = 6;
+
         /// <summary>The most cable tiles a single network may span, as a safety valve against runaway scans.</summary>
         public int MaxNetworkSize { get; set; } = 20000;
 
@@ -35,6 +39,7 @@ namespace StardewLogistics.Framework
         /// <summary>Clamps every setting to a usable range, so a hand-edited config can't break the mod.</summary>
         public void Normalise()
         {
+            this.MaxCraftDepth = Clamp(this.MaxCraftDepth, 1, 12);
             this.MaxNetworkSize = Clamp(this.MaxNetworkSize, 64, 200000);
             this.BusIntervalTicks = Clamp(this.BusIntervalTicks, 6, 3600);
             this.BusItemsPerRun = Clamp(this.BusItemsPerRun, 1, 999);

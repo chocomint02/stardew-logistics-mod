@@ -27,6 +27,8 @@ namespace StardewLogistics
         private NetworkManager Networks;
         private NetworkTicker Ticker;
         private ContentInjector Content;
+        private MachineRecipeIndex MachineRecipes;
+        private RecipeIndex CraftingRecipes;
 
 
         /*********
@@ -43,6 +45,11 @@ namespace StardewLogistics
 
             this.Networks = new NetworkManager(this.Config);
             this.Ticker = new NetworkTicker(this.Networks, this.Config);
+            this.MachineRecipes = new MachineRecipeIndex();
+            this.CraftingRecipes = new RecipeIndex();
+
+            new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config)
+                .Register(helper.ConsoleCommands);
             this.Content = new ContentInjector(helper.Translation);
 
             helper.Events.Content.AssetRequested += this.OnAssetRequested;
@@ -119,6 +126,10 @@ namespace StardewLogistics
         private void OnSaveLoaded(object sender, SaveLoadedEventArgs e)
         {
             this.Networks.InvalidateAll();
+
+            // Machine data is only readable once content is loaded, so the processing recipes are derived here
+            // rather than at startup.
+            this.MachineRecipes.Rebuild();
         }
 
         /// <summary>Rescans the world each morning and teaches the player any recipes they've earned.</summary>
