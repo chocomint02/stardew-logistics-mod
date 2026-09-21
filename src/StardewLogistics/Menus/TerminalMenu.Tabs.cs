@@ -7,6 +7,7 @@ using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewValley;
 using StardewValley.Menus;
+using SObject = StardewValley.Object;
 
 namespace StardewLogistics.Menus
 {
@@ -45,8 +46,11 @@ namespace StardewLogistics.Menus
             /// <summary>The filter being edited.</summary>
             public ItemFilter Filter;
 
-            /// <summary>Whether this row has an insertion priority, which buses don't.</summary>
-            public bool HasPriority => this.Entry != null;
+            /// <summary>Whether the row's filter and priority can be edited.</summary>
+            public bool ReadOnly;
+
+            /// <summary>Whether this row has an insertion priority, which only chests do.</summary>
+            public bool HasPriority => this.Entry != null && !this.ReadOnly;
 
             /// <summary>Writes the filter back to the underlying object's <c>modData</c>.</summary>
             public void Save()
@@ -266,19 +270,36 @@ namespace StardewLogistics.Menus
                 });
             }
 
-            foreach (NetworkNode node in this.Network.Nodes.Where(n => n.Kind is NodeKind.ImportBus or NodeKind.ExportBus))
+            // Machines are listed so the player can see what the network has picked up, but they carry no
+            // filter or priority of their own yet; that arrives with the autocrafting scheduler.
+            foreach (NetworkNode node in this.Network.Machines)
             {
                 this.ConfigRows.Add(new ConfigRow
                 {
-                    Title = this.Translations.Get(node.Kind == NodeKind.ImportBus ? "device.import-bus" : "device.export-bus", new { x = (int)node.Tile.X, y = (int)node.Tile.Y }),
-                    Subtitle = this.Translations.Get(node.Kind == NodeKind.ImportBus ? "device.import-hint" : "device.export-hint"),
+                    Title = this.Translations.Get("device.machine", new { name = node.Object.DisplayName, x = (int)node.Tile.X, y = (int)node.Tile.Y }),
+                    Subtitle = DescribeMachine(node),
                     Node = node,
-                    Filter = node.GetFilter()
+                    Filter = node.GetFilter(),
+                    ReadOnly = true
                 });
             }
         }
 
-        /// <summary>Draws the per-chest and per-bus configuration rows.</summary>
+        /// <summary>Describes what a wired machine is currently doing.</summary>
+        private string DescribeMachine(NetworkNode node)
+        {
+            SObject machine = node.Object;
+
+            if (machine.readyForHarvest.Value && machine.heldObject.Value != null)
+                return this.Translations.Get("device.machine-ready", new { item = machine.heldObject.Value.DisplayName });
+
+            if (machine.MinutesUntilReady > 0)
+                return this.Translations.Get("device.machine-busy", new { minutes = machine.MinutesUntilReady });
+
+            return this.Translations.Get("device.machine-idle");
+        }
+
+        /// <summary>Draws the per-chest and per-machine configuration rows.</summary>
         private void DrawStorageTab(SpriteBatch b)
         {
             Rectangle grid = this.GetGridBounds();
@@ -399,13 +420,9 @@ namespace StardewLogistics.Menus
 
             List<string> lines = new()
             {
-                this.Translations.Get("network.cables", new { count = this.Network.GetNodes(NodeKind.Cable).Count() }),
-                this.Translations.Get("network.terminals", new { count = this.Network.GetNodes(NodeKind.Terminal).Count() + this.Network.GetNodes(NodeKind.CraftingTerminal).Count() }),
-                this.Translations.Get("network.buses", new
-                {
-                    imports = this.Network.GetNodes(NodeKind.ImportBus).Count(),
-                    exports = this.Network.GetNodes(NodeKind.ExportBus).Count()
-                }),
+                this.Translations.Get("network.cables", new { count = this.Network.CableTiles.Count }),
+                this.Translations.Get("network.terminals", new { count = this.Network.Terminals.Count() }),
+                this.Translations.Get("network.machines", new { count = this.Network.Machines.Count() }),
                 "",
                 this.Translations.Get("network.chests", new { count = this.Network.Storages.Count }),
                 this.Translations.Get("network.slots", new { used = NumberFormat.Full(this.Network.UsedSlots), total = NumberFormat.Full(this.Network.TotalSlots) }),

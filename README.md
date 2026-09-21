@@ -10,32 +10,32 @@ Requires Stardew Valley 1.6+ and SMAPI 4.0+.
 
 ## What it does
 
-Put a **Logistics Cable** down. Every chest that touches a cable joins the network. Put a **Storage Terminal**
-next to the same cable run and you get one searchable window showing everything in every attached chest, with
-combined counts.
+Lay **Logistics Cable** down. Anything on or beside a cable joins the network: chests become shared storage,
+machines become available for processing, and a **Storage Terminal** gives you one searchable window over the lot.
+
+Cable is a *floor*, not an object, so a chest or a furnace can sit **on** the same tile as the cable feeding it.
+A wall of machines needs no gaps for wiring.
 
 ```
-        [Chest]  [Chest]  [Chest]
-           |        |        |
-        ===+========+========+===        <- Logistics Cable
-           |                 |
-     [Terminal]        [Import Bus]--[Keg]
+   [Chest][Chest][Chest]       chests sit on the cable
+   ======================      <- cable floor, walkable
+   [Keg] [Keg] [Terminal]      machines sit on it too
 ```
 
 ### Devices
 
 | Device | AE2 analogue | What it does |
 |---|---|---|
-| **Logistics Cable** | ME Cable | Carries the network between tiles. Chests and devices attach by touching it orthogonally. |
-| **Logistics Controller** | ME Controller | Raises the network's channel budget so it can grow past a handful of devices. |
+| **Logistics Cable** | ME Cable | A floor tile that carries the network. Anything on it or beside it attaches. |
 | **Storage Terminal** | ME Terminal | Browse, search, sort, withdraw and deposit. |
 | **Crafting Terminal** | Crafting Terminal | A terminal that also crafts using materials held anywhere on the network. |
-| **Import Bus** | ME Import Bus | Pulls items out of the adjacent chest or finished machine and onto the network. |
-| **Export Bus** | ME Export Bus | Pushes filtered items from the network into the adjacent chest or machine. |
 
-There is no storage-bus item: **any player chest touching a cable is network storage**, which keeps the common
-case to "place cable, place chest, done". Chests take the role AE2 gives to storage cells, including priority
-and partitioning — configured from the terminal's **Storage** tab rather than by holding the chest.
+There are no bus items and no storage-bus item. **Any player chest on or beside a cable is network storage**, and
+**any vanilla machine on or beside a cable is wired to the network** — the network empties finished machines into
+storage on its own. That keeps the common case to "lay cable, put things on it, done".
+
+Chests take the role AE2 gives to storage cells, including priority and partitioning, configured from the
+terminal's **Storage** tab rather than by holding the chest.
 
 ### The terminal
 
@@ -61,18 +61,15 @@ Import and export buses use the same filter widget, but an empty filter means di
 - **Export Bus** with an empty filter exports *nothing* (as in AE2 — otherwise one bus would drain the network
   into the first chest it touched).
 
-### Channels
+### No channels, no power
 
-Like AE2, devices consume channels. A network with no controller supports **8** devices; each **Logistics
-Controller** adds **32**. Terminals, buses and each attached chest each spend one channel; cables and
-controllers don't. Exceed the budget and the network goes offline until you add a controller or remove
-devices — the Network tab tells you exactly where you stand.
+Both of AE2's infrastructure limits are deliberately absent. There is no power system, because Stardew has no
+electricity to model and "feed your network coal" would be a chore rather than a puzzle. There are no channels
+either: they were implemented and then removed, because in a game where the storage *is* a wall of chests, a
+device budget mostly punishes the player for building the thing the mod exists to build.
 
-If you'd rather not think about it, set `EnableChannelLimits` to `false` for unlimited networks.
-
-**Deliberate divergence from AE2:** there's no power system. Stardew has no electricity to model, and a
-"feed your network coal" chore would be busywork rather than a puzzle. Channels alone carry the
-build-out-your-infrastructure pressure.
+A network is as large as the cable you lay. The only limit is `MaxNetworkSize`, a safety valve against a runaway
+flood fill, not a gameplay rule.
 
 ---
 
@@ -83,18 +80,14 @@ installed.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `EnableChannelLimits` | `true` | Whether devices consume channels at all. |
-| `AdHocDeviceLimit` | `8` | Devices supported without a controller. |
-| `ChannelsPerController` | `32` | Devices each controller adds. |
 | `MaxNetworkSize` | `20000` | Safety cap on cable tiles per network. |
-| `BusIntervalTicks` | `30` | How often buses run (60 ticks = 1 second). |
-| `BusItemsPerRun` | `64` | Most items one bus moves per run. |
-| `EnableMachineAutomation` | `true` | Let buses collect from and load into machines. |
+| `BusIntervalTicks` | `30` | How often the network services machines (60 ticks = 1 second). |
+| `BusItemsPerRun` | `64` | Most items moved per machine per run. |
+| `EnableMachineAutomation` | `true` | Let the network collect finished machine output. |
 | `UnlockAllRecipes` | `true` | Teach all recipes now, rather than gating behind Mining levels. |
 | `OpenTerminalKey` | *(none)* | Optional key to open the terminal under the cursor. |
 
-Recipes unlock at Mining 2 / 4 / 5 / 5 / 7 / 8 (cable, terminal, buses, controller, crafting terminal) when
-`UnlockAllRecipes` is off.
+Recipes unlock at Mining 2 / 4 / 8 (cable, storage terminal, crafting terminal) when `UnlockAllRecipes` is off.
 
 ---
 
@@ -130,44 +123,44 @@ src/StardewLogistics/
     ItemKey.cs             the hash key that makes aggregating 50k stacks cheap
     ItemFilter.cs          allow/deny partitions, serialised into modData
   Network/
-    NetworkScanner.cs      flood-fills cables into networks
+    NetworkScanner.cs      flood-fills the cable floor into networks
     NetworkManager.cs      per-location cache, invalidated on world changes
     StorageNetwork.cs      aggregation, insertion, extraction
     StorageEntry.cs        one attached chest: priority + partition
   Devices/
-    BusRunner.cs           import/export bus tick
+    NetworkTicker.cs       empties finished machines into storage
     MachineIO.cs           machine collection and loading
   Menus/
     TerminalMenu.cs        menu frame, item grid, withdraw/deposit
     TerminalMenu.Tabs.cs   Storage and Network tabs
-  Integrations/            GMCM API, Data/BigCraftables + Data/CraftingRecipes edits
-  assets/craftables.png    16x32 spritesheet, 6 devices
+  Integrations/            GMCM API, and the Data/* edits that register the content
+  assets/craftables.png    16x32 spritesheet for the terminals
+  assets/cable-floor.png   64x64 floor tilesheet, 16 connection variants
   i18n/default.json        all user-facing strings
 ```
+
+`tools/` holds the generators for both spritesheets. `make_cable_floor.py` documents the neighbour-bitmask table
+it encodes, which was read out of the game by reflection rather than guessed.
 
 ---
 
 ## Status and known limitations
 
-**This has not been compiled or run.** It was written in an environment with no .NET SDK and no copy of
-Stardew Valley to reference, so it has had a careful reading but no compiler pass. Expect to fix a few API
-mismatches on your first build. The places most likely to need adjustment, in order:
+Builds and runs against **Stardew Valley 1.6.15 / SMAPI 4.5.2**. The storage network, terminal, filtering and
+deposit/withdraw paths have been exercised in-game.
 
-1. **`MachineIO.cs`** — driving `PlaceInMachine` and reading `MachineOutputRule.Triggers` from outside the
-   normal player-interaction path is the least certain API use in the mod. Setting `EnableMachineAutomation`
-   to `false` disables everything in this file.
-2. **`CraftingPage` material containers** — 1.6 takes `List<IInventory>`; if your game build wants
-   `List<Chest>`, change `StorageNetwork.GetMaterialInventories()` to return the chests themselves.
-3. **Menu drawing details** — sprite source rectangles and font metrics are cosmetic; wrong ones look off
-   rather than crash.
+Not yet verified in-game: the cable floor itself. Placement, connection rendering and attaching objects that sit
+*on* a cable are new and have only been checked at compile time.
 
-Functional limitations that are by design or simply not built yet:
+Functional limitations, by design or not built yet:
 
-- **No autocrafting.** The Crafting Terminal crafts on demand from network stock; it does not queue
-  multi-step crafts the way an AE2 pattern provider does.
-- **Networks don't span locations.** There's no quantum bridge; a cable run is confined to one map.
+- **No autocrafting yet.** The Crafting Terminal crafts on demand from network stock; it does not queue
+  multi-step jobs across wired machines. That is the next major piece of work.
+- **Networks don't span locations.** There is no wireless link yet, so a cable run is confined to one map.
+- **Machines are collected but not loaded.** The network empties finished machines into storage. Feeding them
+  belongs to the autocrafting scheduler, so it deliberately doesn't happen on its own.
 - **Machine loading can't reach fuel in storage.** The game checks extra inputs (a furnace's coal) against the
-  *player's* inventory, so a furnace fed by an export bus still wants coal on you.
+  *player's* inventory, which will constrain the scheduler when it lands.
 - **Self-restarting machines are skipped.** Tappers and crystalariums restart as part of the player collecting
-  them, so import buses leave them alone rather than silently switching them off.
+  them, so the network leaves them alone rather than silently switching them off.
 - **Excluded chests:** loot chests, mini-shipping bins and Junimo chests never join a network.

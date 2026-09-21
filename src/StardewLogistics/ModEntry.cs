@@ -11,6 +11,8 @@ using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewValley;
 using StardewValley.GameData.BigCraftables;
+using StardewValley.GameData.FloorsAndPaths;
+using StardewValley.GameData.Objects;
 using SObject = StardewValley.Object;
 
 namespace StardewLogistics
@@ -23,7 +25,7 @@ namespace StardewLogistics
         *********/
         private ModConfig Config;
         private NetworkManager Networks;
-        private BusRunner Buses;
+        private NetworkTicker Ticker;
         private ContentInjector Content;
 
 
@@ -40,7 +42,7 @@ namespace StardewLogistics
             ItemSource.Initialise(helper.ModRegistry);
 
             this.Networks = new NetworkManager(this.Config);
-            this.Buses = new BusRunner(this.Networks, this.Config);
+            this.Ticker = new NetworkTicker(this.Networks, this.Config);
             this.Content = new ContentInjector(helper.Translation);
 
             helper.Events.Content.AssetRequested += this.OnAssetRequested;
@@ -62,10 +64,16 @@ namespace StardewLogistics
         {
             if (e.NameWithoutLocale.IsEquivalentTo("Data/BigCraftables"))
                 e.Edit(asset => this.Content.EditBigCraftables(asset.AsDictionary<string, BigCraftableData>().Data));
+            else if (e.NameWithoutLocale.IsEquivalentTo("Data/Objects"))
+                e.Edit(asset => this.Content.EditObjects(asset.AsDictionary<string, ObjectData>().Data));
+            else if (e.NameWithoutLocale.IsEquivalentTo("Data/FloorsAndPaths"))
+                e.Edit(asset => this.Content.EditFloors(asset.GetData<List<FloorPathData>>()));
             else if (e.NameWithoutLocale.IsEquivalentTo("Data/CraftingRecipes"))
                 e.Edit(asset => this.Content.EditRecipes(asset.AsDictionary<string, string>().Data));
             else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.TextureAsset))
                 e.LoadFromModFile<Texture2D>("assets/craftables.png", AssetLoadPriority.Medium);
+            else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.CableFloorTexture))
+                e.LoadFromModFile<Texture2D>("assets/cable-floor.png", AssetLoadPriority.Medium);
         }
 
 
@@ -130,7 +138,7 @@ namespace StardewLogistics
             this.Networks.Invalidate(e.Location);
         }
 
-        /// <summary>Runs the import and export buses on the host.</summary>
+        /// <summary>Services wired machines on the host.</summary>
         private void OnUpdateTicked(object sender, UpdateTickedEventArgs e)
         {
             // Only the host moves items. Farmhands see the results through the game's own object sync, so running
@@ -143,7 +151,7 @@ namespace StardewLogistics
                 return;
 
             if (e.IsMultipleOf((uint)this.Config.BusIntervalTicks))
-                this.Buses.Run();
+                this.Ticker.Run();
         }
 
         /// <summary>Opens the terminal when the player activates one.</summary>

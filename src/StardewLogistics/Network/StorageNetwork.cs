@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Xna.Framework;
 using StardewLogistics.Framework;
 using StardewValley;
 using StardewValley.Inventories;
@@ -21,8 +22,18 @@ namespace StardewLogistics.Network
         /// <summary>The location this network lives in. Networks don't span locations.</summary>
         public GameLocation Location { get; }
 
-        /// <summary>Every device on the network, including cables.</summary>
+        /// <summary>The cable tiles this network is laid across.</summary>
+        /// <remarks>Cables are floor, not objects, so the network's shape is a set of tiles rather than a node list.</remarks>
+        public IReadOnlyCollection<Vector2> CableTiles { get; }
+
+        /// <summary>Every device attached to the network.</summary>
         public IReadOnlyList<NetworkNode> Nodes { get; }
+
+        /// <summary>The vanilla machines wired to the network.</summary>
+        public IEnumerable<NetworkNode> Machines => this.GetNodes(NodeKind.Machine);
+
+        /// <summary>The terminals wired to the network.</summary>
+        public IEnumerable<NetworkNode> Terminals => this.Nodes.Where(node => node.IsTerminal);
 
         /// <summary>Every chest attached to the network, ordered by descending priority.</summary>
         public IReadOnlyList<StorageEntry> Storages { get; }
@@ -40,9 +51,10 @@ namespace StardewLogistics.Network
         /*********
         ** Public methods
         *********/
-        public StorageNetwork(GameLocation location, List<NetworkNode> nodes, List<StorageEntry> storages)
+        public StorageNetwork(GameLocation location, IReadOnlyCollection<Vector2> cableTiles, List<NetworkNode> nodes, List<StorageEntry> storages)
         {
             this.Location = location;
+            this.CableTiles = cableTiles;
             this.Nodes = nodes;
             this.Storages = storages.OrderByDescending(entry => entry.Priority).ToList();
         }

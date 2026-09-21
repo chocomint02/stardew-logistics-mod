@@ -542,7 +542,8 @@ namespace StardewLogistics.Menus
             }
 
             Log.Trace(
-                $"Terminal opened at {where}: {this.Network.GetNodes(NodeKind.Cable).Count()} cables, "
+                $"Terminal opened at {where}: {this.Network.CableTiles.Count} cable tiles, "
+                + $"{this.Network.Machines.Count()} machines, "
                 + $"{this.Network.Storages.Count} chests, "
                 + $"{this.AllStock.Count} item kinds, "
                 + $"{this.AllStock.Sum(entry => entry.Count)} items, "

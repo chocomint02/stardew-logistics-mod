@@ -82,10 +82,10 @@ namespace StardewLogistics.Network
         private string Describe(List<StorageNetwork> networks)
         {
             return string.Join(", ", networks.Select((network, index) =>
-                $"network {index + 1} has {network.GetNodes(NodeKind.Cable).Count()} cables, "
+                $"network {index + 1} has {network.CableTiles.Count} cable tiles, "
                 + $"{network.Storages.Count} chests, "
-                + $"{network.GetNodes(NodeKind.Terminal).Count() + network.GetNodes(NodeKind.CraftingTerminal).Count()} terminals, "
-                + $"{network.GetNodes(NodeKind.ImportBus).Count() + network.GetNodes(NodeKind.ExportBus).Count()} buses"));
+                + $"{network.Terminals.Count()} terminals, "
+                + $"{network.Machines.Count()} machines"));
         }
 
         /// <summary>Drops the cached networks for a location, so the next request rescans it.</summary>

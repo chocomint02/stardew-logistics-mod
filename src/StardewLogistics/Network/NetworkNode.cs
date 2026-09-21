@@ -4,23 +4,21 @@ using SObject = StardewValley.Object;
 
 namespace StardewLogistics.Network
 {
-    /// <summary>The role a placed object plays on a storage network.</summary>
+    /// <summary>The role an object plays on a storage network.</summary>
+    /// <remarks>
+    /// Cables are deliberately absent: they are floor tiles rather than objects, so the network's shape lives in
+    /// <see cref="StorageNetwork.CableTiles"/> and this enum only covers things that <em>attach</em> to it.
+    /// </remarks>
     internal enum NodeKind
     {
-        /// <summary>A cable: carries the network between tiles but does nothing on its own.</summary>
-        Cable,
-
         /// <summary>An access terminal: opens the storage UI.</summary>
         Terminal,
 
         /// <summary>A crafting terminal: an access terminal that can also craft from network stock.</summary>
         CraftingTerminal,
 
-        /// <summary>An import bus: pulls items from the adjacent chest or machine onto the network.</summary>
-        ImportBus,
-
-        /// <summary>An export bus: pushes filtered items from the network into the adjacent chest or machine.</summary>
-        ExportBus
+        /// <summary>A vanilla machine the network can collect from and load into.</summary>
+        Machine
     }
 
     /// <summary>A device attached to a storage network.</summary>
@@ -38,8 +36,8 @@ namespace StardewLogistics.Network
         /// <summary>The placed object itself.</summary>
         public SObject Object { get; }
 
-        /// <summary>Whether the node carries the network to its neighbours, rather than just attaching to it.</summary>
-        public bool IsConductive => this.Kind is NodeKind.Cable;
+        /// <summary>Whether this node is one of the mod's terminals.</summary>
+        public bool IsTerminal => this.Kind is NodeKind.Terminal or NodeKind.CraftingTerminal;
 
 
         /*********
@@ -74,15 +72,13 @@ namespace StardewLogistics.Network
         }
 
         /// <summary>Maps an item ID to the node role it represents, or <c>null</c> if it isn't one of the mod's devices.</summary>
+        /// <remarks>Machines aren't covered here: they're identified by having machine data, not by a known ID.</remarks>
         public static NodeKind? GetKind(string itemId)
         {
             return itemId switch
             {
-                ModIds.Cable => NodeKind.Cable,
                 ModIds.Terminal => NodeKind.Terminal,
                 ModIds.CraftingTerminal => NodeKind.CraftingTerminal,
-                ModIds.ImportBus => NodeKind.ImportBus,
-                ModIds.ExportBus => NodeKind.ExportBus,
                 _ => null
             };
         }
