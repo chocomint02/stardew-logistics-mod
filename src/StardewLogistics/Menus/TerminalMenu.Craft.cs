@@ -65,7 +65,7 @@ namespace StardewLogistics.Menus
             };
 
             this.VisibleRecipes = query.ToList();
-            this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset, this.GetMaxRecipeScroll()));
+            this.ClampScroll(TerminalTab.Craft, this.GetMaxRecipeScroll());
         }
 
         /// <summary>The largest scroll offset that still shows recipes.</summary>

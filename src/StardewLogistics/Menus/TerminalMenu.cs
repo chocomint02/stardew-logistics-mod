@@ -95,7 +95,20 @@ namespace StardewLogistics.Menus
         private readonly List<ClickableComponent> TabButtons = new();
 
         private int Rows;
-        private int ScrollOffset;
+        /// <summary>Where each tab is scrolled to.</summary>
+        /// <remarks>
+        /// One position per tab, not one shared between them. A single field was being clamped by every tab's
+        /// filter on each refresh, so a tab with few rows dragged a longer tab's position back to the top every
+        /// time the stock list rebuilt. Keeping them apart also means switching tabs no longer loses your place.
+        /// </remarks>
+        private readonly Dictionary<TerminalTab, int> ScrollByTab = new();
+
+        /// <summary>Where the current tab is scrolled to.</summary>
+        private int ScrollOffset
+        {
+            get => this.ScrollByTab.TryGetValue(this.Tab, out int value) ? value : 0;
+            set => this.ScrollByTab[this.Tab] = Math.Max(0, value);
+        }
         private int SearchBoxLeft;
         private int SearchBoxWidth;
         private SortMode Sort = SortMode.Name;
@@ -227,7 +240,6 @@ namespace StardewLogistics.Menus
                     continue;
 
                 this.Tab = Enum.Parse<TerminalTab>(tab.name);
-                this.ScrollOffset = 0;
 
                 // Don't leave the search box holding the keyboard on a tab that has no search box.
                 if (!this.TabHasSearch)
@@ -679,21 +691,40 @@ namespace StardewLogistics.Menus
                 : null;
         }
 
+        /// <summary>Clamps one tab's scroll position to its own maximum.</summary>
+        private void ClampScroll(TerminalTab tab, int max)
+        {
+            int current = this.ScrollByTab.TryGetValue(tab, out int value) ? value : 0;
+            this.ScrollByTab[tab] = Math.Max(0, Math.Min(current, Math.Max(0, max)));
+        }
+
         /// <summary>The largest scroll offset that still shows content.</summary>
         private int GetMaxScroll(int rows)
         {
-            if (this.Tab != TerminalTab.Items)
-                return this.GetMaxScrollForTab();
+            // A switch rather than a chain of ifs: the chain began with "not Items, defer to the storage tab",
+            // which made every branch after it unreachable and left Craft, Auto and Jobs reporting no scroll
+            // room at all.
+            switch (this.Tab)
+            {
+                case TerminalTab.Craft:
+                    return this.GetMaxRecipeScroll();
 
-            if (this.Tab == TerminalTab.Craft)
-                return this.GetMaxRecipeScroll();
-            if (this.Tab == TerminalTab.Auto)
-                return this.GetMaxTargetScroll();
-            if (this.Tab == TerminalTab.Jobs)
-                return Math.Max(0, (this.Jobs?.Jobs.Count ?? 0) - (this.GetGridBounds().Height / 96));
+                case TerminalTab.Auto:
+                    return this.GetMaxTargetScroll();
 
-            int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
-            return Math.Max(0, totalRows - rows);
+                case TerminalTab.Jobs:
+                    return Math.Max(0, (this.Jobs?.Jobs.Count ?? 0) - (this.GetGridBounds().Height / 96));
+
+                case TerminalTab.Storage:
+                    return this.GetMaxScrollForTab();
+
+                case TerminalTab.Network:
+                    return 0;
+
+                default:
+                    int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
+                    return Math.Max(0, totalRows - rows);
+            }
         }
 
 
@@ -751,7 +782,9 @@ namespace StardewLogistics.Menus
             this.VisibleStock = query.ToList();
             this.ApplyRecipeFilter();
             this.ApplyTargetFilter();
-            this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset, this.GetMaxScroll(this.Rows)));
+
+            int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
+            this.ClampScroll(TerminalTab.Items, totalRows - this.Rows);
         }
 
         /// <summary>Builds the choices for the type filter, counting how many kinds of item each category holds.</summary>

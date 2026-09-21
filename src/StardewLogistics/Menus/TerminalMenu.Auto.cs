@@ -181,7 +181,7 @@ namespace StardewLogistics.Menus
             };
 
             this.VisibleTargets = query.ToList();
-            this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset, this.GetMaxTargetScroll()));
+            this.ClampScroll(TerminalTab.Auto, this.GetMaxTargetScroll());
         }
 
         /// <summary>The largest scroll offset for the target grid.</summary>
