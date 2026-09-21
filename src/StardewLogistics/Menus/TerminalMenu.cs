@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using StardewLogistics.Devices;
 using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewModdingAPI;
@@ -25,6 +26,8 @@ namespace StardewLogistics.Menus
     {
         Items,
         Craft,
+        Auto,
+        Jobs,
         Storage,
         Network
     }
@@ -68,6 +71,9 @@ namespace StardewLogistics.Menus
 
         private readonly ITranslationHelper Translations;
         private readonly NetworkManager Networks;
+        private readonly MachineRecipeIndex MachineRecipes;
+        private readonly JobRunner Jobs;
+        private readonly ModConfig Config;
         private readonly GameLocation TerminalLocation;
         private readonly Vector2 TerminalTile;
         private readonly bool CanCraft;
@@ -109,9 +115,12 @@ namespace StardewLogistics.Menus
         /// <param name="location">The location holding the terminal.</param>
         /// <param name="tile">The tile the terminal occupies.</param>
         /// <param name="canCraft">Whether this terminal offers the crafting page.</param>
-        public TerminalMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 tile, bool canCraft)
+        public TerminalMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 tile, bool canCraft, MachineRecipeIndex machineRecipes, JobRunner jobs, ModConfig config)
         {
             this.Networks = networks;
+            this.MachineRecipes = machineRecipes;
+            this.Jobs = jobs;
+            this.Config = config;
             this.Translations = translations;
             this.TerminalLocation = location;
             this.TerminalTile = tile;
@@ -240,6 +249,23 @@ namespace StardewLogistics.Menus
                     return;
             }
 
+            if (this.Tab == TerminalTab.Auto)
+            {
+                if (this.HandleSharedHeaderClick(x, y))
+                    return;
+
+                AutoTarget target = this.GetTargetAt(x, y);
+                if (target != null)
+                    this.OpenPlanner(target);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Jobs)
+            {
+                this.ReceiveClickOnJobs(x, y);
+                return;
+            }
+
             if (this.Tab == TerminalTab.Craft)
             {
                 if (this.CraftableOnlyButton.containsPoint(x, y))
@@ -350,7 +376,7 @@ namespace StardewLogistics.Menus
             if (this.Dropdown.ReceiveScroll(direction))
                 return;
 
-            int rows = this.Tab is TerminalTab.Items or TerminalTab.Craft ? this.Rows : 1;
+            int rows = this.Tab is TerminalTab.Items or TerminalTab.Craft or TerminalTab.Auto ? this.Rows : 1;
             int step = direction > 0 ? -1 : 1;
             this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset + step, Math.Max(0, this.GetMaxScroll(rows))));
             Game1.playSound("shiny4");
@@ -396,8 +422,25 @@ namespace StardewLogistics.Menus
             this.CraftableOnlyButton?.tryHover(x, y);
 
             this.HoverRecipe = null;
+            this.HoverTarget = null;
             this.HoverX = x;
             this.HoverY = y;
+
+            if (this.Tab == TerminalTab.Auto)
+            {
+                if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.filter-hint");
+                else
+                {
+                    this.HoverTarget = this.GetTargetAt(x, y);
+                    if (this.HoverTarget != null)
+                    {
+                        this.HoverItem = this.HoverTarget.Sample;
+                        this.HoverText = this.Translations.Get("auto.target-hint", new { count = NumberFormat.Full(this.HoverTarget.Count) });
+                    }
+                }
+                return;
+            }
 
             if (this.Tab == TerminalTab.Craft)
             {
@@ -448,7 +491,7 @@ namespace StardewLogistics.Menus
         {
             base.gameWindowSizeChanged(oldBounds, newBounds);
             this.ReleaseKeyboard();
-            Game1.activeClickableMenu = new TerminalMenu(this.Networks, this.Translations, this.TerminalLocation, this.TerminalTile, this.CanCraft);
+            Game1.activeClickableMenu = new TerminalMenu(this.Networks, this.Translations, this.TerminalLocation, this.TerminalTile, this.CanCraft, this.MachineRecipes, this.Jobs, this.Config);
         }
 
         /// <inheritdoc />
@@ -468,6 +511,12 @@ namespace StardewLogistics.Menus
                     break;
                 case TerminalTab.Craft:
                     this.DrawCraftTab(b);
+                    break;
+                case TerminalTab.Auto:
+                    this.DrawAutoTab(b);
+                    break;
+                case TerminalTab.Jobs:
+                    this.DrawJobsTab(b);
                     break;
                 case TerminalTab.Storage:
                     this.DrawStorageTab(b);
@@ -553,7 +602,7 @@ namespace StardewLogistics.Menus
         private IEnumerable<string> GetNames<T>() where T : struct, Enum => Enum.GetNames<T>();
 
         /// <summary>Whether the current tab uses the search box and filter dropdowns.</summary>
-        private bool TabHasSearch => this.Tab is TerminalTab.Items or TerminalTab.Craft;
+        private bool TabHasSearch => this.Tab is TerminalTab.Items or TerminalTab.Craft or TerminalTab.Auto;
 
         /// <summary>Handles a click on the controls shared by the Items and Craft tabs.</summary>
         /// <returns>Whether the click was consumed.</returns>
@@ -591,7 +640,11 @@ namespace StardewLogistics.Menus
         {
             yield return nameof(TerminalTab.Items);
             if (this.CanCraft)
+            {
                 yield return nameof(TerminalTab.Craft);
+                yield return nameof(TerminalTab.Auto);
+                yield return nameof(TerminalTab.Jobs);
+            }
             yield return nameof(TerminalTab.Storage);
             yield return nameof(TerminalTab.Network);
         }
@@ -634,6 +687,10 @@ namespace StardewLogistics.Menus
 
             if (this.Tab == TerminalTab.Craft)
                 return this.GetMaxRecipeScroll();
+            if (this.Tab == TerminalTab.Auto)
+                return this.GetMaxTargetScroll();
+            if (this.Tab == TerminalTab.Jobs)
+                return Math.Max(0, (this.Jobs?.Jobs.Count ?? 0) - (this.GetGridBounds().Height / 96));
 
             int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
             return Math.Max(0, totalRows - rows);
@@ -672,6 +729,7 @@ namespace StardewLogistics.Menus
             this.AllStock = this.Network?.Aggregate() ?? new List<NetworkItemStack>();
             this.RefreshConfigRows();
             this.RefreshRecipes();
+            this.RefreshTargets();
             this.ApplyFilterAndSort();
         }
 
@@ -692,6 +750,7 @@ namespace StardewLogistics.Menus
 
             this.VisibleStock = query.ToList();
             this.ApplyRecipeFilter();
+            this.ApplyTargetFilter();
             this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset, this.GetMaxScroll(this.Rows)));
         }
 

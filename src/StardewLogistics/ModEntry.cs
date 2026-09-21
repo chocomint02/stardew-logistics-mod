@@ -170,8 +170,11 @@ namespace StardewLogistics
 
             if (e.IsMultipleOf((uint)this.Config.BusIntervalTicks))
             {
-                this.Ticker.Run();
+                // Jobs first: the job collector must get its claimed machines before the general ticker sweeps
+                // them, otherwise a job's output is swept into storage as ordinary machine output and the job
+                // only learns about it second-hand.
                 this.Jobs.Run();
+                this.Ticker.Run();
             }
         }
 
@@ -211,7 +214,10 @@ namespace StardewLogistics
                     this.Helper.Translation,
                     location,
                     tile,
-                    canCraft: kind == NodeKind.CraftingTerminal
+                    canCraft: kind == NodeKind.CraftingTerminal,
+                    this.MachineRecipes,
+                    this.Jobs,
+                    this.Config
                 );
 
                 Game1.playSound("bigSelect");
