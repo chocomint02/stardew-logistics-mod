@@ -95,7 +95,8 @@ namespace StardewLogistics.Devices
                 TargetCount = count,
                 LocationName = network.Location?.NameOrUniqueName,
                 AnchorTile = network.CableTiles.FirstOrDefault(),
-                Steps = Flatten(plan, maxMachines)
+                Steps = Flatten(plan, maxMachines, machineId => network.Machines.Count(node =>
+                    string.Equals(node.Object?.QualifiedItemId, machineId, StringComparison.OrdinalIgnoreCase)))
             };
 
             if (job.Steps.Count == 0)
@@ -183,7 +184,7 @@ namespace StardewLogistics.Devices
         ** Private methods: planning to steps
         *********/
         /// <summary>Flattens a plan into steps, deepest first so a step's inputs are produced before it runs.</summary>
-        private static List<JobStep> Flatten(CraftPlan plan, int maxMachines)
+        private static List<JobStep> Flatten(CraftPlan plan, int maxMachines, Func<string, int> countMachines)
         {
             List<PlanNode> nodes = plan.Root
                 .Walk()
@@ -199,6 +200,10 @@ namespace StardewLogistics.Devices
                 // sees "one recipe, N runs", so the split costs it no extra cases.
                 if (node.Kind == PlanStepKind.Process && node.Assignments.Count > 0)
                 {
+                    // Divide the budget across the shares the same way the planner dialog showed it, so the job
+                    // occupies the machines the player was told it would.
+                    Dictionary<MachineAssignment, int> allocation = MachineAllocator.Allocate(node, maxMachines, countMachines);
+
                     foreach (MachineAssignment assignment in node.Assignments)
                     {
                         steps.Add(new JobStep
@@ -209,7 +214,7 @@ namespace StardewLogistics.Devices
                             MachineRecipe = assignment.Recipe,
                             RemainingBatches = assignment.Runs,
                             TotalBatches = assignment.Runs,
-                            MaxMachines = maxMachines
+                            MaxMachines = allocation.TryGetValue(assignment, out int machines) ? machines : 1
                         });
                     }
                     continue;

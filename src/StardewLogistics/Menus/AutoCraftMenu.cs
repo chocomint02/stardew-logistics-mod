@@ -67,8 +67,14 @@ namespace StardewLogistics.Menus
         private int Quantity = 1;
         private int MaxMachines = 1;
 
-        /// <summary>How many machines of the kind this plan needs are wired up, which caps the control.</summary>
+        /// <summary>The most machines this plan could put to work, which caps the control.</summary>
         private int MachinesAvailable = 1;
+
+        /// <summary>The fewest the plan can run on: one of each machine type it uses.</summary>
+        private int MachinesFloor = 1;
+
+        /// <summary>How the budget is currently divided, worked out once per re-plan rather than per frame.</summary>
+        private readonly Dictionary<PlanNode, Dictionary<MachineAssignment, int>> Allocations = new();
         private int Scroll;
         private string LastText = "1";
         private string HoverText = "";
@@ -162,7 +168,7 @@ namespace StardewLogistics.Menus
                         this.SetMachines(this.MaxMachines + delta);
                         break;
                     case StepAction.MachineMin:
-                        this.SetMachines(1);
+                        this.SetMachines(this.MachinesFloor);
                         break;
                     case StepAction.MachineMax:
                         this.SetMachines(this.MachinesAvailable);
@@ -297,15 +303,20 @@ namespace StardewLogistics.Menus
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));
 
-            // Cap the machine control at what the plan could actually occupy. Offering "use 9 furnaces" when
-            // three are wired up promises throughput the network can't deliver.
-            this.MachinesAvailable = Math.Max(1, this.Rows
-                .Where(node => node.Kind == PlanStepKind.Process && node.MachineRecipe != null)
-                .Select(node => CountMachines(node.MachineRecipe.MachineId))
-                .DefaultIfEmpty(1)
-                .Max());
+            // The control's range comes from the plan, not from one machine type. A step split between a Heavy
+            // Furnace and a plain one occupies the sum of both, and needs at least one of each to start at all.
+            List<PlanNode> processing = this.Rows.Where(node => node.Kind == PlanStepKind.Process && node.Assignments.Count > 0).ToList();
 
-            this.MaxMachines = Math.Clamp(this.MaxMachines, 1, this.MachinesAvailable);
+            this.MachinesFloor = processing.Count == 0 ? 1 : processing.Max(MachineAllocator.MinimumBudget);
+            this.MachinesAvailable = processing.Count == 0
+                ? 1
+                : processing.Max(node => MachineAllocator.MaximumBudget(node, this.CountMachines));
+
+            this.MaxMachines = Math.Clamp(this.MaxMachines, this.MachinesFloor, this.MachinesAvailable);
+
+            this.Allocations.Clear();
+            foreach (PlanNode node in processing)
+                this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountMachines);
         }
 
         /// <summary>Sets the quantity and re-plans.</summary>
@@ -317,29 +328,37 @@ namespace StardewLogistics.Menus
             this.Replan();
         }
 
-        /// <summary>Sets how many machines each processing step may occupy at once.</summary>
+        /// <summary>Sets the step's machine budget, then re-divides it across the split.</summary>
         private void SetMachines(int value)
         {
-            this.MaxMachines = Math.Clamp(value, 1, this.MachinesAvailable);
+            this.MaxMachines = Math.Clamp(value, this.MachinesFloor, this.MachinesAvailable);
+
+            this.Allocations.Clear();
+            foreach (PlanNode node in this.Rows.Where(node => node.Kind == PlanStepKind.Process && node.Assignments.Count > 0))
+                this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountMachines);
         }
 
         /// <summary>Describes a processing step, naming each machine type sharing the work.</summary>
         private string DescribeProcess(PlanNode node)
         {
+            Dictionary<MachineAssignment, int> allocation = this.GetAllocation(node);
+
             string split = string.Join(
                 " + ",
                 node.Assignments.Select(assignment =>
-                    $"{assignment.Recipe.MachineName} x{this.GetMachinesUsed(assignment)}")
+                    $"{assignment.Recipe.MachineName} x{(allocation.TryGetValue(assignment, out int machines) ? machines : 1)}")
             );
 
             return $"{split}  ·  {FormatTotal(this.GetStepMinutes(node))}";
         }
 
-        /// <summary>How many machines one share will occupy.</summary>
-        private int GetMachinesUsed(MachineAssignment assignment)
+        /// <summary>The current allocation for a step, computed on demand if the cache has been cleared.</summary>
+        private Dictionary<MachineAssignment, int> GetAllocation(PlanNode node)
         {
-            int owned = this.CountMachines(assignment.Recipe?.MachineId);
-            return Math.Max(1, Math.Min(Math.Min(owned, this.MaxMachines), Math.Max(1, assignment.Runs)));
+            if (!this.Allocations.TryGetValue(node, out Dictionary<MachineAssignment, int> allocation))
+                this.Allocations[node] = allocation = MachineAllocator.Allocate(node, this.MaxMachines, this.CountMachines);
+
+            return allocation;
         }
 
         /// <summary>How many machines a step will actually occupy.</summary>
@@ -347,19 +366,10 @@ namespace StardewLogistics.Menus
         /// Bounded three ways: what the network has, what the player allowed, and how many runs there are. Showing
         /// the run count instead would claim six furnaces for a six-run job on a farm with five.
         /// </remarks>
-        /// <summary>How long a processing step takes, with its shares running side by side.</summary>
-        /// <remarks>Shares occupy different machines, so the step is as long as its slowest share, not their sum.</remarks>
+        /// <summary>How long a processing step takes under the current allocation.</summary>
         private int GetStepMinutes(PlanNode node)
         {
-            if (node.Assignments.Count == 0)
-                return 0;
-
-            return node.Assignments.Max(assignment =>
-            {
-                int machines = this.GetMachinesUsed(assignment);
-                int waves = (int)Math.Ceiling(Math.Max(1, assignment.Runs) / (double)machines);
-                return waves * assignment.MinutesPerRun;
-            });
+            return MachineAllocator.StepMinutes(node, this.GetAllocation(node));
         }
 
         /// <summary>The whole plan's processing time, with each step spread across its machines.</summary>

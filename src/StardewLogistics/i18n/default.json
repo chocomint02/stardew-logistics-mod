@@ -108,7 +108,7 @@
   "jobs.status-blocked": "Blocked",
   "jobs.status-cancelled": "Cancelled",
   "jobs.clear": "Clear",
-  "auto.machines-available": "{{count}} on network",
+  "auto.machines-available": "up to {{count}}",
   "auto.tab-legend": "Dimmed: short of materials.   Blue corner: needs a machine.",
   "auto.min": "Min",
   "auto.max": "Max"
