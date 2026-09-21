@@ -212,22 +212,41 @@ namespace StardewLogistics.Devices
                         continue;
                     }
 
-                    if (!machine.readyForHarvest.Value || machine.heldObject.Value == null)
+                    // Finished, and still holding its output: the normal path.
+                    if (machine.readyForHarvest.Value && machine.heldObject.Value != null)
+                    {
+                        this.Collect(machine, step, batch, network);
                         continue;
+                    }
 
-                    SObject output = machine.heldObject.Value;
-                    network.Insert(output);
-
-                    machine.heldObject.Value = null;
-                    machine.readyForHarvest.Value = false;
-                    machine.showNextIndex.Value = false;
-                    machine.minutesUntilReady.Value = 0;
-                    machine.modData.Remove(ModIds.JobKey);
-
-                    step.InFlight.Remove(batch);
-                    step.CompletedBatches++;
+                    // Idle, but we still hold the claim: the run finished and something else emptied the
+                    // machine. Another automation mod working the same machines does exactly this. The output
+                    // went to the chests this job is filling either way, so credit the batch rather than
+                    // waiting forever for output that has already arrived.
+                    if (!machine.readyForHarvest.Value && machine.heldObject.Value == null && machine.MinutesUntilReady <= 0)
+                    {
+                        machine.modData.Remove(ModIds.JobKey);
+                        step.InFlight.Remove(batch);
+                        step.CompletedBatches++;
+                        Log.Trace($"{job.Id}: a run finished but was collected by something else; counting it.");
+                    }
                 }
             }
+        }
+
+        /// <summary>Takes a finished machine's output into storage and closes off the batch.</summary>
+        private void Collect(SObject machine, JobStep step, RunningBatch batch, StorageNetwork network)
+        {
+            network.Insert(machine.heldObject.Value);
+
+            machine.heldObject.Value = null;
+            machine.readyForHarvest.Value = false;
+            machine.showNextIndex.Value = false;
+            machine.minutesUntilReady.Value = 0;
+            machine.modData.Remove(ModIds.JobKey);
+
+            step.InFlight.Remove(batch);
+            step.CompletedBatches++;
         }
 
         /// <summary>Starts whatever work the job can start right now.</summary>

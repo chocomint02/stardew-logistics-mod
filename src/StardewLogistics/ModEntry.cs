@@ -95,6 +95,8 @@ namespace StardewLogistics
         /// <summary>Registers the config menu once every mod has loaded.</summary>
         private void OnGameLaunched(object sender, GameLaunchedEventArgs e)
         {
+            this.WarnAboutCompetingAutomation();
+
             var api = this.Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
             if (api == null)
                 return;
@@ -226,6 +228,26 @@ namespace StardewLogistics
         /*********
         ** Private methods: progression
         *********/
+        /// <summary>Warns when another mod automates the same machines this one does.</summary>
+        /// <remarks>
+        /// Automate feeds and empties machines from adjacent chests. Both mods working the same furnace is not
+        /// harmful -- autocrafting counts a run whose output was collected by something else -- but it does mean
+        /// machines get loaded without an autocrafting job asking for it, which looks like a bug if you don't
+        /// know the other mod is doing it.
+        /// </remarks>
+        private void WarnAboutCompetingAutomation()
+        {
+            if (!this.Helper.ModRegistry.IsLoaded("Pathoschild.Automate"))
+                return;
+
+            this.Monitor.Log(
+                "Automate is installed. If it can see the same machines as a logistics network, it will load and"
+                + " empty them on its own, which can look like autocrafting misbehaving. Keep the two on separate"
+                + " machines, or don't put a plain chest next to a machine you want autocrafting to drive.",
+                LogLevel.Info
+            );
+        }
+
         /// <summary>Teaches the player every logistics recipe they've qualified for.</summary>
         private void UnlockRecipes()
         {
