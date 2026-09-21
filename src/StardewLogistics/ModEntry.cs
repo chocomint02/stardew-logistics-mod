@@ -67,7 +67,7 @@ namespace StardewLogistics
             else if (e.NameWithoutLocale.IsEquivalentTo("Data/Objects"))
                 e.Edit(asset => this.Content.EditObjects(asset.AsDictionary<string, ObjectData>().Data));
             else if (e.NameWithoutLocale.IsEquivalentTo("Data/FloorsAndPaths"))
-                e.Edit(asset => this.Content.EditFloors(asset.GetData<List<FloorPathData>>()));
+                e.Edit(asset => this.Content.EditFloors(asset.AsDictionary<string, FloorPathData>().Data));
             else if (e.NameWithoutLocale.IsEquivalentTo("Data/CraftingRecipes"))
                 e.Edit(asset => this.Content.EditRecipes(asset.AsDictionary<string, string>().Data));
             else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.TextureAsset))

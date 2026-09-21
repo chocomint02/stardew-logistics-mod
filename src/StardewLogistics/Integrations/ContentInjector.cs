@@ -79,10 +79,13 @@ namespace StardewLogistics.Integrations
         /// <c>ConnectType.Default</c> makes neighbouring cables merge into a continuous run, which is what the
         /// sixteen-variant tilesheet is for. The winter texture points at the same sheet so cables don't vanish
         /// under snow.
+        ///
+        /// Note the asset is a dictionary keyed by floor ID, not a list, so the entry is assigned rather than
+        /// appended and its <c>Id</c> has to match the key.
         /// </remarks>
-        public void EditFloors(IList<FloorPathData> data)
+        public void EditFloors(IDictionary<string, FloorPathData> data)
         {
-            data.Add(new FloorPathData
+            data[ModIds.CableFloorId] = new FloorPathData
             {
                 Id = ModIds.CableFloorId,
                 ItemId = ModIds.Cable,
@@ -98,7 +101,7 @@ namespace StardewLogistics.Integrations
                 ShadowType = FloorPathShadowType.None,
                 CornerSize = 0,
                 FarmSpeedBuff = 0.1f
-            });
+            };
         }
 
         /// <summary>Adds the mod's recipes to <c>Data/CraftingRecipes</c>.</summary>
