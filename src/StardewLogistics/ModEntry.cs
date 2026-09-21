@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -35,6 +36,7 @@ namespace StardewLogistics
             this.Config = helper.ReadConfig<ModConfig>();
             this.Config.Normalise();
 
+            Log.Initialise(this.Monitor);
             ItemSource.Initialise(helper.ModRegistry);
 
             this.Networks = new NetworkManager(this.Config);
@@ -170,14 +172,27 @@ namespace StardewLogistics
                 return;
 
             this.Helper.Input.Suppress(e.Button);
-            Game1.playSound("bigSelect");
-            Game1.activeClickableMenu = new TerminalMenu(
-                this.Networks,
-                this.Helper.Translation,
-                location,
-                tile,
-                canCraft: kind == NodeKind.CraftingTerminal
-            );
+
+            // Build the menu defensively: a failure here is recoverable, and swallowing it into SMAPI's generic
+            // event-handler catch would lose the context that makes it diagnosable.
+            try
+            {
+                TerminalMenu menu = new(
+                    this.Networks,
+                    this.Helper.Translation,
+                    location,
+                    tile,
+                    canCraft: kind == NodeKind.CraftingTerminal
+                );
+
+                Game1.playSound("bigSelect");
+                Game1.activeClickableMenu = menu;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Couldn't open the terminal at {location.NameOrUniqueName} ({tile.X}, {tile.Y}).", ex);
+                Game1.addHUDMessage(new HUDMessage(this.Helper.Translation.Get("error.terminal-failed"), HUDMessage.error_type));
+            }
         }
 
 

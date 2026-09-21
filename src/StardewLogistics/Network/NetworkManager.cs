@@ -37,7 +37,14 @@ namespace StardewLogistics.Network
 
             string key = location.NameOrUniqueName;
             if (!this.Cache.TryGetValue(key, out List<StorageNetwork> networks))
+            {
                 this.Cache[key] = networks = NetworkScanner.Scan(location, this.Config);
+
+                // Stay quiet about the many locations that hold no cable at all, or this would log a line per
+                // location every time a cache invalidation sweeps the world.
+                if (networks.Count > 0)
+                    Log.Trace($"Scanned {key}: {this.Describe(networks)}.");
+            }
 
             return networks;
         }
@@ -69,6 +76,16 @@ namespace StardewLogistics.Network
             node = null;
             network = null;
             return false;
+        }
+
+        /// <summary>Summarises a location's networks for the log.</summary>
+        private string Describe(List<StorageNetwork> networks)
+        {
+            return string.Join(", ", networks.Select((network, index) =>
+                $"network {index + 1} has {network.GetNodes(NodeKind.Cable).Count()} cables, "
+                + $"{network.Storages.Count} chests, "
+                + $"{network.GetNodes(NodeKind.Terminal).Count() + network.GetNodes(NodeKind.CraftingTerminal).Count()} terminals, "
+                + $"{network.GetNodes(NodeKind.ImportBus).Count() + network.GetNodes(NodeKind.ExportBus).Count()} buses"));
         }
 
         /// <summary>Drops the cached networks for a location, so the next request rescans it.</summary>

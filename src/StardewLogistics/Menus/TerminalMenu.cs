@@ -130,6 +130,8 @@ namespace StardewLogistics.Menus
             this.SetUpComponents();
             this.RefreshStock();
             this.initializeUpperRightCloseButton();
+
+            this.LogOpened(location, tile);
         }
 
         /// <inheritdoc />
@@ -528,6 +530,27 @@ namespace StardewLogistics.Menus
         /*********
         ** Private methods: data
         *********/
+        /// <summary>Records what the terminal found, so a report of "it looked wrong" can be checked against the log.</summary>
+        private void LogOpened(GameLocation location, Vector2 tile)
+        {
+            string where = $"{location?.NameOrUniqueName} ({tile.X}, {tile.Y})";
+
+            if (this.Network == null)
+            {
+                Log.Trace($"Terminal opened at {where}: not connected to a cable.");
+                return;
+            }
+
+            Log.Trace(
+                $"Terminal opened at {where}: {this.Network.GetNodes(NodeKind.Cable).Count()} cables, "
+                + $"{this.Network.Storages.Count} chests, "
+                + $"{this.AllStock.Count} item kinds, "
+                + $"{this.AllStock.Sum(entry => entry.Count)} items, "
+                + $"{this.Network.FreeSlots} free slots; "
+                + $"grid is {Columns}x{this.Rows} at {this.width}x{this.height}."
+            );
+        }
+
         /// <summary>Re-resolves the network and rebuilds the item list.</summary>
         private void RefreshStock()
         {

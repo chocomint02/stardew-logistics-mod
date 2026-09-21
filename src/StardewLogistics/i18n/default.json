@@ -42,6 +42,7 @@
   "ui.pick-filter-item": "Pick an item from your bag to add it to the filter.",
   "ui.recipe-learned": "You worked out how to build a {{name}}!",
   "error.not-connected": "This terminal isn't connected to a cable.",
+  "error.terminal-failed": "The terminal couldn't open. Check the SMAPI log for details.",
   "error.inventory-full": "Your bag is full.",
   "error.network-full": "The network has nowhere to put that.",
   "network.cables": "Cables: {{count}}",
