@@ -40,13 +40,35 @@ terminal's **Storage** tab rather than by holding the chest.
 ### The terminal
 
 - **Items** — every item on the network as one grid, with combined counts abbreviated (`12.3K`, `4.5M`) so big
-  numbers still fit in a slot. Search by name, by context tag (`#wine`), or by category (`@Fish`). Sort by
-  name, quantity or category.
+  numbers still fit in a slot.
   - *Left-click* takes a stack · *right-click* takes one · *shift-click* fills your bag.
   - Clicking an item in your own inventory stores it; shift-click stores every stack of that item.
-- **Craft** (Crafting Terminal only) — the game's own crafting menu, backed by every chest on the network.
-- **Storage** — each attached chest and bus, with its insertion priority and a 9-slot filter.
-- **Network** — channel usage, device counts, slots used, and what's wrong if the network is down.
+- **Craft** (Crafting Terminal only) — a searchable recipe browser that crafts from network stock. Recipes you
+  can't afford are dimmed rather than hidden, and hovering one shows its ingredients with have/need counted
+  against the network.
+  - *Left-click* crafts one · *shift-click* five · *right-click* opens a bulk dialog.
+  - The bulk dialog has `Min / -100 / -50 / -25 / -10 / -1` and the matching increments either side of a
+    quantity box that accepts arithmetic, so `10*2` and `(3+4)*6` work.
+- **Storage** — each attached chest with its insertion priority and 9-slot filter, plus every wired machine and
+  whether it is idle, working or ready.
+- **Network** — cable tiles, terminals, machines, chests, slots used and total stock.
+
+Search and the **Type** and **Mod** dropdowns work on both the Items and Craft tabs. Terms are ANDed:
+
+```
+blueberry        name contains "blueberry"
+"iron bar"       quoted phrase
+#wine            context tag
+@fish            category
+~ridgeside       source mod
+>500  <=2000     quantity, or on the Craft tab, craftable batches
+!stone           negate any of the above
+#wine >100       combined
+```
+
+Mod attribution is a heuristic: Stardew keeps no item-to-mod index, so item IDs are matched against loaded mod
+IDs using the 1.6 namespacing convention. Older content with unnamespaced IDs reports as "Unknown" rather than
+being guessed at.
 
 ### Priorities and filters
 
@@ -54,12 +76,6 @@ Each chest has a **priority** (higher fills first and drains last) and a **filte
 either *Allow* or *Deny* mode. A chest with an Allow filter is treated as dedicated storage and is offered
 matching items before any general-purpose chest, whatever the priority numbers say — so "all my ore goes in
 this one chest" works without tuning anything.
-
-Import and export buses use the same filter widget, but an empty filter means different things:
-
-- **Import Bus** with an empty filter imports *everything*.
-- **Export Bus** with an empty filter exports *nothing* (as in AE2 — otherwise one bus would drain the network
-  into the first chest it touched).
 
 ### No channels, no power
 
@@ -119,9 +135,15 @@ installed somewhere unusual, set `GamePath` in the `.csproj` or create a `starde
 ```
 src/StardewLogistics/
   ModEntry.cs              entry point, events, terminal activation
-  Framework/               config, item identity, filters, number formatting
+  Framework/               config, item identity, filtering, recipes
     ItemKey.cs             the hash key that makes aggregating 50k stacks cheap
     ItemFilter.cs          allow/deny partitions, serialised into modData
+    StockFilter.cs         the search query language, shared by both grids
+    ItemSource.cs          maps an item to the mod that added it
+    RecipeIndex.cs         the recipes the player knows
+    RecipeEntry.cs         one recipe + how many batches the network affords
+    MathExpression.cs      arithmetic for the bulk quantity box
+    Log.cs                 diagnostic logging
   Network/
     NetworkScanner.cs      flood-fills the cable floor into networks
     NetworkManager.cs      per-location cache, invalidated on world changes
@@ -133,29 +155,35 @@ src/StardewLogistics/
   Menus/
     TerminalMenu.cs        menu frame, item grid, withdraw/deposit
     TerminalMenu.Tabs.cs   Storage and Network tabs
+    TerminalMenu.Craft.cs  the recipe browser
+    BulkCraftMenu.cs       the quantity dialog
+    RecipeTooltip.cs       hover panel, counted against the network
+    DropdownPopup.cs       the Type and Mod filter menus
   Integrations/            GMCM API, and the Data/* edits that register the content
   assets/craftables.png    16x32 spritesheet for the terminals
   assets/cable-floor.png   64x64 floor tilesheet, 16 connection variants
+  assets/ui-icons.png      16x16 icons for the terminal's own buttons
   i18n/default.json        all user-facing strings
 ```
 
-`tools/` holds the generators for both spritesheets. `make_cable_floor.py` documents the neighbour-bitmask table
-it encodes, which was read out of the game by reflection rather than guessed.
+`tools/` holds the generator for each spritesheet. `make_cable_floor.py` documents the neighbour-bitmask table
+it encodes, which was read out of the game by reflection rather than guessed. The UI icons are drawn rather than
+cropped from the game's shared cursor sheet, because picking rectangles out of that texture blind produced
+meaningless crops more than once.
 
 ---
 
 ## Status and known limitations
 
-Builds and runs against **Stardew Valley 1.6.15 / SMAPI 4.5.2**. The storage network, terminal, filtering and
-deposit/withdraw paths have been exercised in-game.
-
-Not yet verified in-game: the cable floor itself. Placement, connection rendering and attaching objects that sit
-*on* a cable are new and have only been checked at compile time.
+Builds and runs against **Stardew Valley 1.6.15 / SMAPI 4.5.2**, and has been exercised in-game: cable places as
+a floor and renders connected, chests and machines sitting on or beside it join the network, wired machines empty
+themselves into storage, and the terminal's browsing, filtering, crafting and deposit/withdraw paths all work.
 
 Functional limitations, by design or not built yet:
 
 - **No autocrafting yet.** The Crafting Terminal crafts on demand from network stock; it does not queue
-  multi-step jobs across wired machines. That is the next major piece of work.
+  multi-step jobs across wired machines. That is the next major piece of work, and the recipe browser was built
+  to host its queue.
 - **Networks don't span locations.** There is no wireless link yet, so a cable run is confined to one map.
 - **Machines are collected but not loaded.** The network empties finished machines into storage. Feeding them
   belongs to the autocrafting scheduler, so it deliberately doesn't happen on its own.
