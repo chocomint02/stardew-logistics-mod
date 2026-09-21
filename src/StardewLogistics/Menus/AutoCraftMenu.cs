@@ -298,7 +298,7 @@ namespace StardewLogistics.Menus
                 StringComparer.OrdinalIgnoreCase);
 
             CraftPlanner planner = new(this.Crafting, this.MachineRecipes, this.Config.MaxCraftDepth);
-            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, available);
+            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, this.CountUsable);
 
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));
@@ -310,13 +310,13 @@ namespace StardewLogistics.Menus
             this.MachinesFloor = processing.Count == 0 ? 1 : processing.Max(MachineAllocator.MinimumBudget);
             this.MachinesAvailable = processing.Count == 0
                 ? 1
-                : processing.Max(node => MachineAllocator.MaximumBudget(node, this.CountMachines));
+                : processing.Max(node => MachineAllocator.MaximumBudget(node, this.CountUsable));
 
             this.MaxMachines = Math.Clamp(this.MaxMachines, this.MachinesFloor, this.MachinesAvailable);
 
             this.Allocations.Clear();
             foreach (PlanNode node in processing)
-                this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountMachines);
+                this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable);
         }
 
         /// <summary>Sets the quantity and re-plans.</summary>
@@ -335,7 +335,7 @@ namespace StardewLogistics.Menus
 
             this.Allocations.Clear();
             foreach (PlanNode node in this.Rows.Where(node => node.Kind == PlanStepKind.Process && node.Assignments.Count > 0))
-                this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountMachines);
+                this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable);
         }
 
         /// <summary>Describes a processing step, naming each machine type sharing the work.</summary>
@@ -356,7 +356,7 @@ namespace StardewLogistics.Menus
         private Dictionary<MachineAssignment, int> GetAllocation(PlanNode node)
         {
             if (!this.Allocations.TryGetValue(node, out Dictionary<MachineAssignment, int> allocation))
-                this.Allocations[node] = allocation = MachineAllocator.Allocate(node, this.MaxMachines, this.CountMachines);
+                this.Allocations[node] = allocation = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable);
 
             return allocation;
         }
@@ -380,14 +380,10 @@ namespace StardewLogistics.Menus
                 .Sum(this.GetStepMinutes);
         }
 
-        /// <summary>Counts how many of one kind of machine the network has.</summary>
-        private int CountMachines(string machineId)
+        /// <summary>Counts the machines that could run a recipe, respecting any input filters set on them.</summary>
+        private int CountUsable(MachineRecipe recipe)
         {
-            if (this.Network == null || machineId == null)
-                return 0;
-
-            return this.Network.Machines.Count(node =>
-                string.Equals(node.Object?.QualifiedItemId, machineId, StringComparison.OrdinalIgnoreCase));
+            return this.Network?.CountUsableMachines(recipe) ?? 0;
         }
 
         /// <summary>Queues the job and closes.</summary>

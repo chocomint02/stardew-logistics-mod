@@ -76,10 +76,8 @@ namespace StardewLogistics.Devices
             IReadOnlyList<IFilterableEntry> filterable = stock.Cast<IFilterableEntry>().ToList();
             this.CraftingRecipes.Refresh(filterable);
 
-            HashSet<string> available = new(network.Machines.Select(node => node.Object?.QualifiedItemId).Where(id => id != null), StringComparer.OrdinalIgnoreCase);
-
             CraftPlanner planner = new(this.CraftingRecipes, this.MachineRecipes, this.Config.MaxCraftDepth);
-            CraftPlan plan = planner.Plan(targetId, count, filterable, preferredMachines, available);
+            CraftPlan plan = planner.Plan(targetId, count, filterable, preferredMachines, network.CountUsableMachines);
 
             if (!plan.IsSatisfied)
             {
@@ -95,8 +93,7 @@ namespace StardewLogistics.Devices
                 TargetCount = count,
                 LocationName = network.Location?.NameOrUniqueName,
                 AnchorTile = network.CableTiles.FirstOrDefault(),
-                Steps = Flatten(plan, maxMachines, machineId => network.Machines.Count(node =>
-                    string.Equals(node.Object?.QualifiedItemId, machineId, StringComparison.OrdinalIgnoreCase)))
+                Steps = Flatten(plan, maxMachines, network.CountUsableMachines)
             };
 
             if (job.Steps.Count == 0)
@@ -184,7 +181,7 @@ namespace StardewLogistics.Devices
         ** Private methods: planning to steps
         *********/
         /// <summary>Flattens a plan into steps, deepest first so a step's inputs are produced before it runs.</summary>
-        private static List<JobStep> Flatten(CraftPlan plan, int maxMachines, Func<string, int> countMachines)
+        private static List<JobStep> Flatten(CraftPlan plan, int maxMachines, Func<MachineRecipe, int> countMachines)
         {
             List<PlanNode> nodes = plan.Root
                 .Walk()
@@ -379,6 +376,10 @@ namespace StardewLogistics.Devices
 
                 // Busy, or already claimed by another job.
                 if (machine.heldObject.Value != null || machine.MinutesUntilReady > 0 || machine.modData.ContainsKey(ModIds.JobKey))
+                    continue;
+
+                // The player has told this one not to take this input.
+                if (!node.AcceptsInput(recipe.InputId))
                     continue;
 
                 if (!this.TryLoadMachine(machine, recipe, network))

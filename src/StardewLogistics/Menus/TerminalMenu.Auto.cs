@@ -127,7 +127,7 @@ namespace StardewLogistics.Menus
                 target.Count = stock.TryGetValue(target.ItemId, out long have) ? have : 0;
 
             this.AllTargets = targets.Values.ToList();
-            this.RefreshFeasibility(available);
+            this.RefreshFeasibility();
             this.ApplyTargetFilter();
         }
 
@@ -137,7 +137,7 @@ namespace StardewLogistics.Menus
         /// list is bounded by what the player knows plus what their machines produce, so it stays small; the cap
         /// is a guard against a heavily modded save turning this into a stall.
         /// </remarks>
-        private void RefreshFeasibility(HashSet<string> availableMachines)
+        private void RefreshFeasibility()
         {
             const int cap = 400;
 
@@ -156,7 +156,7 @@ namespace StardewLogistics.Menus
                 try
                 {
                     // Same rule as an order: "can make one" means can produce one, not "there's one on the shelf".
-                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, availableMachines).IsSatisfied;
+                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines).IsSatisfied;
                 }
                 catch
                 {

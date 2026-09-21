@@ -26,7 +26,7 @@ namespace StardewLogistics.Framework
 
         /// <summary>The largest budget the step could use, beyond which extra machines would sit idle.</summary>
         /// <remarks>A share can't use more machines than it has runs, nor more than the network holds.</remarks>
-        public static int MaximumBudget(PlanNode node, Func<string, int> countMachines)
+        public static int MaximumBudget(PlanNode node, Func<MachineRecipe, int> countMachines)
         {
             if (node?.Assignments == null || node.Assignments.Count == 0)
                 return 1;
@@ -40,7 +40,7 @@ namespace StardewLogistics.Framework
         /// whichever share currently finishes last. That is the standard greedy for shortening a makespan, and it
         /// means raising the budget always helps the part of the step that is holding it up.
         /// </remarks>
-        public static Dictionary<MachineAssignment, int> Allocate(PlanNode node, int budget, Func<string, int> countMachines)
+        public static Dictionary<MachineAssignment, int> Allocate(PlanNode node, int budget, Func<MachineRecipe, int> countMachines)
         {
             Dictionary<MachineAssignment, int> allocation = new();
             if (node?.Assignments == null || node.Assignments.Count == 0)
@@ -110,10 +110,10 @@ namespace StardewLogistics.Framework
         ** Private methods
         *********/
         /// <summary>The most machines one share could use before they start idling.</summary>
-        private static int Ceiling(MachineAssignment assignment, Func<string, int> countMachines)
+        private static int Ceiling(MachineAssignment assignment, Func<MachineRecipe, int> countMachines)
         {
-            int owned = Math.Max(1, countMachines?.Invoke(assignment.Recipe?.MachineId) ?? 1);
-            return Math.Max(1, Math.Min(owned, Math.Max(1, assignment.Runs)));
+            int usable = Math.Max(1, countMachines?.Invoke(assignment.Recipe) ?? 1);
+            return Math.Max(1, Math.Min(usable, Math.Max(1, assignment.Runs)));
         }
 
         /// <summary>How long a share takes on a number of machines.</summary>

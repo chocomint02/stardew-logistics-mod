@@ -58,6 +58,17 @@ namespace StardewLogistics.Network
                 : new ItemFilter();
         }
 
+        /// <summary>Whether this machine will accept an item as input, according to the filter set on it.</summary>
+        /// <remarks>
+        /// A machine with no filter takes anything, which is what keeps the common case free of configuration.
+        /// An allow list restricts it to those inputs; a deny list excludes them. This is what lets a player
+        /// keep one furnace clear of copper so it stays free for iridium.
+        /// </remarks>
+        public bool AcceptsInput(string qualifiedItemId)
+        {
+            return this.GetFilter().AcceptsId(qualifiedItemId, acceptAllWhenEmpty: true);
+        }
+
         /// <summary>Stores a filter on this device so it survives saving and reaches farmhands.</summary>
         public void SaveFilter(ItemFilter filter)
         {

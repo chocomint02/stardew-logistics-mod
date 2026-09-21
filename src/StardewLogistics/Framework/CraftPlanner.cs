@@ -24,8 +24,12 @@ namespace StardewLogistics.Framework
         private readonly MachineRecipeIndex Machines;
         private readonly int MaxDepth;
 
-        /// <summary>Machines wired to the network, or <c>null</c> to plan with any machine in the game.</summary>
-        private HashSet<string> Available;
+        /// <summary>How many machines could run a given recipe, or <c>null</c> to assume every machine exists.</summary>
+        /// <remarks>
+        /// A count rather than a set of machine IDs, because whether a machine is usable depends on the recipe:
+        /// a furnace told to refuse copper ore is available for iridium and not for copper.
+        /// </remarks>
+        private Func<MachineRecipe, int> CountUsable;
 
 
         /*********
@@ -43,19 +47,21 @@ namespace StardewLogistics.Framework
         /// <param name="count">How many are wanted.</param>
         /// <param name="stock">The network's aggregated stock.</param>
         /// <param name="preferredMachines">The player's chosen machine per output item, keyed by qualified item ID.</param>
-        /// <param name="availableMachines">The qualified IDs of machines wired to the network. When given, only
-        /// those are planned with; a plan built around a machine the player doesn't own can't be carried out.</param>
+        /// <param name="countUsableMachines">How many machines could run a given recipe, taking into account both
+        /// what the network has and any input filters set on them. When given, only recipes with at least one
+        /// usable machine are planned with; a plan built around a machine the player doesn't own, or has told to
+        /// refuse that input, can't be carried out.</param>
         /// <remarks>
         /// An order for five means produce five: stock already held never counts towards the requested item, or
         /// ordering five with five on the shelf would plan nothing and look broken. Intermediates always draw on
         /// stock, which is what the ledger is for. This is deliberately not a parameter -- it was one, and the
         /// two call sites that forgot to pass it produced a plan preview that disagreed with the queued job.
         /// </remarks>
-        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, IReadOnlyCollection<string> availableMachines = null)
+        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, Func<MachineRecipe, int> countUsableMachines = null)
         {
             Ledger ledger = new(stock);
             CraftPlan plan = new() { RequestedCount = count };
-            this.Available = availableMachines == null ? null : new HashSet<string>(availableMachines, StringComparer.OrdinalIgnoreCase);
+            this.CountUsable = countUsableMachines;
 
             PlanNode root = this.Resolve(targetId, count, ledger, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0, preferredMachines, plan);
             return new CraftPlan { Root = root, RequestedCount = count, HitDepthLimit = plan.HitDepthLimit };
@@ -167,11 +173,12 @@ namespace StardewLogistics.Framework
                 return false;
             }
 
-            // Only plan around machines the network actually has. Picking the Heavy Furnace on throughput when
-            // the player owns none produces a plan that looks fine and can never run.
-            List<MachineRecipe> options = this.Available == null
+            // Only plan around machines the network can actually run this on. Picking the Heavy Furnace on
+            // throughput when the player owns none, or has told them all to refuse this input, produces a plan
+            // that looks fine and can never run.
+            List<MachineRecipe> options = this.CountUsable == null
                 ? known.ToList()
-                : known.Where(option => this.Available.Contains(option.MachineId)).ToList();
+                : known.Where(option => this.CountUsable(option) > 0).ToList();
 
             if (options.Count == 0)
             {

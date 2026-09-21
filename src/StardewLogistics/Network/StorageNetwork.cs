@@ -59,6 +59,21 @@ namespace StardewLogistics.Network
             this.Storages = storages.OrderByDescending(entry => entry.Priority).ToList();
         }
 
+        /// <summary>Counts the machines that could run a recipe, respecting the filters set on them.</summary>
+        /// <remarks>
+        /// Used for planning, for the machine budget, and by the scheduler, so a filtered-out machine is absent
+        /// from the plan rather than being planned for and then skipped at run time.
+        /// </remarks>
+        public int CountUsableMachines(MachineRecipe recipe)
+        {
+            if (recipe == null)
+                return 0;
+
+            return this.Machines.Count(node =>
+                string.Equals(node.Object?.QualifiedItemId, recipe.MachineId, StringComparison.OrdinalIgnoreCase)
+                && node.AcceptsInput(recipe.InputId));
+        }
+
         /// <summary>Returns every node of a given role.</summary>
         public IEnumerable<NetworkNode> GetNodes(NodeKind kind) => this.Nodes.Where(node => node.Kind == kind);
 

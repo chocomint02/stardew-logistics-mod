@@ -112,10 +112,11 @@ namespace StardewLogistics.Framework
             IReadOnlyList<IFilterableEntry> stock = this.GetStock();
             this.Crafting.Refresh(stock);
 
+            StorageNetwork network = this.Networks.GetNetworks(Game1.currentLocation).FirstOrDefault();
             IReadOnlyCollection<string> availableMachines = this.GetAvailableMachines();
 
             CraftPlanner planner = new(this.Crafting, this.Machines, this.Config.MaxCraftDepth);
-            CraftPlan plan = planner.Plan(itemId, count, stock, preferredMachines: null, availableMachines: availableMachines);
+            CraftPlan plan = planner.Plan(itemId, count, stock, preferredMachines: null, countUsableMachines: network != null ? network.CountUsableMachines : null);
 
             StringBuilder output = new();
             output.AppendLine($"Plan for {count}x {GetName(itemId)}");
