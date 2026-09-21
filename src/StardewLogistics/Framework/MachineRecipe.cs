@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using StardewValley;
+using StardewValley.ItemTypeDefinitions;
 
 namespace StardewLogistics.Framework
 {
@@ -20,8 +23,19 @@ namespace StardewLogistics.Framework
         /// <summary>The machine's display name, for the plan and the UI.</summary>
         public string MachineName { get; init; }
 
-        /// <summary>The qualified item ID this recipe consumes.</summary>
+        /// <summary>The qualified item ID this recipe consumes, or <c>null</c> when it matches by tag instead.</summary>
         public string InputId { get; init; }
+
+        /// <summary>Context tags the input must carry, for recipes that take a category rather than an item.</summary>
+        /// <remarks>
+        /// A keg doesn't have a recipe per fruit; it has one rule that accepts anything tagged as fruit. Which
+        /// fruit only becomes known when there is one to put in, so these recipes are expanded against what the
+        /// network is actually holding rather than against every fruit in the game.
+        /// </remarks>
+        public IReadOnlyList<string> InputTags { get; init; } = new List<string>();
+
+        /// <summary>Whether the input is named by tag rather than by ID.</summary>
+        public bool MatchesByTag => this.InputId == null && this.InputTags.Count > 0;
 
         /// <summary>How many of the input one run consumes.</summary>
         public int InputCount { get; init; }
@@ -29,8 +43,18 @@ namespace StardewLogistics.Framework
         /// <summary>Anything else a run consumes, such as a furnace's coal.</summary>
         public IReadOnlyList<ItemCost> ExtraInputs { get; init; } = new List<ItemCost>();
 
-        /// <summary>The qualified item ID this recipe produces.</summary>
+        /// <summary>The qualified item ID this recipe produces, or the base item when the output is flavoured.</summary>
         public string OutputId { get; init; }
+
+        /// <summary>The preserve kind this recipe produces, when its output takes its identity from the input.</summary>
+        /// <remarks>
+        /// A keg's output is not "wine", it is "wine made from whatever went in". The base item ID alone doesn't
+        /// identify it, so the flavour is carried separately and resolved once the input is known.
+        /// </remarks>
+        public string PreserveType { get; init; }
+
+        /// <summary>Whether the output's identity comes from the input.</summary>
+        public bool OutputIsFlavoured { get; init; }
 
         /// <summary>How many of the output a run is <em>guaranteed</em> to produce.</summary>
         /// <remarks>
@@ -53,22 +77,64 @@ namespace StardewLogistics.Framework
         public bool HasVariableYield => this.MaxOutputCount > this.OutputCount;
 
         /// <summary>A stable key for this recipe, used to remember the player's machine preferences.</summary>
-        public string Key => $"{this.MachineId}|{this.InputId}|{this.OutputId}";
+        public string Key => $"{this.MachineId}|{this.InputId ?? string.Join(",", this.InputTags)}|{this.OutputId}";
+
+        /// <summary>Whether an item can be this recipe's input.</summary>
+        public bool AcceptsInput(Item item)
+        {
+            if (item == null)
+                return false;
+
+            if (this.InputId != null)
+                return string.Equals(item.QualifiedItemId, this.InputId, StringComparison.OrdinalIgnoreCase);
+
+            if (this.InputTags.Count == 0)
+                return false;
+
+            try
+            {
+                // Every tag must match, which is how the game reads a trigger's tag list.
+                return this.InputTags.All(tag => ItemContextTagManager.DoesTagMatch(tag, item.GetContextTags()));
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
 
         /*********
         ** Public methods
         *********/
         /// <summary>Returns everything one run consumes, including the primary input.</summary>
+        /// <remarks>Only meaningful for recipes naming a specific input; a tag-matched one has no ID to give.</remarks>
         public IEnumerable<ItemCost> GetAllInputs()
         {
-            yield return new ItemCost(this.InputId, this.InputCount);
+            if (this.InputId != null)
+                yield return new ItemCost(this.InputId, this.InputCount);
 
             foreach (ItemCost extra in this.ExtraInputs)
                 yield return extra;
         }
 
-        public override string ToString() => $"{this.MachineName}: {this.InputCount}x {this.InputId} -> {this.OutputCount}x {this.OutputId}";
+        /// <summary>Describes the input side for logs and the console, naming tags where there is no item.</summary>
+        public string DescribeInputs(Func<string, string> getName)
+        {
+            string primary = this.InputId != null
+                ? $"{this.InputCount}x {getName(this.InputId)}"
+                : $"{this.InputCount}x any [{string.Join(" ", this.InputTags)}]";
+
+            return this.ExtraInputs.Count == 0
+                ? primary
+                : primary + " + " + string.Join(" + ", this.ExtraInputs.Select(extra => $"{extra.Count}x {getName(extra.ItemId)}"));
+        }
+
+        public override string ToString()
+        {
+            string input = this.InputId ?? "[" + string.Join(" ", this.InputTags) + "]";
+            string output = this.OutputIsFlavoured ? $"{this.OutputId} flavoured by input" : this.OutputId;
+            return $"{this.MachineName}: {this.InputCount}x {input} -> {this.OutputCount}x {output}";
+        }
     }
 
     /// <summary>A quantity of one item, used for recipe inputs.</summary>

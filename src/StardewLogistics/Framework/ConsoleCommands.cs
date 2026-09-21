@@ -77,10 +77,13 @@ namespace StardewLogistics.Framework
 
             foreach (MachineRecipe recipe in matches.Take(60))
             {
-                string inputs = string.Join(" + ", recipe.GetAllInputs().Select(input => $"{input.Count}x {GetName(input.ItemId)}"));
+                string inputs = recipe.DescribeInputs(GetName);
                 string yield = recipe.HasVariableYield
                     ? $"{recipe.OutputCount}-{recipe.MaxOutputCount}x {GetName(recipe.OutputId)} (planning uses {recipe.OutputCount})"
                     : $"{recipe.OutputCount}x {GetName(recipe.OutputId)}";
+
+                if (recipe.OutputIsFlavoured)
+                    yield += $" flavoured by input ({recipe.PreserveType})";
 
                 output.AppendLine($"  {recipe.MachineName,-22} {inputs}  ->  {yield}   [{FormatTime(recipe.Minutes, recipe.Days)}]");
             }

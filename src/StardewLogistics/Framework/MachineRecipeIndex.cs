@@ -13,10 +13,13 @@ namespace StardewLogistics.Framework
     /// item is dropped in. This walks those definitions and inverts them into recipes the planner can reason
     /// about ahead of time.
     ///
-    /// Rules are only indexed where the outcome is predictable from the data alone. Three kinds are skipped:
-    /// outputs computed by a C# <c>OutputMethod</c>, outputs chosen at random from a list, and flavoured outputs
-    /// whose identity comes from the input (a keg's wine, a preserves jar's jam). Including those would let the
-    /// planner promise a specific item it has no way to guarantee.
+    /// Rules are indexed where the outcome can be worked out from the data. Outputs computed by a C#
+    /// <c>OutputMethod</c> and outputs chosen at random are still skipped, since neither can be known ahead of
+    /// time. Flavoured outputs -- a keg's wine, a preserves jar's jam -- are kept, with the flavour recorded as
+    /// coming from the input and resolved once there is an input to name it.
+    ///
+    /// Inputs named by context tag are kept too. A keg has one rule for "anything tagged fruit" rather than a
+    /// recipe per fruit, so the tags are carried and expanded later against what the network actually holds.
     /// </remarks>
     internal class MachineRecipeIndex
     {
@@ -97,8 +100,12 @@ namespace StardewLogistics.Framework
         private void LogSummary(int machineCount)
         {
             int variable = this.AllRecipes.Count(recipe => recipe.HasVariableYield);
+            int flavoured = this.AllRecipes.Count(recipe => recipe.OutputIsFlavoured);
+            int byTag = this.AllRecipes.Count(recipe => recipe.MatchesByTag);
+
             Log.Trace($"Indexed {this.AllRecipes.Count} processing recipes across {machineCount} machines "
-                + $"({this.SkippedRules} rules skipped as unpredictable, {variable} with a variable yield).");
+                + $"({this.SkippedRules} rules skipped as unpredictable, {variable} with a variable yield, "
+                + $"{flavoured} flavoured by their input, {byTag} matching inputs by tag).");
             Log.Trace($"  breakdown: {this.MachinesWithRules} machines had rules, {this.RulesSeen} rules seen, "
                 + $"{this.RulesWithPlacedTrigger} had an item-placed trigger.");
 
@@ -141,7 +148,7 @@ namespace StardewLogistics.Framework
             List<MachineOutputTriggerRule> triggers = rule.Triggers
                 .Where(trigger => trigger != null
                     && trigger.Trigger.HasFlag(MachineOutputTrigger.ItemPlacedInMachine)
-                    && !string.IsNullOrWhiteSpace(trigger.RequiredItemId))
+                    && (!string.IsNullOrWhiteSpace(trigger.RequiredItemId) || trigger.RequiredTags is { Count: > 0 }))
                 .ToList();
 
             if (triggers.Count == 0)
@@ -161,10 +168,15 @@ namespace StardewLogistics.Framework
                 if (outputId == null)
                     continue;
 
+                bool flavoured = !string.IsNullOrWhiteSpace(output.PreserveId);
+
                 foreach (MachineOutputTriggerRule trigger in triggers)
                 {
                     string inputId = Qualify(trigger.RequiredItemId);
-                    if (inputId == null)
+                    List<string> inputTags = trigger.RequiredTags?.Where(tag => !string.IsNullOrWhiteSpace(tag)).ToList() ?? new List<string>();
+
+                    // Neither a nameable item nor a tag to match on; nothing usable here.
+                    if (inputId == null && inputTags.Count == 0)
                         continue;
 
                     MachineRecipe recipe = new()
@@ -172,9 +184,12 @@ namespace StardewLogistics.Framework
                         MachineId = machineId,
                         MachineName = machineName,
                         InputId = inputId,
+                        InputTags = inputTags,
                         InputCount = Math.Max(1, trigger.RequiredCount),
                         ExtraInputs = extras,
                         OutputId = outputId,
+                        PreserveType = flavoured ? output.PreserveType : null,
+                        OutputIsFlavoured = flavoured,
                         OutputCount = GuaranteedOutput(output),
                         MaxOutputCount = Math.Max(GuaranteedOutput(output), output.MaxStack > 0 ? output.MaxStack : GuaranteedOutput(output)),
                         Minutes = Math.Max(0, rule.MinutesUntilReady),
@@ -182,6 +197,13 @@ namespace StardewLogistics.Framework
                     };
 
                     this.AllRecipes.Add(recipe);
+
+                    // Indexed but deliberately not offered to the planner yet. A flavoured or tag-matched recipe
+                    // has no single named input or output, and the planner still works in plain item IDs; handing
+                    // it one would produce a step it can neither cost nor run. They are listed so the parsing can
+                    // be checked, and will be wired in with the planner support that understands them.
+                    if (recipe.OutputIsFlavoured || recipe.MatchesByTag)
+                        continue;
 
                     if (!this.ByOutput.TryGetValue(outputId, out List<MachineRecipe> list))
                         this.ByOutput[outputId] = list = new List<MachineRecipe>();
@@ -202,11 +224,6 @@ namespace StardewLogistics.Framework
 
             // One of several possible items, chosen when the machine runs.
             if (output.RandomItemId is { Count: > 0 })
-                return false;
-
-            // A flavoured output — a keg's wine, a preserves jar's jam — is really "the input, transformed", so
-            // the item ID alone doesn't identify what comes out.
-            if (!string.IsNullOrWhiteSpace(output.PreserveId))
                 return false;
 
             return true;
