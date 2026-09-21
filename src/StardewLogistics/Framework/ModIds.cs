@@ -44,6 +44,11 @@ namespace StardewLogistics.Framework
         /// <summary>A serialised <see cref="ItemFilter"/> stored on a chest or bus.</summary>
         public const string FilterKey = ModId + "/filter";
 
+        /// <summary>The autocrafting job that has claimed a machine.</summary>
+        /// <remarks>Stops two jobs fighting over one furnace, and keeps the network ticker from collecting
+        /// output a job is waiting for.</remarks>
+        public const string JobKey = ModId + "/job";
+
         /// <summary>Returns the qualified item ID for one of the mod's big craftables.</summary>
         public static string Qualify(string itemId) => "(BC)" + itemId;
 

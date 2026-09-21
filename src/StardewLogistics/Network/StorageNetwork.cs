@@ -93,6 +93,78 @@ namespace StardewLogistics.Network
             return totals.Values.ToList();
         }
 
+        /// <summary>Counts how many of an item the network holds, across every quality and variant.</summary>
+        public long CountById(string qualifiedItemId)
+        {
+            if (string.IsNullOrEmpty(qualifiedItemId))
+                return 0;
+
+            long total = 0;
+            foreach (StorageEntry entry in this.Storages)
+            {
+                IList<Item> items = entry.Chest.Items;
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (items[i] != null && string.Equals(items[i].QualifiedItemId, qualifiedItemId, StringComparison.OrdinalIgnoreCase))
+                        total += items[i].Stack;
+                }
+            }
+
+            return total;
+        }
+
+        /// <summary>Removes a number of an item by ID, taking the lowest quality first.</summary>
+        /// <remarks>Autocrafting works in item IDs rather than the terminal's quality-aware keys, and spending
+        /// the worst stock first leaves the player's good produce alone.</remarks>
+        public List<Item> ExtractById(string qualifiedItemId, int count)
+        {
+            List<Item> taken = new();
+            if (string.IsNullOrEmpty(qualifiedItemId) || count <= 0)
+                return taken;
+
+            int remaining = count;
+
+            foreach (StorageEntry entry in this.Storages.OrderBy(e => e.Priority))
+            {
+                if (remaining <= 0)
+                    break;
+                if (entry.IsBusy)
+                    continue;
+
+                IList<Item> items = entry.Chest.Items;
+                bool changed = false;
+
+                for (int i = 0; i < items.Count && remaining > 0; i++)
+                {
+                    Item item = items[i];
+                    if (item == null || !string.Equals(item.QualifiedItemId, qualifiedItemId, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    int take = Math.Min(remaining, item.Stack);
+                    if (take >= item.Stack)
+                    {
+                        items[i] = null;
+                        taken.Add(item);
+                    }
+                    else
+                    {
+                        Item split = item.getOne();
+                        split.Stack = take;
+                        item.Stack -= take;
+                        taken.Add(split);
+                    }
+
+                    remaining -= take;
+                    changed = true;
+                }
+
+                if (changed)
+                    entry.Chest.clearNulls();
+            }
+
+            return taken;
+        }
+
         /// <summary>Counts how many of an item the network holds.</summary>
         public long CountOf(ItemKey key)
         {

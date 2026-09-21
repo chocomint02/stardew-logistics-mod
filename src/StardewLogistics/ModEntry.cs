@@ -29,6 +29,7 @@ namespace StardewLogistics
         private ContentInjector Content;
         private MachineRecipeIndex MachineRecipes;
         private RecipeIndex CraftingRecipes;
+        private JobRunner Jobs;
 
 
         /*********
@@ -48,7 +49,9 @@ namespace StardewLogistics
             this.MachineRecipes = new MachineRecipeIndex();
             this.CraftingRecipes = new RecipeIndex();
 
-            new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config)
+            this.Jobs = new JobRunner(this.Networks, this.MachineRecipes, this.CraftingRecipes, this.Config);
+
+            new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
             this.Content = new ContentInjector(helper.Translation);
 
@@ -164,7 +167,10 @@ namespace StardewLogistics
                 return;
 
             if (e.IsMultipleOf((uint)this.Config.BusIntervalTicks))
+            {
                 this.Ticker.Run();
+                this.Jobs.Run();
+            }
         }
 
         /// <summary>Opens the terminal when the player activates one.</summary>

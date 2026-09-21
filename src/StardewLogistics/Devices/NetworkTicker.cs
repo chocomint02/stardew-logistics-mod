@@ -66,6 +66,10 @@ namespace StardewLogistics.Devices
                 if (machine?.heldObject.Value == null || !machine.readyForHarvest.Value)
                     continue;
 
+                // An autocrafting job is waiting on this one; taking it here would lose the job's progress.
+                if (machine.modData.ContainsKey(ModIds.JobKey))
+                    continue;
+
                 int moved = MachineIO.TryCollect(machine, network);
                 if (moved > 0)
                     collected += moved;

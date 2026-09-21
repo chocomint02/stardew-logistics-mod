@@ -23,17 +23,19 @@ namespace StardewLogistics.Framework
         private readonly RecipeIndex Crafting;
         private readonly NetworkManager Networks;
         private readonly ModConfig Config;
+        private readonly StardewLogistics.Devices.JobRunner Jobs;
 
 
         /*********
         ** Public methods
         *********/
-        public ConsoleCommands(MachineRecipeIndex machines, RecipeIndex crafting, NetworkManager networks, ModConfig config)
+        public ConsoleCommands(MachineRecipeIndex machines, RecipeIndex crafting, NetworkManager networks, ModConfig config, StardewLogistics.Devices.JobRunner jobs)
         {
             this.Machines = machines;
             this.Crafting = crafting;
             this.Networks = networks;
             this.Config = config;
+            this.Jobs = jobs;
         }
 
         /// <summary>Registers the commands.</summary>
@@ -42,6 +44,9 @@ namespace StardewLogistics.Framework
             commands.Add("logistics_machines", "Lists indexed processing recipes. Usage: logistics_machines [name filter]", this.ListMachines);
             commands.Add("logistics_plan", "Builds an autocrafting plan. Usage: logistics_plan <qualified item id> [count]", this.ShowPlan);
             commands.Add("logistics_stock", "Lists what the network at your location holds.", this.ShowStock);
+            commands.Add("logistics_craft", "Queues an autocrafting job. Usage: logistics_craft <item id> <count> [max machines]", this.QueueJob);
+            commands.Add("logistics_jobs", "Lists autocrafting jobs and their progress.", this.ListJobs);
+            commands.Add("logistics_cancel", "Cancels a job. Usage: logistics_cancel <job id>", this.CancelJob);
         }
 
 
@@ -146,6 +151,60 @@ namespace StardewLogistics.Framework
                 output.AppendLine($"  {entry.Count,8}  {entry.DisplayName}   [{entry.Sample?.QualifiedItemId}]");
 
             Log.Debug(output.ToString());
+        }
+
+        /// <summary>Queues an autocrafting job for the network at the player's location.</summary>
+        private void QueueJob(string command, string[] args)
+        {
+            if (!Context.IsWorldReady) { Log.Debug("Load a save first."); return; }
+            if (args.Length < 2)
+            {
+                Log.Debug("Usage: logistics_craft <qualified item id> <count> [max machines]");
+                return;
+            }
+
+            int count = int.TryParse(args[1], out int parsed) ? Math.Max(1, parsed) : 1;
+            int maxMachines = args.Length > 2 && int.TryParse(args[2], out int cap) ? Math.Max(0, cap) : 0;
+
+            StorageNetwork network = this.Networks.GetNetworks(Game1.currentLocation).FirstOrDefault();
+            CraftJob job = this.Jobs.TryQueue(args[0], count, network, maxMachines, null, out string error);
+
+            Log.Debug(job != null
+                ? $"Queued {job.Id}: {count}x {job.DisplayName} in {job.Steps.Count} steps"
+                    + (maxMachines > 0 ? $", up to {maxMachines} machines per step." : ".")
+                : $"Couldn't queue that: {error}");
+        }
+
+        /// <summary>Lists jobs and how far along they are.</summary>
+        private void ListJobs(string command, string[] args)
+        {
+            if (this.Jobs.Jobs.Count == 0) { Log.Debug("No autocrafting jobs."); return; }
+
+            StringBuilder output = new();
+            output.AppendLine($"{this.Jobs.Jobs.Count} jobs:");
+
+            foreach (CraftJob job in this.Jobs.Jobs)
+            {
+                output.AppendLine($"  {job.Id}  {job.TargetCount}x {job.DisplayName,-24} {job.Status,-9} "
+                    + $"{job.Progress * 100:0}%  ~{FormatTime(job.EstimatedMinutesRemaining, 0)} left"
+                    + (job.BlockedReason != null ? $"  ({job.BlockedReason})" : ""));
+
+                foreach (JobStep step in job.Steps)
+                {
+                    output.AppendLine($"      {step.CompletedBatches}/{step.TotalBatches} {step.DisplayName}"
+                        + (step.Kind == PlanStepKind.Process ? $" via {step.MachineRecipe.MachineName}" : " (craft)")
+                        + (step.InFlight.Count > 0 ? $"  [{step.InFlight.Count} running]" : ""));
+                }
+            }
+
+            Log.Debug(output.ToString());
+        }
+
+        /// <summary>Cancels a job.</summary>
+        private void CancelJob(string command, string[] args)
+        {
+            if (args.Length == 0) { Log.Debug("Usage: logistics_cancel <job id>"); return; }
+            Log.Debug(this.Jobs.Cancel(args[0]) ? $"Cancelled {args[0]}." : $"No running job called {args[0]}.");
         }
 
         /// <summary>Returns the qualified IDs of machines wired to any network in the player's location.</summary>
