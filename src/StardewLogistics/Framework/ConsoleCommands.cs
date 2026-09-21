@@ -243,8 +243,9 @@ namespace StardewLogistics.Framework
             {
                 PlanStepKind.FromStock => "from stock",
                 PlanStepKind.Craft => $"craft x{node.Batches}",
-                PlanStepKind.Process => $"{node.MachineRecipe.MachineName} x{node.Batches} @ {FormatTime(node.MinutesPerBatch, node.DaysPerBatch)} each"
-                    + (node.Alternatives.Count > 1 ? $" ({node.Alternatives.Count} machines could)" : ""),
+                PlanStepKind.Process => string.Join(" + ", node.Assignments.Select(assignment =>
+                        $"{assignment.Recipe.MachineName} x{assignment.Runs} runs @ {FormatTime(assignment.Recipe.Minutes, assignment.Recipe.Days)}"))
+                    + (node.Alternatives.Select(option => option.MachineId).Distinct().Count() > 1 ? "  [split]" : ""),
                 _ => "MISSING"
             };
 

@@ -191,17 +191,43 @@ namespace StardewLogistics.Devices
                 .OrderByDescending(node => node.Depth)
                 .ToList();
 
-            return nodes.Select(node => new JobStep
+            List<JobStep> steps = new();
+
+            foreach (PlanNode node in nodes)
             {
-                Kind = node.Kind,
-                OutputId = node.ItemId,
-                DisplayName = node.DisplayName,
-                CraftRecipe = node.CraftRecipe,
-                MachineRecipe = node.MachineRecipe,
-                RemainingBatches = node.Batches,
-                TotalBatches = node.Batches,
-                MaxMachines = maxMachines
-            }).ToList();
+                // A processing step split between machine types becomes one step per share. The runner still
+                // sees "one recipe, N runs", so the split costs it no extra cases.
+                if (node.Kind == PlanStepKind.Process && node.Assignments.Count > 0)
+                {
+                    foreach (MachineAssignment assignment in node.Assignments)
+                    {
+                        steps.Add(new JobStep
+                        {
+                            Kind = PlanStepKind.Process,
+                            OutputId = node.ItemId,
+                            DisplayName = node.DisplayName,
+                            MachineRecipe = assignment.Recipe,
+                            RemainingBatches = assignment.Runs,
+                            TotalBatches = assignment.Runs,
+                            MaxMachines = maxMachines
+                        });
+                    }
+                    continue;
+                }
+
+                steps.Add(new JobStep
+                {
+                    Kind = node.Kind,
+                    OutputId = node.ItemId,
+                    DisplayName = node.DisplayName,
+                    CraftRecipe = node.CraftRecipe,
+                    RemainingBatches = node.Batches,
+                    TotalBatches = node.Batches,
+                    MaxMachines = maxMachines
+                });
+            }
+
+            return steps;
         }
 
 

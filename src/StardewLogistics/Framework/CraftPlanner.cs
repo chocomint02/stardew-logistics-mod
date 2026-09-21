@@ -181,40 +181,103 @@ namespace StardewLogistics.Framework
                 return false;
             }
 
-            MachineRecipe chosen = ChooseMachine(options, itemId, preferred);
-            int outputPerBatch = Math.Max(1, chosen.OutputCount);
-            int machineBatches = (int)Math.Ceiling(remaining / (double)outputPerBatch);
+            List<MachineAssignment> assignments = DistributeRuns(options, remaining, itemId, preferred);
+            if (assignments.Count == 0)
+            {
+                reason = MissingReason.NoMachineAvailable;
+                return false;
+            }
 
             node.Kind = PlanStepKind.Process;
-            node.MachineRecipe = chosen;
             node.Alternatives = options;
-            node.Batches = machineBatches;
-            node.MinutesPerBatch = chosen.Minutes;
-            node.DaysPerBatch = chosen.Days;
             node.ToProduce = remaining;
+            node.Assignments.AddRange(assignments);
+            node.Batches = assignments.Sum(assignment => assignment.Runs);
+            node.MinutesPerBatch = assignments[0].Recipe.Minutes;
+            node.DaysPerBatch = assignments[0].Recipe.Days;
 
-            foreach (ItemCost input in chosen.GetAllInputs())
-                node.Children.Add(this.Resolve(input.ItemId, input.Count * machineBatches, ledger, inProgress, depth + 1, preferred, plan));
+            // Ingredients are summed across the shares, since the two machines want different amounts per run.
+            Dictionary<string, int> totals = new(StringComparer.OrdinalIgnoreCase);
+            foreach (MachineAssignment assignment in assignments)
+            {
+                foreach (ItemCost input in assignment.Recipe.GetAllInputs())
+                {
+                    totals[input.ItemId] = totals.TryGetValue(input.ItemId, out int running)
+                        ? running + (input.Count * assignment.Runs)
+                        : input.Count * assignment.Runs;
+                }
+            }
 
-            ledger.Give(itemId, (machineBatches * outputPerBatch) - remaining);
+            foreach (KeyValuePair<string, int> total in totals)
+                node.Children.Add(this.Resolve(total.Key, total.Value, ledger, inProgress, depth + 1, preferred, plan));
+
+            ledger.Give(itemId, assignments.Sum(assignment => assignment.Output) - remaining);
             return true;
         }
 
-        /// <summary>Picks which machine to use, honouring the player's choice where they've made one.</summary>
-        /// <remarks>Otherwise the fastest per output wins, which for ore is the Heavy Furnace over the plain one.</remarks>
-        private static MachineRecipe ChooseMachine(IReadOnlyList<MachineRecipe> options, string itemId, IReadOnlyDictionary<string, string> preferred)
+        /// <summary>Shares a step's runs between the machine types that can do it.</summary>
+        /// <remarks>
+        /// Optimises for the fewest machine-hours without overproducing. Each machine is offered as many whole
+        /// runs as fit in what is still needed, cheapest per item first, so a Heavy Furnace takes the bulk and a
+        /// plain one mops up the remainder. Only if something is still outstanding after that -- an order too
+        /// small for any bulk machine's batch -- does a single run that overshoots get added, and then it is the
+        /// one that wastes least.
+        ///
+        /// The player's chosen machine sorts first regardless of efficiency, which is what makes "heavy first,
+        /// remainder to regular" a decision they can make rather than one the numbers make for them.
+        /// </remarks>
+        private static List<MachineAssignment> DistributeRuns(IReadOnlyList<MachineRecipe> options, int needed, string itemId, IReadOnlyDictionary<string, string> preferred)
         {
-            if (preferred != null && preferred.TryGetValue(itemId, out string machineId))
+            string preferredMachine = preferred != null && preferred.TryGetValue(itemId, out string chosen) ? chosen : null;
+
+            // One recipe per machine: two rules on the same furnace are the same furnace's time.
+            List<MachineRecipe> candidates = options
+                .GroupBy(option => option.MachineId, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderByDescending(option => option.OutputCount).First())
+                .OrderByDescending(option => string.Equals(option.MachineId, preferredMachine, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(MinutesPerItem)
+                .ThenByDescending(option => option.OutputCount)
+                .ToList();
+
+            List<MachineAssignment> assignments = new();
+            int remaining = needed;
+
+            foreach (MachineRecipe recipe in candidates)
             {
-                MachineRecipe match = options.FirstOrDefault(option => string.Equals(option.MachineId, machineId, StringComparison.OrdinalIgnoreCase));
-                if (match != null)
-                    return match;
+                if (remaining <= 0)
+                    break;
+
+                int perRun = Math.Max(1, recipe.OutputCount);
+                int runs = remaining / perRun; // whole runs only, so nothing is overproduced here
+                if (runs <= 0)
+                    continue;
+
+                assignments.Add(new MachineAssignment { Recipe = recipe, Runs = runs });
+                remaining -= runs * perRun;
             }
 
-            return options
-                .OrderByDescending(option => option.OutputCount / Math.Max(1d, option.Minutes + (option.Days * CraftPlan.MinutesPerDay)))
-                .ThenBy(option => option.InputCount)
-                .First();
+            if (remaining > 0 && candidates.Count > 0)
+            {
+                MachineRecipe filler = candidates
+                    .OrderBy(option => Math.Max(0, Math.Max(1, option.OutputCount) - remaining))
+                    .ThenBy(MinutesPerItem)
+                    .First();
+
+                MachineAssignment existing = assignments.FirstOrDefault(assignment => assignment.Recipe == filler);
+                if (existing != null)
+                    existing.Runs++;
+                else
+                    assignments.Add(new MachineAssignment { Recipe = filler, Runs = 1 });
+            }
+
+            return assignments;
+        }
+
+        /// <summary>Machine-minutes one item costs on a given recipe, which is what the split minimises.</summary>
+        private static double MinutesPerItem(MachineRecipe recipe)
+        {
+            int minutes = recipe.Minutes + (recipe.Days * CraftPlan.MinutesPerDay);
+            return minutes / (double)Math.Max(1, recipe.OutputCount);
         }
 
         /// <summary>Whether an ID names a specific item the planner could go and make.</summary>

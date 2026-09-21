@@ -22,6 +22,16 @@ namespace StardewLogistics.Menus
     /// Changing the quantity or a machine choice re-plans from scratch. Planning is cheap next to drawing, and
     /// re-planning avoids a whole class of bug where the displayed tree and the queued job disagree.
     /// </remarks>
+    /// <summary>What one of the planner's stepper buttons does.</summary>
+    /// <remarks>Named rather than encoded as sentinel deltas, which stopped scaling once Min and Max joined the row.</remarks>
+    internal enum StepAction
+    {
+        Quantity,
+        MachineDelta,
+        MachineMin,
+        MachineMax
+    }
+
     internal class AutoCraftMenu : IClickableMenu
     {
         /*********
@@ -46,7 +56,7 @@ namespace StardewLogistics.Menus
         private readonly TextBox QuantityBox;
         private ClickableComponent QuantityBounds;
         private ClickableComponent StartButton;
-        private readonly List<(Rectangle Bounds, int Delta)> StepButtons = new();
+        private readonly List<(Rectangle Bounds, StepAction Action, int Delta)> StepButtons = new();
         private readonly DropdownPopup Dropdown = new();
 
         /// <summary>Icons by item ID. Building one per row per frame would be wasteful; they never change.</summary>
@@ -138,17 +148,26 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            foreach ((Rectangle bounds, int delta) in this.StepButtons)
+            foreach ((Rectangle bounds, StepAction action, int delta) in this.StepButtons)
             {
                 if (!bounds.Contains(x, y))
                     continue;
 
-                if (delta == 0)
-                    this.SetMachines(this.MaxMachines - 1);
-                else if (delta == int.MaxValue)
-                    this.SetMachines(this.MaxMachines + 1);
-                else
-                    this.SetQuantity(this.Quantity + delta);
+                switch (action)
+                {
+                    case StepAction.Quantity:
+                        this.SetQuantity(this.Quantity + delta);
+                        break;
+                    case StepAction.MachineDelta:
+                        this.SetMachines(this.MaxMachines + delta);
+                        break;
+                    case StepAction.MachineMin:
+                        this.SetMachines(1);
+                        break;
+                    case StepAction.MachineMax:
+                        this.SetMachines(this.MachinesAvailable);
+                        break;
+                }
 
                 Game1.playSound("drumkit6");
                 return;
@@ -304,23 +323,43 @@ namespace StardewLogistics.Menus
             this.MaxMachines = Math.Clamp(value, 1, this.MachinesAvailable);
         }
 
+        /// <summary>Describes a processing step, naming each machine type sharing the work.</summary>
+        private string DescribeProcess(PlanNode node)
+        {
+            string split = string.Join(
+                " + ",
+                node.Assignments.Select(assignment =>
+                    $"{assignment.Recipe.MachineName} x{this.GetMachinesUsed(assignment)}")
+            );
+
+            return $"{split}  ·  {FormatTotal(this.GetStepMinutes(node))}";
+        }
+
+        /// <summary>How many machines one share will occupy.</summary>
+        private int GetMachinesUsed(MachineAssignment assignment)
+        {
+            int owned = this.CountMachines(assignment.Recipe?.MachineId);
+            return Math.Max(1, Math.Min(Math.Min(owned, this.MaxMachines), Math.Max(1, assignment.Runs)));
+        }
+
         /// <summary>How many machines a step will actually occupy.</summary>
         /// <remarks>
         /// Bounded three ways: what the network has, what the player allowed, and how many runs there are. Showing
         /// the run count instead would claim six furnaces for a six-run job on a farm with five.
         /// </remarks>
-        private int GetMachinesUsed(PlanNode node)
-        {
-            int owned = this.CountMachines(node.MachineRecipe?.MachineId);
-            return Math.Max(1, Math.Min(Math.Min(owned, this.MaxMachines), Math.Max(1, node.Batches)));
-        }
-
-        /// <summary>How long a processing step takes once its runs are spread across the machines it gets.</summary>
+        /// <summary>How long a processing step takes, with its shares running side by side.</summary>
+        /// <remarks>Shares occupy different machines, so the step is as long as its slowest share, not their sum.</remarks>
         private int GetStepMinutes(PlanNode node)
         {
-            int machines = this.GetMachinesUsed(node);
-            int waves = (int)Math.Ceiling(Math.Max(1, node.Batches) / (double)machines);
-            return waves * (node.MinutesPerBatch + (node.DaysPerBatch * CraftPlan.MinutesPerDay));
+            if (node.Assignments.Count == 0)
+                return 0;
+
+            return node.Assignments.Max(assignment =>
+            {
+                int machines = this.GetMachinesUsed(assignment);
+                int waves = (int)Math.Ceiling(Math.Max(1, assignment.Runs) / (double)machines);
+                return waves * assignment.MinutesPerRun;
+            });
         }
 
         /// <summary>The whole plan's processing time, with each step spread across its machines.</summary>
@@ -376,7 +415,7 @@ namespace StardewLogistics.Menus
 
             foreach (int step in new[] { -10, -1 })
             {
-                this.StepButtons.Add((new Rectangle(x, y, 64, 40), step));
+                this.StepButtons.Add((new Rectangle(x, y, 64, 40), StepAction.Quantity, step));
                 x += 70;
             }
 
@@ -386,14 +425,20 @@ namespace StardewLogistics.Menus
 
             foreach (int step in new[] { 1, 10 })
             {
-                this.StepButtons.Add((new Rectangle(x, y, 64, 40), step));
+                this.StepButtons.Add((new Rectangle(x, y, 64, 40), StepAction.Quantity, step));
                 x += 70;
             }
 
-            // Machine allowance, on its own row, using sentinel deltas so one click handler covers both.
+            // Machine allowance on its own row: Min, minus, value, plus, Max.
             int machineY = y + 52;
-            this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 200, machineY, 44, 40), 0));
-            this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 306, machineY, 44, 40), int.MaxValue));
+            int mx = this.xPositionOnScreen + 200;
+            this.StepButtons.Add((new Rectangle(mx, machineY, 64, 40), StepAction.MachineMin, 0));
+            mx += 70;
+            this.StepButtons.Add((new Rectangle(mx, machineY, 44, 40), StepAction.MachineDelta, -1));
+            mx += 106;
+            this.StepButtons.Add((new Rectangle(mx, machineY, 44, 40), StepAction.MachineDelta, 1));
+            mx += 50;
+            this.StepButtons.Add((new Rectangle(mx, machineY, 64, 40), StepAction.MachineMax, 0));
 
             this.QuantityBounds = new ClickableComponent(new Rectangle(this.QuantityBox.X, this.QuantityBox.Y, this.QuantityBox.Width, this.QuantityBox.Height), "quantity");
             this.StartButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + (this.width / 2) - 130, this.yPositionOnScreen + this.height - 88, 260, 64), "start");
@@ -436,14 +481,15 @@ namespace StardewLogistics.Menus
             Utility.drawTextWithShadow(b, this.Translations.Get("auto.quantity"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 96), Game1.textColor);
             Utility.drawTextWithShadow(b, this.Translations.Get("auto.machines"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 148), Game1.textColor);
 
-            foreach ((Rectangle bounds, int delta) in this.StepButtons)
+            foreach ((Rectangle bounds, StepAction action, int delta) in this.StepButtons)
             {
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
 
-                string label = delta switch
+                string label = action switch
                 {
-                    0 => "-",
-                    int.MaxValue => "+",
+                    StepAction.MachineMin => this.Translations.Get("auto.min"),
+                    StepAction.MachineMax => this.Translations.Get("auto.max"),
+                    StepAction.MachineDelta => delta > 0 ? "+" : "-",
                     _ => delta > 0 ? "+" + delta : delta.ToString()
                 };
                 Vector2 size = Game1.smallFont.MeasureString(label);
@@ -454,14 +500,14 @@ namespace StardewLogistics.Menus
 
             string machines = this.MaxMachines.ToString();
             Vector2 machineSize = Game1.smallFont.MeasureString(machines);
-            Utility.drawTextWithShadow(b, machines, Game1.smallFont, new Vector2(this.xPositionOnScreen + 278 - (machineSize.X / 2), this.yPositionOnScreen + 148), Game1.textColor);
+            Utility.drawTextWithShadow(b, machines, Game1.smallFont, new Vector2(this.xPositionOnScreen + 348 - (machineSize.X / 2), this.yPositionOnScreen + 148), Game1.textColor);
 
             // Say what the ceiling is, so a greyed-out "+" is explained rather than just unresponsive.
             Utility.drawTextWithShadow(
                 b,
                 this.Translations.Get("auto.machines-available", new { count = this.MachinesAvailable }),
                 Game1.smallFont,
-                new Vector2(this.xPositionOnScreen + 366, this.yPositionOnScreen + 148),
+                new Vector2(this.xPositionOnScreen + 510, this.yPositionOnScreen + 148),
                 Game1.textColor * 0.6f
             );
         }
@@ -546,12 +592,7 @@ namespace StardewLogistics.Menus
             {
                 PlanStepKind.FromStock => this.Translations.Get("auto.step-stock"),
                 PlanStepKind.Craft => this.Translations.Get("auto.step-craft", new { count = node.Batches }),
-                PlanStepKind.Process => this.Translations.Get("auto.step-process", new
-                {
-                    machine = node.MachineRecipe.MachineName,
-                    count = this.GetMachinesUsed(node),
-                    time = FormatTotal(this.GetStepMinutes(node))
-                }),
+                PlanStepKind.Process => this.DescribeProcess(node),
                 _ => this.Translations.Get("auto.step-missing")
             };
         }

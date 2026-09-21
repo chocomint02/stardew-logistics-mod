@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using StardewValley;
@@ -49,6 +50,27 @@ namespace StardewLogistics.Framework
         NotAnItem
     }
 
+    /// <summary>A share of a processing step handed to one kind of machine.</summary>
+    /// <remarks>
+    /// A step is split when more than one machine can do the job: a Heavy Furnace takes twenty-five ore and
+    /// returns five bars, a plain one takes five and returns one, so an order for seven is best served by one
+    /// Heavy run plus two plain ones.
+    /// </remarks>
+    internal class MachineAssignment
+    {
+        /// <summary>The recipe this share runs.</summary>
+        public MachineRecipe Recipe { get; init; }
+
+        /// <summary>How many runs of it.</summary>
+        public int Runs { get; set; }
+
+        /// <summary>How many of the output these runs yield.</summary>
+        public int Output => this.Runs * Math.Max(1, this.Recipe?.OutputCount ?? 1);
+
+        /// <summary>In-game minutes one run takes.</summary>
+        public int MinutesPerRun => (this.Recipe?.Minutes ?? 0) + ((this.Recipe?.Days ?? 0) * CraftPlan.MinutesPerDay);
+    }
+
     /// <summary>One item in a crafting plan, with whatever it takes to supply it hanging beneath it.</summary>
     internal class PlanNode
     {
@@ -82,8 +104,11 @@ namespace StardewLogistics.Framework
         /// <summary>The crafting recipe used, if this is a <see cref="PlanStepKind.Craft"/> step.</summary>
         public CraftingRecipe CraftRecipe { get; set; }
 
-        /// <summary>The machine recipe used, if this is a <see cref="PlanStepKind.Process"/> step.</summary>
-        public MachineRecipe MachineRecipe { get; set; }
+        /// <summary>How the step's runs are shared between machine types.</summary>
+        public List<MachineAssignment> Assignments { get; } = new();
+
+        /// <summary>The machine doing most of the work, used for the icon and the machine picker.</summary>
+        public MachineRecipe MachineRecipe => this.Assignments.Count > 0 ? this.Assignments[0].Recipe : null;
 
         /// <summary>Other machines that could do the same job, offered to the player as alternatives.</summary>
         public IReadOnlyList<MachineRecipe> Alternatives { get; set; } = new List<MachineRecipe>();

@@ -286,7 +286,9 @@ namespace StardewLogistics.Menus
                 new Vector2(grid.X, grid.Bottom + 6),
                 Game1.textColor
             );
-            DrawClipped(b, this.Translations.Get("auto.tab-hint"), new Vector2(grid.X, grid.Bottom + 42), grid.Width, Game1.textColor * 0.6f);
+            // Two lines rather than one clipped one: the legend never fitted beside the instruction.
+            DrawClipped(b, this.Translations.Get("auto.tab-hint"), new Vector2(grid.X, grid.Bottom + 38), grid.Width, Game1.textColor * 0.6f);
+            DrawClipped(b, this.Translations.Get("auto.tab-legend"), new Vector2(grid.X, grid.Bottom + 70), grid.Width, Game1.textColor * 0.6f);
         }
 
         /// <summary>Draws the list of running jobs.</summary>

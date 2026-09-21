@@ -64,7 +64,7 @@ namespace StardewLogistics.Menus
         /// labels ("1 2 3 ... 0 - =") that <see cref="InventoryMenu"/> draws above its own top row. Sizing it for
         /// the summary alone puts the two on top of each other.
         /// </remarks>
-        private const int SummaryBand = 112;
+        private const int SummaryBand = 148;
 
         /// <summary>The most grid rows to show, when the window is tall enough for them.</summary>
         private const int MaxRows = 8;
