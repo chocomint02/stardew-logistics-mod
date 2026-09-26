@@ -10,9 +10,8 @@ namespace StardewLogistics.Network
 {
     /// <summary>A chest attached to a storage network, with the priority and partition that govern what lands in it.</summary>
     /// <remarks>
-    /// This is the mod's answer to an Applied Energistics storage cell: the chest supplies the capacity, and the
-    /// priority and filter stored in its <c>modData</c> supply the routing rules. Settings live on the chest itself so
-    /// that breaking and replacing a cable never loses them.
+    /// The chest supplies the capacity, and the priority and filter stored in its <c>modData</c> supply the routing
+    /// rules. Settings live on the chest itself so that breaking and replacing a cable never loses them.
     /// </remarks>
     internal class StorageEntry
     {

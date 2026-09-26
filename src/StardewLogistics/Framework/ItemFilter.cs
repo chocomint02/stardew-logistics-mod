@@ -15,7 +15,7 @@ namespace StardewLogistics.Framework
         Deny
     }
 
-    /// <summary>A partition list attached to a chest or a bus, mirroring Applied Energistics' partitioned cells.</summary>
+    /// <summary>A partition list attached to a chest or a bus, restricting what it accepts.</summary>
     /// <remarks>
     /// Filters are matched on qualified item ID only, so a partition for "Wine" accepts every quality and flavour of
     /// wine. The meaning of an <em>empty</em> filter depends on the device: an unpartitioned chest accepts anything,

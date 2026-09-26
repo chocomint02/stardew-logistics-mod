@@ -13,7 +13,7 @@ namespace StardewLogistics.Devices
     /// <summary>The items an autocrafting job has set aside for itself.</summary>
     /// <remarks>
     /// When a job is queued it withdraws every ingredient it planned to take from storage and holds them here,
-    /// the way an AE2 crafting CPU does. Nothing else can spend them -- not the player through the terminal, not
+    /// as a dedicated job store. Nothing else can spend them -- not the player through the terminal, not
     /// a second job planned against the same Starfruit. Intermediate products land here too, so the copper bars
     /// a job made for itself can't be taken out halfway through; only the finished item goes back to storage.
     ///
