@@ -30,7 +30,8 @@ namespace StardewLogistics.Menus
         Jobs,
         Storage,
         Network,
-        Farm
+        Farm,
+        Stock
     }
 
     /// <summary>The storage terminal: one searchable, sortable view of everything on the network.</summary>
@@ -285,6 +286,12 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            if (this.Tab == TerminalTab.Stock)
+            {
+                this.ReceiveClickOnStock(x, y);
+                return;
+            }
+
             if (this.Tab == TerminalTab.Craft)
             {
                 if (this.CraftableOnlyButton.containsPoint(x, y))
@@ -370,6 +377,9 @@ namespace StardewLogistics.Menus
                     this.OpenBulkCraft(recipe);
                 return;
             }
+
+            if (this.Tab == TerminalTab.Stock)
+                return;
 
             if (this.Tab != TerminalTab.Items)
             {
@@ -474,6 +484,12 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            if (this.Tab == TerminalTab.Stock)
+            {
+                this.HoverText = this.GetStockHover(x, y);
+                return;
+            }
+
             if (this.Tab != TerminalTab.Items)
             {
                 this.PerformHoverOnTab(x, y);
@@ -545,6 +561,9 @@ namespace StardewLogistics.Menus
                     break;
                 case TerminalTab.Farm:
                     this.DrawFarmTab(b);
+                    break;
+                case TerminalTab.Stock:
+                    this.DrawStockTab(b);
                     break;
             }
 
@@ -666,6 +685,7 @@ namespace StardewLogistics.Menus
                 yield return nameof(TerminalTab.Craft);
                 yield return nameof(TerminalTab.Auto);
                 yield return nameof(TerminalTab.Jobs);
+                yield return nameof(TerminalTab.Stock);
             }
             yield return nameof(TerminalTab.Farm);
             yield return nameof(TerminalTab.Storage);
@@ -734,6 +754,9 @@ namespace StardewLogistics.Menus
 
                 case TerminalTab.Farm:
                     return Math.Max(0, this.GetFarmRows().Count - (this.GetGridBounds().Height / 96));
+
+                case TerminalTab.Stock:
+                    return Math.Max(0, this.GetStockRows().Count - (this.GetGridBounds().Height / StockRowHeight));
 
                 default:
                     int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);

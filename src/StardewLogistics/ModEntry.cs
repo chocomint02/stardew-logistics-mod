@@ -33,6 +33,7 @@ namespace StardewLogistics
         private RecipeIndex CraftingRecipes;
         private JobRunner Jobs;
         private HarvesterRunner Harvesters;
+        private StockKeeper Stock;
 
 
         /*********
@@ -55,13 +56,29 @@ namespace StardewLogistics
             this.Jobs = new JobRunner(this.Networks, this.MachineRecipes, this.CraftingRecipes, this.Config);
             this.Ticker.IsLiveClaim = this.Jobs.IsLiveClaim;
 
-            CaskPatches.Apply(new HarmonyLib.Harmony(this.ModManifest.UniqueID), this.Jobs.ReclaimFromCask);
+            HarmonyLib.Harmony harmony = new(this.ModManifest.UniqueID);
+            CaskPatches.Apply(harmony, this.Jobs.ReclaimFromCask);
             this.Harvesters = new HarvesterRunner(this.Networks, helper.Translation);
+            SoilPatches.Apply(harmony, this.Harvesters.IsProtected);
 
             // Growing crops feed autocrafting, and reserved ones go to their job when harvested.
             this.Jobs.Forecast = this.Harvesters.Forecast;
             this.Jobs.HarvestersOn = network => this.Harvesters.GetHarvestersOn(network);
             this.Harvesters.ClaimHarvest = this.Jobs.ClaimHarvest;
+
+            // Automation tiles: jobs plant crops they need there, and the harvester does the planting.
+            this.Jobs.FreeTilesOn = this.Harvesters.FreeTiles;
+            this.Jobs.PlantNow = () =>
+            {
+                if (Context.IsMainPlayer)
+                    this.Harvesters.Run();
+            };
+            this.Harvesters.PlantingFor = this.Jobs.PlantingFor;
+            this.Harvesters.PlantingDone = this.Jobs.PlantingDone;
+
+            // Minimum-stock rules, which queue jobs of their own.
+            this.Stock = new StockKeeper(this.Networks, this.Jobs, helper.Translation);
+            this.Jobs.Stock = this.Stock;
 
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
@@ -71,6 +88,7 @@ namespace StardewLogistics
             helper.Events.GameLoop.GameLaunched += this.OnGameLaunched;
             helper.Events.GameLoop.SaveLoaded += this.OnSaveLoaded;
             helper.Events.GameLoop.DayStarted += this.OnDayStarted;
+            helper.Events.GameLoop.DayEnding += this.OnDayEnding;
             helper.Events.GameLoop.ReturnedToTitle += this.OnReturnedToTitle;
             helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
             helper.Events.Input.ButtonPressed += this.OnButtonPressed;
@@ -158,10 +176,23 @@ namespace StardewLogistics
             this.Networks.InvalidateAll();
             this.UnlockRecipes();
 
-            // Crops grew overnight: harvest what's ready and plant for the new day first thing.
+            // Crops grew overnight: harvest what's ready and plant for the new day first thing. Then top up
+            // stock, with whatever the harvest brought in.
             this.Harvesters.Invalidate();
+            this.Stock.OnDayStarted();
             if (Context.IsMainPlayer)
+            {
+                this.Harvesters.RestoreSoil();
                 this.Harvesters.Run();
+                this.Stock.Run();
+            }
+        }
+
+        /// <summary>Notes the soil under auto-harvesters before the night, so it stays tilled through it.</summary>
+        private void OnDayEnding(object sender, DayEndingEventArgs e)
+        {
+            if (Context.IsMainPlayer)
+                this.Harvesters.BeforeNight();
         }
 
         /// <summary>Drops world state when returning to the title screen.</summary>
@@ -171,13 +202,17 @@ namespace StardewLogistics
 
             // Jobs belong to the save that queued them; carried into the next save they'd drive its machines.
             this.Jobs.Reset();
+            this.Stock.Reset();
         }
 
-        /// <summary>Lets auto-harvesters work through the day, so a new plan starts within ten minutes.</summary>
+        /// <summary>Lets auto-harvesters work through the day, so a new plan starts within ten minutes, and tops up stock.</summary>
         private void OnTimeChanged(object sender, TimeChangedEventArgs e)
         {
-            if (Context.IsMainPlayer)
-                this.Harvesters.Run();
+            if (!Context.IsMainPlayer)
+                return;
+
+            this.Harvesters.Run();
+            this.Stock.Run();
         }
 
         /// <summary>Rescans a location when something is placed or broken in it.</summary>
@@ -205,6 +240,10 @@ namespace StardewLogistics
 
             if (e.Added.Any(pair => pair.Value?.ItemId == ModIds.AutoHarvester) || e.Removed.Any(pair => pair.Value?.ItemId == ModIds.AutoHarvester))
                 this.Harvesters.Invalidate();
+
+            static bool IsTerminal(SObject obj) => obj != null && NetworkNode.GetKind(obj.ItemId) is NodeKind.Terminal or NodeKind.CraftingTerminal;
+            if (e.Added.Any(pair => IsTerminal(pair.Value)) || e.Removed.Any(pair => IsTerminal(pair.Value)))
+                this.Stock.Invalidate();
         }
 
         /// <summary>Rescans a location when cable is laid or lifted there.</summary>

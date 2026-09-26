@@ -176,6 +176,18 @@ namespace StardewLogistics.Framework
         /// <summary>Crops still growing that this job has reserved, whose harvest comes to it instead of storage.</summary>
         public List<IncomingCrop> CropReservations { get; } = new();
 
+        /// <summary>Seeds still to be planted on automation tiles for this job.</summary>
+        public List<PlannedPlanting> Plantings { get; } = new();
+
+        /// <summary>Whether the job is waiting on crops: growing, or still to be planted.</summary>
+        public bool WaitingOnFields => this.CropReservations.Count > 0 || this.Plantings.Count > 0;
+
+        /// <summary>How many of the ordered item have gone to storage so far.</summary>
+        public int Delivered { get; set; }
+
+        /// <summary>The fertilizer laid under crops planted for this job, or <c>null</c> for none.</summary>
+        public string FertilizerId { get; init; }
+
         /// <summary>In-game minutes until the last reserved crop is ready, kept current by the scheduler.</summary>
         public int HarvestWaitMinutes { get; set; }
 
@@ -196,8 +208,11 @@ namespace StardewLogistics.Framework
         /// <summary>The ingredients and intermediates this job has set aside.</summary>
         public StardewLogistics.Devices.JobBuffer Buffer { get; init; }
 
-        /// <summary>Whether the player asked for this job, or a minimum-stock rule did.</summary>
-        public bool FromStockRule { get; init; }
+        /// <summary>The key of the minimum-stock rule that queued this job, or <c>null</c> if the player did.</summary>
+        public string RuleKey { get; init; }
+
+        /// <summary>Whether a minimum-stock rule queued this job, rather than the player.</summary>
+        public bool FromStockRule => this.RuleKey != null;
 
         /// <summary>How far through the job is, from zero to one.</summary>
         public double Progress

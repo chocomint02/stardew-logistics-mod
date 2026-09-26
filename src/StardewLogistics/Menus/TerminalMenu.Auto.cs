@@ -62,6 +62,9 @@ namespace StardewLogistics.Menus
 
             /// <summary>Whether the network currently holds enough to make at least one.</summary>
             public bool CanMake { get; set; }
+
+            /// <summary>Whether it's a crop the network would grow on automation tiles.</summary>
+            public bool IsCrop { get; init; }
         }
 
 
@@ -113,6 +116,21 @@ namespace StardewLogistics.Menus
                 .Select(id => ItemRegistry.Create(id, allowNull: true))
                 .Where(item => item != null));
 
+            // So do crops that could be planted: seeds in storage and a free automation tile put the crop on the
+            // list, and everything made from it.
+            List<Item> growable = new();
+            if (this.Jobs.GetFreeTiles(this.Network).Count > 0)
+            {
+                growable = this.AllStock
+                    .Select(entry => CropMath.HarvestItemId(entry.Sample?.QualifiedItemId))
+                    .Where(id => id != null)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(id => ItemRegistry.Create(id, allowNull: true))
+                    .Where(item => item != null)
+                    .ToList();
+                held.AddRange(growable);
+            }
+
             foreach (MachineRecipe recipe in this.MachineRecipes.GetOrderable(held))
             {
                 if (!available.Contains(recipe.MachineId) || targets.ContainsKey(recipe.OutputId))
@@ -130,6 +148,22 @@ namespace StardewLogistics.Menus
                     SourceMod = ItemSource.GetSourceName(sample),
                     Sample = sample,
                     NeedsMachine = true
+                };
+            }
+
+            foreach (Item crop in growable)
+            {
+                if (targets.ContainsKey(crop.QualifiedItemId))
+                    continue;
+
+                targets[crop.QualifiedItemId] = new AutoTarget
+                {
+                    ItemId = crop.QualifiedItemId,
+                    DisplayName = crop.DisplayName,
+                    Category = crop.Category,
+                    SourceMod = ItemSource.GetSourceName(crop),
+                    Sample = crop,
+                    IsCrop = true
                 };
             }
 
@@ -189,6 +223,7 @@ namespace StardewLogistics.Menus
             IReadOnlyList<IFilterableEntry> stock = this.AllStock.Cast<IFilterableEntry>().ToList();
             CraftPlanner planner = new(this.Recipes, this.MachineRecipes, this.Config.MaxCraftDepth);
             List<IncomingCrop> incoming = this.Jobs.GetIncoming(this.Network);
+            List<FreeTile> free = this.Jobs.GetFreeTiles(this.Network);
 
             int planned = 0;
             foreach (AutoTarget target in this.AllTargets)
@@ -202,7 +237,7 @@ namespace StardewLogistics.Menus
                 try
                 {
                     // Same rule as an order: "can make one" means can produce one, not "there's one on the shelf".
-                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines, Quality.Any, incoming).IsSatisfied
+                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines, Quality.Any, incoming, free).IsSatisfied
                         // or there's one on the shelf a cask could take further
                         || (this.MachineRecipes.CanAge(target.ItemId)
                             && planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines, StardewValley.Object.bestQuality, incoming).IsSatisfied);
@@ -272,7 +307,8 @@ namespace StardewLogistics.Menus
                 this.Jobs,
                 this.Config,
                 this.Translations,
-                onClose: () => Game1.activeClickableMenu = parent
+                onClose: () => Game1.activeClickableMenu = parent,
+                onKeepStocked: this.SaveStockRule
             );
 
             Game1.playSound("bigSelect");
@@ -317,9 +353,12 @@ namespace StardewLogistics.Menus
                     if (target.Count > 0)
                         DrawSlotCount(b, NumberFormat.Abbreviate(target.Count), x, y);
 
-                    // A corner mark separates "a machine makes this" from "you can craft it by hand".
+                    // A corner mark separates "a machine makes this" from "you can craft it by hand", and green
+                    // from "grown on automation tiles".
                     if (target.NeedsMachine)
                         b.Draw(Game1.staminaRect, new Rectangle(x + 4, y + 4, 8, 8), new Color(92, 222, 240) * 0.9f);
+                    else if (target.IsCrop)
+                        b.Draw(Game1.staminaRect, new Rectangle(x + 4, y + 4, 8, 8), new Color(110, 200, 80) * 0.95f);
                 }
             }
 
@@ -376,7 +415,10 @@ namespace StardewLogistics.Menus
 
                 // Leave the progress bar its column; text too long for the space scrolls within it.
                 int textWidth = grid.X + 420 - 16 - textX;
-                Marquee.Draw(b, $"{job.TargetCount}x {job.DisplayName}", Game1.smallFont, new Vector2(textX, y + 14), textWidth, Game1.textColor);
+                string name = $"{job.TargetCount}x {job.DisplayName}";
+                if (job.FromStockRule)
+                    name += "  " + this.Translations.Get("jobs.from-rule");
+                Marquee.Draw(b, name, Game1.smallFont, new Vector2(textX, y + 14), textWidth, Game1.textColor);
 
                 string status = this.Translations.Get("jobs.status-" + job.Status.ToString().ToLowerInvariant());
                 if ((job.Status is JobStatus.Blocked or JobStatus.Waiting) && job.BlockedReason != null)

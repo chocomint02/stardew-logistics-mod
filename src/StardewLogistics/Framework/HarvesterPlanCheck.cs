@@ -45,15 +45,34 @@ namespace StardewLogistics.Framework
             if (!force)
             {
                 Dictionary<string, PlanProblem> stuck = new(StringComparer.OrdinalIgnoreCase);
+                PlanProblem waiting = null;
                 foreach ((Vector2 tile, Point point, HoeDirt soil) in CropsInTheWay(settings, original, location, machineTile))
                 {
-                    if (!NeverMakesWay(soil, location))
-                        continue;
-
+                    bool automation = settings.Tiles.TryGetValue(point, out TilePlan now) && now.Automation;
                     string growing = soil.crop.netSeedIndex.Value;
-                    Add(stuck, growing, point, () => translate("plan.problem-stuck", new { name = getName(ItemRegistry.QualifyItemId(soil.crop.indexOfHarvest.Value ?? growing)) }));
+                    string name = getName(ItemRegistry.QualifyItemId(soil.crop.indexOfHarvest.Value ?? growing));
+
+                    if (NeverMakesWay(soil, location))
+                    {
+                        string key = automation ? "plan.problem-auto-stuck" : "plan.problem-stuck";
+                        Add(stuck, key + "|" + growing, point, () => translate(key, new { name }));
+                    }
+
+                    // An automation tile with a crop on it isn't free for autocrafting until the crop's gone.
+                    else if (automation)
+                    {
+                        waiting ??= new PlanProblem();
+                        waiting.Tiles.Add(point);
+                    }
                 }
                 problems.AddRange(stuck.Values);
+
+                if (waiting != null)
+                {
+                    PlanProblem problem = new() { Message = translate("plan.problem-auto-wait", new { count = waiting.Tiles.Count }) };
+                    problem.Tiles.AddRange(waiting.Tiles);
+                    problems.Add(problem);
+                }
             }
 
             PlanProblem blocked = new() { Message = translate("plan.problem-blocked", null) };
@@ -84,6 +103,10 @@ namespace StardewLogistics.Framework
                     continue;
                 }
 
+                // An automation tile brings nothing of its own: the job that plants on it brings the seed.
+                if (plan.Automation)
+                    continue;
+
                 // Fertilizer is only needed where the soil doesn't have it yet.
                 if (plan.FertilizerId != null && soil?.HasFertilizer() != true)
                     Demand(fertilizerDemand, plan.FertilizerId, point);
@@ -105,7 +128,7 @@ namespace StardewLogistics.Framework
 
                 if (window != int.MaxValue)
                 {
-                    int? days = DaysToGrow(plan.SeedId, soil?.fertilizer.Value ?? plan.FertilizerId, tile);
+                    int? days = DaysToGrow(plan.SeedId, CropMath.FertilizerOf(soil) ?? plan.FertilizerId, tile);
                     if (days > window)
                     {
                         Add(seasonal, plan.SeedId + "|late", point, () => translate("plan.problem-late", new { name = getName(plan.SeedId), days, left = window }));
@@ -135,7 +158,8 @@ namespace StardewLogistics.Framework
         /// <summary>The growing crops a plan replaces or clears: on tiles planned now or before, but not what's planned now.</summary>
         /// <remarks>
         /// Only tiles the harvester has a plan for, or had one for. A crop the player planted by hand on a tile the
-        /// harvester was never told about isn't in its way, however it's planned around.
+        /// harvester was never told about isn't in its way, however it's planned around. On an automation tile,
+        /// any crop autocrafting didn't plant is in the way: the tile isn't free for it until that crop is gone.
         /// </remarks>
         public static IEnumerable<(Vector2 Tile, Point Point, HoeDirt Soil)> CropsInTheWay(HarvesterSettings settings, HarvesterSettings original, GameLocation location, Vector2 machineTile)
         {
@@ -151,6 +175,13 @@ namespace StardewLogistics.Framework
                         continue;
 
                     settings.Tiles.TryGetValue(point, out TilePlan now);
+                    if (now?.Automation == true)
+                    {
+                        if (!CropMath.IsAutomationCrop(soil))
+                            yield return (tile, point, soil);
+                        continue;
+                    }
+
                     TilePlan before = null;
                     original?.Tiles.TryGetValue(point, out before);
                     if (now?.SeedId == null && before?.SeedId == null)

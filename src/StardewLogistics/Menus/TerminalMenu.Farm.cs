@@ -35,6 +35,8 @@ namespace StardewLogistics.Menus
             public int Growing { get; init; }
             public int? Soonest { get; init; }
             public int Reserved { get; init; }
+            public int AutomationTiles { get; init; }
+            public int AutomationFree { get; init; }
         }
 
 
@@ -52,17 +54,24 @@ namespace StardewLogistics.Menus
             if (this.Network != null && this.Jobs?.HarvestersOn != null)
             {
                 List<IncomingCrop> crops = this.Jobs.Forecast?.Invoke(this.Network) ?? new List<IncomingCrop>();
+                List<FreeTile> free = this.Jobs.GetFreeTiles(this.Network);
 
                 foreach ((GameLocation location, Vector2 tile) in this.Jobs.HarvestersOn(this.Network))
                 {
                     List<IncomingCrop> mine = crops.Where(crop => crop.Location == location && crop.HarvesterTile == tile).ToList();
+                    int automation = location.Objects.TryGetValue(tile, out StardewValley.Object machine)
+                        ? HarvesterSettings.ReadCached(machine).Tiles.Values.Count(plan => plan.Automation)
+                        : 0;
+
                     rows.Add(new FarmRow
                     {
                         Location = location,
                         Tile = tile,
                         Growing = mine.Count,
                         Soonest = mine.Count > 0 ? mine.Min(crop => crop.Days) : null,
-                        Reserved = mine.Count(crop => this.Jobs.GetReservation(crop.Location, crop.Tile) != null)
+                        Reserved = mine.Count(crop => this.Jobs.GetReservation(crop.Location, crop.Tile) != null),
+                        AutomationTiles = automation,
+                        AutomationFree = free.Count(entry => entry.Location == location && entry.HarvesterTile == tile)
                     });
                 }
             }
@@ -110,6 +119,8 @@ namespace StardewLogistics.Menus
                     : row.Soonest == 0
                         ? this.Translations.Get("farm.summary-ready", new { count = row.Growing, reserved = row.Reserved })
                         : this.Translations.Get("farm.summary", new { count = row.Growing, days = row.Soonest, reserved = row.Reserved });
+                if (row.AutomationTiles > 0)
+                    summary += "  ·  " + this.Translations.Get("farm.automation", new { free = row.AutomationFree, total = row.AutomationTiles });
                 Marquee.Draw(b, summary, Game1.smallFont, new Vector2(textX, y + 48), textWidth, Game1.textColor * 0.65f);
 
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), view.X, view.Y, view.Width, view.Height, Color.White, 2f, drawShadow: false);

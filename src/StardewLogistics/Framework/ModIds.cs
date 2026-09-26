@@ -56,6 +56,13 @@ namespace StardewLogistics.Framework
         /// <summary>An auto-harvester's area, crop plan and replant choices.</summary>
         public const string HarvesterKey = ModId + "/harvester";
 
+        /// <summary>Marks soil whose crop autocrafting planted, holding the seed it planted.</summary>
+        /// <remarks>What tells a job's crop on an automation tile from one the player left there.</remarks>
+        public const string AutomationCropKey = ModId + "/automation-crop";
+
+        /// <summary>A terminal's minimum-stock rules.</summary>
+        public const string StockRulesKey = ModId + "/stock-rules";
+
         /// <summary>The channel a wireless transmitter or receiver is tuned to.</summary>
         public const string ChannelKey = ModId + "/channel";
 

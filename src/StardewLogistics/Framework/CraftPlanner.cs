@@ -34,6 +34,15 @@ namespace StardewLogistics.Framework
         /// <summary>Growing crops not yet planned on, soonest first.</summary>
         private List<IncomingCrop> Incoming = new();
 
+        /// <summary>Automation tiles not yet planned on.</summary>
+        private List<FreeTile> FreeTiles = new();
+
+        /// <summary>The fertilizer to lay under crops the plan plants, or <c>null</c> for none.</summary>
+        private string Fertilizer;
+
+        /// <summary>Days to grow per seed, fertilizer and location, since working it out builds a throwaway crop.</summary>
+        private readonly Dictionary<string, int?> GrowTimes = new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>Item prices by stock ID, for ordering ingredients cheapest first.</summary>
         private static readonly Dictionary<string, int> PriceCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -65,10 +74,14 @@ namespace StardewLogistics.Framework
         /// </remarks>
         /// <param name="targetQuality">The quality wanted, which adds a cask step; <see cref="Quality.Any"/> for none.</param>
         /// <param name="incoming">Crops growing under auto-harvesters, which the plan can wait for once storage runs short.</param>
-        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, Func<MachineRecipe, int> countUsableMachines = null, int targetQuality = Quality.Any, IReadOnlyList<IncomingCrop> incoming = null)
+        /// <param name="freeTiles">Automation tiles with nothing growing, which the plan can plant crops on.</param>
+        /// <param name="fertilizerId">The fertilizer to lay under what the plan plants, or <c>null</c> for none.</param>
+        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, Func<MachineRecipe, int> countUsableMachines = null, int targetQuality = Quality.Any, IReadOnlyList<IncomingCrop> incoming = null, IReadOnlyList<FreeTile> freeTiles = null, string fertilizerId = null)
         {
             Ledger ledger = new(stock);
             this.Incoming = incoming?.OrderBy(crop => crop.Days).ToList() ?? new List<IncomingCrop>();
+            this.FreeTiles = freeTiles?.ToList() ?? new List<FreeTile>();
+            this.Fertilizer = string.IsNullOrWhiteSpace(fertilizerId) ? null : fertilizerId;
             CraftPlan plan = new() { RequestedCount = count };
             this.CountUsable = countUsableMachines;
 
@@ -79,6 +92,17 @@ namespace StardewLogistics.Framework
 
             // Crops still growing count too: Starfruit ready in five days makes Starfruit Wine something to plan.
             this.Machines?.ExpandFor(this.Incoming.Select(crop => crop.ItemId).Distinct().Select(id => ItemRegistry.Create(id, allowNull: true)).Where(item => item != null));
+
+            // And so do crops that could be planted: Starfruit Seeds and a free automation tile make Starfruit.
+            if (this.FreeTiles.Count > 0 && stock != null)
+            {
+                this.Machines?.ExpandFor(stock
+                    .Select(entry => CropMath.HarvestItemId(entry.Sample?.QualifiedItemId))
+                    .Where(id => id != null)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(id => ItemRegistry.Create(id, allowNull: true))
+                    .Where(item => item != null));
+            }
 
             PlanNode root = targetQuality > 0
                 ? this.PlanAging(targetId, count, targetQuality, ledger, preferredMachines, plan)
@@ -246,9 +270,19 @@ namespace StardewLogistics.Framework
             {
                 if (!this.TryPlanProduction(node, itemId, remaining, ledger, inProgress, depth, preferred, plan, out MissingReason reason))
                 {
-                    node.Kind = PlanStepKind.Missing;
-                    node.Missing = remaining;
-                    node.Reason = reason;
+                    // Nothing makes it, but it's a crop: plant it on free automation tiles. A harvest can't be
+                    // split, so whole tiles are planted, and any extra goes back to storage when the job ends.
+                    int grown = quality < 0 ? this.PlanGrowing(node, itemId, remaining, ledger, inProgress, depth, preferred, plan) : 0;
+                    remaining -= grown;
+
+                    if (remaining <= 0)
+                        node.Kind = PlanStepKind.FromStock;
+                    else
+                    {
+                        node.Kind = PlanStepKind.Missing;
+                        node.Missing = remaining;
+                        node.Reason = grown > 0 ? MissingReason.NoFreeTiles : reason;
+                    }
                 }
             }
             finally
@@ -257,6 +291,89 @@ namespace StardewLogistics.Framework
             }
 
             return node;
+        }
+
+        /// <summary>Plans a crop grown on free automation tiles, with its seed and any fertilizer as the node's children.</summary>
+        /// <returns>How many the planted tiles are guaranteed to yield, which may be more than needed; zero if none can be grown.</returns>
+        /// <remarks>
+        /// One seed for the whole row: one in storage if there is one, otherwise the quickest. Tiles are taken
+        /// quickest first -- a tile already fertilized with Speed-Gro beats a bare one -- and only where the crop will
+        /// be ready before its season ends. The row waits as long as the slowest tile it uses.
+        /// </remarks>
+        private int PlanGrowing(PlanNode node, string itemId, int needed, Ledger ledger, HashSet<string> inProgress, int depth, IReadOnlyDictionary<string, string> preferred, CraftPlan plan)
+        {
+            if (this.FreeTiles.Count == 0 || needed <= 0)
+                return 0;
+
+            IEnumerable<string> seeds = CropMath.SeedsFor(itemId)
+                .OrderByDescending(seed => ledger.Peek(seed) > 0)
+                .ThenBy(seed => CropMath.GetData(seed)?.DaysInPhase?.Sum() ?? int.MaxValue);
+
+            foreach (string seed in seeds)
+            {
+                int yield = CropMath.GuaranteedYield(seed);
+                int wanted = (int)Math.Ceiling(needed / (double)yield);
+
+                // Soil holds one fertilizer. With Speed-Gro chosen it replaces whatever else a tile has -- Basic
+                // Fertilizer does nothing for growth time -- but a tile that already has a Speed-Gro keeps it.
+                var tiles = this.FreeTiles
+                    .Select(tile => (Tile: tile, AddsFertilizer: this.Fertilizer != null && !CropMath.IsSpeedGro(tile.Fertilizer)))
+                    .Select(entry => (entry.Tile, entry.AddsFertilizer, Days: this.GrowDays(seed, entry.AddsFertilizer ? this.Fertilizer : entry.Tile.Fertilizer, entry.Tile)))
+                    .Where(entry => entry.Days != null)
+                    .OrderBy(entry => entry.Days)
+                    .Take(wanted)
+                    .ToList();
+                if (tiles.Count == 0)
+                    continue;
+
+                foreach ((FreeTile tile, bool addsFertilizer, int? days) in tiles)
+                {
+                    this.FreeTiles.Remove(tile);
+                    node.Plantings.Add(new PlannedPlanting
+                    {
+                        Location = tile.Location,
+                        Tile = tile.Tile,
+                        HarvesterTile = tile.HarvesterTile,
+                        SeedId = seed,
+                        FertilizerId = addsFertilizer ? this.Fertilizer : null,
+                        ItemId = itemId,
+                        Count = yield,
+                        Days = days.Value
+                    });
+                }
+
+                int grown = tiles.Count * yield;
+                node.FromHarvest += grown;
+                node.HarvestDays = Math.Max(node.HarvestDays, tiles.Max(entry => entry.Days.Value));
+
+                AddChild(node, this.Resolve(seed, tiles.Count, ledger, inProgress, depth + 1, preferred, plan));
+                int fertilized = tiles.Count(entry => entry.AddsFertilizer);
+                if (fertilized > 0)
+                    AddChild(node, this.Resolve(this.Fertilizer, fertilized, ledger, inProgress, depth + 1, preferred, plan));
+
+                return grown;
+            }
+
+            return 0;
+        }
+
+        /// <summary>Days a seed would take to grow on a free tile, or <c>null</c> if it can't grow there in time.</summary>
+        private int? GrowDays(string seedId, string fertilizerId, FreeTile tile)
+        {
+            int window = CropMath.DaysLeftToGrow(seedId, tile.Location);
+            if (window < 0)
+                return null;
+
+            string key = $"{seedId}|{fertilizerId}|{tile.Location?.NameOrUniqueName}";
+            if (!this.GrowTimes.TryGetValue(key, out int? days))
+                this.GrowTimes[key] = days = CropMath.DaysToGrow(seedId, fertilizerId, tile.Location, tile.Tile);
+
+            if (days == null || (window != int.MaxValue && days > window))
+                return null;
+
+            return tile.Location.CanPlantSeedsHere(CropMath.Unqualify(seedId), (int)tile.Tile.X, (int)tile.Tile.Y, isGardenPot: false, out _)
+                ? days
+                : null;
         }
 
         /// <summary>Fills in a node with whichever recipe can make the item, crafting preferred over processing.</summary>
@@ -544,8 +661,12 @@ namespace StardewLogistics.Framework
                     FromHarvest = child.FromHarvest,
                     HarvestDays = child.HarvestDays,
                     Harvests = child.Harvests,
+                    Plantings = child.Plantings,
                     Depth = child.Depth
                 };
+
+                // The seeds and fertilizer for what's planted belong under the harvest row.
+                harvest.Children.AddRange(child.Children);
 
                 if (child.StockParts.Count > 0)
                 {
@@ -553,6 +674,8 @@ namespace StardewLogistics.Framework
                     child.FromHarvest = 0;
                     child.HarvestDays = 0;
                     child.Harvests = new List<IncomingCrop>();
+                    child.Plantings = new List<PlannedPlanting>();
+                    child.Children.Clear();
                     AddChild(parent, child);
                 }
 

@@ -25,6 +25,14 @@ namespace StardewLogistics.Menus
     ///
     /// Planning edits a copy of the machine's settings; only Confirm keeps the changes.
     /// </remarks>
+    /// <summary>What painting a tile does in the planning grid.</summary>
+    internal enum PaletteMode
+    {
+        Seeds,
+        Fertilizer,
+        Automation
+    }
+
     internal class HarvesterPlanMenu : IClickableMenu
     {
         /*********
@@ -67,7 +75,9 @@ namespace StardewLogistics.Menus
         /// <summary>Whether the player confirmed their changes.</summary>
         private bool Confirmed;
 
-        private bool FertilizerTab;
+        /// <summary>What painting a tile does: plant a seed, lay fertilizer, or set the tile aside for automation.</summary>
+        private PaletteMode Mode;
+        private bool FertilizerTab => this.Mode == PaletteMode.Fertilizer;
         private Item SelectedSeed;
         private Item SelectedFertilizer;
 
@@ -335,17 +345,27 @@ namespace StardewLogistics.Menus
             this.Settings.Tiles.TryGetValue(cell, out TilePlan plan);
             plan ??= new TilePlan();
 
-            if (!this.FertilizerTab && this.SelectedSeed != null)
+            if (this.Mode == PaletteMode.Automation)
+            {
+                // Set aside for autocrafting, which brings its own seed: whatever was planned here goes.
+                if (plan.Automation)
+                    return;
+
+                plan = new TilePlan { Automation = true };
+            }
+            else if (this.Mode == PaletteMode.Seeds && this.SelectedSeed != null)
             {
                 if (string.Equals(plan.SeedId, this.SelectedSeed.QualifiedItemId, StringComparison.OrdinalIgnoreCase))
                     return;
 
                 plan.SeedId = this.SelectedSeed.QualifiedItemId;
                 plan.Planted = false; // a new crop starts with its own first planting
+                plan.Automation = false;
             }
             else if (this.FertilizerTab && this.SelectedFertilizer != null)
             {
-                if (string.Equals(plan.FertilizerId, this.SelectedFertilizer.QualifiedItemId, StringComparison.OrdinalIgnoreCase))
+                // An automation tile's fertilizer is the job's to choose.
+                if (plan.Automation || string.Equals(plan.FertilizerId, this.SelectedFertilizer.QualifiedItemId, StringComparison.OrdinalIgnoreCase))
                     return;
 
                 plan.FertilizerId = this.SelectedFertilizer.QualifiedItemId;
@@ -365,6 +385,8 @@ namespace StardewLogistics.Menus
 
             if (this.FertilizerTab && plan.SeedId != null)
                 plan.FertilizerId = null;
+            else if (this.Mode == PaletteMode.Automation && !plan.Automation)
+                return; // erasing automation leaves a planned crop alone
             else
                 this.Settings.Tiles.Remove(cell);
 
@@ -382,8 +404,9 @@ namespace StardewLogistics.Menus
         {
             switch (action)
             {
-                case "tab-seeds": this.FertilizerTab = false; break;
-                case "tab-fertilizer": this.FertilizerTab = true; break;
+                case "tab-seeds": this.Mode = PaletteMode.Seeds; break;
+                case "tab-fertilizer": this.Mode = PaletteMode.Fertilizer; break;
+                case "tab-automation": this.Mode = PaletteMode.Automation; break;
                 case "stage-down": this.Stage = Math.Max(0, this.Stage - 1); break;
                 case "stage-up": this.Stage = Math.Min(this.MaxStage, this.Stage + 1); break;
                 case "fill":
@@ -503,7 +526,12 @@ namespace StardewLogistics.Menus
 
         private long CountInStorage(string itemId) => itemId != null && this.Stock.TryGetValue(itemId, out long count) ? count : 0;
 
-        private List<Item> PaletteItems => this.FertilizerTab ? this.Fertilizers : this.Seeds;
+        private List<Item> PaletteItems => this.Mode switch
+        {
+            PaletteMode.Seeds => this.Seeds,
+            PaletteMode.Fertilizer => this.Fertilizers,
+            _ => new List<Item>()
+        };
 
         /// <summary>The palette item under a screen position.</summary>
         private Item GetPaletteItemAt(int x, int y)
@@ -557,9 +585,13 @@ namespace StardewLogistics.Menus
                         b.Draw(Game1.staminaRect, cell, this.GetGroundColour(tile, feature));
 
                     // Fertilizer, as its mark on the soil.
-                    string fertilizer = this.IsPreview ? soil?.fertilizer.Value : plan?.FertilizerId ?? soil?.fertilizer.Value;
+                    string fertilizer = this.IsPreview ? CropMath.FertilizerOf(soil) : plan?.FertilizerId ?? CropMath.FertilizerOf(soil);
                     if (!string.IsNullOrEmpty(fertilizer))
                         this.DrawFertilizer(b, fertilizer, cell);
+
+                    // Set aside for automation: shaded gold, the colour of everything autocrafting has claimed.
+                    if (plan?.Automation == true)
+                        b.Draw(Game1.staminaRect, cell, Color.Gold * 0.35f);
 
                     // The crop: what's growing in preview, what's planned when planning.
                     if (this.IsPreview)
@@ -573,8 +605,8 @@ namespace StardewLogistics.Menus
                     if (tile == this.MachineTile)
                         this.DrawOutline(b, cell, Color.SteelBlue, 3);
 
-                    // A crop an autocrafting job is waiting on, outlined in gold.
-                    if (soil?.crop != null && this.ReservedBy?.Invoke(this.Location, tile) != null)
+                    // A crop an autocrafting job is waiting on, or a tile it's about to plant, outlined in gold.
+                    if (this.ReservedBy?.Invoke(this.Location, tile) != null)
                         this.DrawOutline(b, cell, Color.Gold, 3);
 
                     // Crops Force change will clear, outlined so it's clear what goes.
@@ -689,6 +721,12 @@ namespace StardewLogistics.Menus
         /// <summary>Draws the palette, with how many of each storage holds, and the replant choices.</summary>
         private void DrawPalette(SpriteBatch b)
         {
+            if (this.Mode == PaletteMode.Automation)
+            {
+                this.DrawAutomationHelp(b);
+                return;
+            }
+
             List<Item> items = this.PaletteItems;
             Item selected = this.FertilizerTab ? this.SelectedFertilizer : this.SelectedSeed;
 
@@ -748,6 +786,39 @@ namespace StardewLogistics.Menus
                 Marquee.Draw(b, GetName(seedId), Game1.smallFont, new Vector2(row.X + 42, row.Y + 8), pill.X - row.X - 50, Game1.textColor);
                 y += 44;
             }
+        }
+
+        /// <summary>Explains automation tiles in place of the palette, with how many are set aside.</summary>
+        private void DrawAutomationHelp(SpriteBatch b)
+        {
+            int y = this.PanelBounds.Y + 64;
+            int width = this.PanelBounds.Width;
+
+            string help = Game1.parseText(this.Translations.Get("plan.automation-help"), Game1.smallFont, width);
+            Utility.drawTextWithShadow(b, help, Game1.smallFont, new Vector2(this.PanelBounds.X, y), Game1.textColor);
+            y += (int)Game1.smallFont.MeasureString(help).Y + 20;
+
+            // A swatch per state, so the grid's colours read without hovering.
+            (Color Fill, bool Outline, string Key)[] legend =
+            {
+                (Color.Gold * 0.35f, false, "plan.automation-legend-free"),
+                (Color.Gold * 0.35f, true, "plan.automation-legend-used")
+            };
+            Texture2D dirt = Game1.content.Load<Texture2D>("TerrainFeatures\\hoeDirt");
+            foreach ((Color fill, bool outline, string key) in legend)
+            {
+                // Drawn exactly as the grid draws a tile, hoed soil under the gold, so the colours match.
+                Rectangle swatch = new(this.PanelBounds.X, y + 2, 28, 28);
+                b.Draw(dirt, swatch, new Rectangle(16, 16, 16, 16), Color.White);
+                b.Draw(Game1.staminaRect, swatch, fill);
+                if (outline)
+                    this.DrawOutline(b, swatch, Color.Gold, 3);
+                Marquee.Draw(b, this.Translations.Get(key), Game1.smallFont, new Vector2(swatch.Right + 10, y), width - 40, Game1.textColor);
+                y += 38;
+            }
+
+            int count = this.Settings.Tiles.Values.Count(plan => plan.Automation);
+            Marquee.Draw(b, this.Translations.Get("plan.automation-count", new { count }), Game1.smallFont, new Vector2(this.PanelBounds.X, y + 8), width, Game1.textColor * 0.8f);
         }
 
         /// <summary>The top of the problems panel.</summary>
@@ -849,7 +920,9 @@ namespace StardewLogistics.Menus
                     continue;
                 }
 
-                bool active = (action == "tab-seeds" && !this.FertilizerTab) || (action == "tab-fertilizer" && this.FertilizerTab);
+                bool active = (action == "tab-seeds" && this.Mode == PaletteMode.Seeds)
+                    || (action == "tab-fertilizer" && this.Mode == PaletteMode.Fertilizer)
+                    || (action == "tab-automation" && this.Mode == PaletteMode.Automation);
                 Color tint = action == "confirm" ? (this.Force ? new Color(255, 120, 110) : Color.LightGreen) : active ? Color.Gold : Color.White;
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, tint, 2f, drawShadow: false);
 
@@ -905,8 +978,17 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            this.Buttons.Add((new Rectangle(this.PanelBounds.X, this.PanelBounds.Y, 180, 48), "tab-seeds"));
-            this.Buttons.Add((new Rectangle(this.PanelBounds.X + 190, this.PanelBounds.Y, 190, 48), "tab-fertilizer"));
+            // Three tabs across the panel, each as wide as its label needs and the spare shared out.
+            string[] tabs = { "tab-seeds", "tab-fertilizer", "tab-automation" };
+            const int gap = 6;
+            int[] widths = tabs.Select(tab => (int)Game1.smallFont.MeasureString(this.Translations.Get("plan.button-" + tab)).X + 24).ToArray();
+            int spare = Math.Max(0, (PanelWidth - ((tabs.Length - 1) * gap) - widths.Sum()) / tabs.Length);
+            int tabX = this.PanelBounds.X;
+            for (int i = 0; i < tabs.Length; i++)
+            {
+                this.Buttons.Add((new Rectangle(tabX, this.PanelBounds.Y, widths[i] + spare, 48), tabs[i]));
+                tabX += widths[i] + spare + gap;
+            }
 
             int x = this.xPositionOnScreen + 32;
             this.Buttons.Add((new Rectangle(x, bottom + 6, 48, 44), "stage-down"));
@@ -944,6 +1026,23 @@ namespace StardewLogistics.Menus
             List<string> lines = new() { this.Translations.Get("harvester.tile", new { x = (int)tile.X, y = (int)tile.Y }) };
             this.Location.terrainFeatures.TryGetValue(tile, out TerrainFeature feature);
 
+            // Set aside for automation, and whether it's free.
+            if (this.Settings.Tiles.TryGetValue(cell, out TilePlan automation) && automation.Automation)
+            {
+                lines.Add(this.Translations.Get("plan.automation-tile"));
+                if (feature is HoeDirt { crop: not null } other && !other.crop.dead.Value && !CropMath.IsAutomationCrop(other))
+                    lines.Add(this.Translations.Get("plan.automation-waiting"));
+            }
+
+            // A job about to plant here.
+            if (feature is not HoeDirt { crop: not null })
+            {
+                CraftJob planting = this.ReservedBy?.Invoke(this.Location, tile);
+                PlannedPlanting order = planting?.Plantings.FirstOrDefault(entry => entry.Location == this.Location && entry.Tile == tile);
+                if (order != null)
+                    lines.Add(this.Translations.Get("plan.planting", new { seed = GetName(order.SeedId), count = planting.TargetCount, name = planting.DisplayName }));
+            }
+
             // What's in the ground now.
             if (feature is HoeDirt { crop: not null } soil)
             {
@@ -962,7 +1061,7 @@ namespace StardewLogistics.Menus
             // What's planned, when planning.
             if (!this.IsPreview && this.Settings.Tiles.TryGetValue(cell, out TilePlan plan))
             {
-                if (plan.SeedId != null)
+                if (plan.SeedId != null && !plan.Automation)
                 {
                     int? days = CropMath.DaysToGrow(plan.SeedId, plan.FertilizerId, this.Location, tile);
                     lines.Add(this.Translations.Get("plan.planned-seed", new { name = GetName(plan.SeedId), days = days ?? 0 }));

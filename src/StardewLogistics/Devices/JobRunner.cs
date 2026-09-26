@@ -39,6 +39,15 @@ namespace StardewLogistics.Devices
         /// <summary>Reports the crops growing under a network's auto-harvesters.</summary>
         public Func<StorageNetwork, List<IncomingCrop>> Forecast { get; set; }
 
+        /// <summary>Lists the automation tiles on a network with nothing growing on them.</summary>
+        public Func<StorageNetwork, List<FreeTile>> FreeTilesOn { get; set; }
+
+        /// <summary>Sets the auto-harvesters working now, so a new job's seeds go in straight away.</summary>
+        public Action PlantNow { get; set; }
+
+        /// <summary>The minimum-stock rules, for the terminal's Stock tab.</summary>
+        public StockKeeper Stock { get; set; }
+
         /// <summary>Lists the auto-harvesters on a network.</summary>
         public Func<StorageNetwork, IEnumerable<(GameLocation Location, Microsoft.Xna.Framework.Vector2 Tile)>> HarvestersOn { get; set; }
 
@@ -79,7 +88,9 @@ namespace StardewLogistics.Devices
         /// <param name="error">Why the job couldn't be queued.</param>
         /// <param name="targetQuality">The quality to age the product to in casks, or <see cref="Quality.Any"/>.</param>
         /// <param name="useFairyDust">Whether to set aside Fairy Dust from storage and use it on the job's machines.</param>
-        public CraftJob TryQueue(string targetId, int count, StorageNetwork network, int maxMachines, IReadOnlyDictionary<string, string> preferredMachines, out string error, int targetQuality = Quality.Any, bool useFairyDust = false)
+        /// <param name="fertilizerId">The fertilizer to lay under crops the job plants, or <c>null</c> for none.</param>
+        /// <param name="ruleKey">The minimum-stock rule queuing the job, or <c>null</c> if the player is.</param>
+        public CraftJob TryQueue(string targetId, int count, StorageNetwork network, int maxMachines, IReadOnlyDictionary<string, string> preferredMachines, out string error, int targetQuality = Quality.Any, bool useFairyDust = false, string fertilizerId = null, string ruleKey = null)
         {
             error = null;
 
@@ -89,16 +100,11 @@ namespace StardewLogistics.Devices
                 return null;
             }
 
-            List<NetworkItemStack> stock = network.Aggregate();
-            IReadOnlyList<IFilterableEntry> filterable = stock.Cast<IFilterableEntry>().ToList();
-            this.CraftingRecipes.Refresh(filterable);
-
-            CraftPlanner planner = new(this.CraftingRecipes, this.MachineRecipes, this.Config.MaxCraftDepth);
-            CraftPlan plan = planner.Plan(targetId, count, filterable, preferredMachines, network.CountUsableMachines, targetQuality, this.GetIncoming(network));
+            CraftPlan plan = this.BuildPlan(targetId, count, network, preferredMachines, targetQuality, fertilizerId);
 
             if (!plan.IsSatisfied)
             {
-                error = "short of " + string.Join(", ", plan.Shortfalls.Select(cost => $"{cost.Count}x {GetName(cost.ItemId)}"));
+                error = DescribeShortfall(plan);
                 return null;
             }
 
@@ -117,10 +123,25 @@ namespace StardewLogistics.Devices
                 TargetCount = count,
                 LocationName = locationName,
                 AnchorTile = anchor,
+                FertilizerId = fertilizerId,
+                RuleKey = ruleKey,
                 Steps = Flatten(plan, maxMachines, network.CountUsableMachines)
             };
 
-            if (job.Steps.Count == 0)
+            // Crops the plan waits on are the job's from now: their harvest comes here instead of storage. Seeds it
+            // plants are planted for it, from what it sets aside.
+            foreach (PlanNode node in plan.Root.Walk())
+            {
+                job.CropReservations.AddRange(node.Harvests);
+                foreach (PlannedPlanting planting in node.Plantings)
+                {
+                    planting.Buffer = job.Buffer;
+                    job.Plantings.Add(planting);
+                }
+            }
+
+            // An order for a crop itself has no steps: the job is its planting and harvest.
+            if (job.Steps.Count == 0 && !job.WaitingOnFields)
             {
                 error = "nothing to do; it's already in storage";
                 return null;
@@ -140,20 +161,71 @@ namespace StardewLogistics.Devices
                 this.ReserveFairyDust(job, network);
             }
 
-            // Crops the plan waits on are the job's from now: their harvest comes here instead of storage.
-            foreach (PlanNode node in plan.Root.Walk())
-                job.CropReservations.AddRange(node.Harvests);
             if (job.CropReservations.Count > 0)
                 Log.Debug($"{job.Id}: reserved {job.CropReservations.Count} growing crops, the last ready in {job.CropReservations.Max(crop => crop.Days)} days.");
+            if (job.Plantings.Count > 0)
+                Log.Debug($"{job.Id}: planting {job.Plantings.Count} {GetName(job.Plantings[0].SeedId)} on automation tiles, ready in {job.Plantings.Max(planting => planting.Days)} days.");
 
             job.Status = JobStatus.Pending;
             this.JobList.Add(job);
             Log.Debug($"Queued {job.Id}: {count}x {job.DisplayName} in {job.Steps.Count} steps.");
 
             // Start straight away rather than on the next tick, so the fruit is in the keg before the player
-            // has looked away from the terminal.
+            // has looked away from the terminal -- and the seeds are in the ground.
             this.StartWork(job, network);
+            if (job.Plantings.Count > 0)
+                this.PlantNow?.Invoke();
             return job;
+        }
+
+        /// <summary>Whether a job for a number of an item could be queued right now.</summary>
+        public bool CanPlan(string targetId, int count, StorageNetwork network, int targetQuality = Quality.Any, string fertilizerId = null)
+        {
+            return network != null && count > 0 && this.BuildPlan(targetId, count, network, null, targetQuality, fertilizerId).IsSatisfied;
+        }
+
+        /// <summary>Says why a job for a number of an item can't be queued.</summary>
+        public string ExplainShortfall(string targetId, int count, StorageNetwork network, int targetQuality = Quality.Any, string fertilizerId = null)
+        {
+            if (network == null)
+                return "no network here";
+
+            CraftPlan plan = this.BuildPlan(targetId, Math.Max(1, count), network, null, targetQuality, fertilizerId);
+            return plan.IsSatisfied ? null : DescribeShortfall(plan);
+        }
+
+        /// <summary>Whether a job runs on a network.</summary>
+        public bool IsOnNetwork(CraftJob job, StorageNetwork network)
+        {
+            GameLocation location = Game1.getLocationFromName(job.LocationName);
+            return location != null && network != null && network.Contains(location, job.AnchorTile);
+        }
+
+        /// <summary>Automation tiles on a network free to plant on: nothing growing, and no job waiting to plant there.</summary>
+        public List<FreeTile> GetFreeTiles(StorageNetwork network)
+        {
+            List<FreeTile> tiles = network != null ? this.FreeTilesOn?.Invoke(network) : null;
+            return tiles?.Where(tile => this.GetReservation(tile.Location, tile.Tile) == null).ToList() ?? new List<FreeTile>();
+        }
+
+        /// <summary>Plans a job against a network's stock, fields and machines.</summary>
+        private CraftPlan BuildPlan(string targetId, int count, StorageNetwork network, IReadOnlyDictionary<string, string> preferredMachines, int targetQuality, string fertilizerId)
+        {
+            List<NetworkItemStack> stock = network.Aggregate();
+            IReadOnlyList<IFilterableEntry> filterable = stock.Cast<IFilterableEntry>().ToList();
+            this.CraftingRecipes.Refresh(filterable);
+
+            CraftPlanner planner = new(this.CraftingRecipes, this.MachineRecipes, this.Config.MaxCraftDepth);
+            return planner.Plan(targetId, count, filterable, preferredMachines, network.CountUsableMachines, targetQuality, this.GetIncoming(network), this.GetFreeTiles(network), fertilizerId);
+        }
+
+        /// <summary>Names what a plan is short of.</summary>
+        private static string DescribeShortfall(CraftPlan plan)
+        {
+            List<string> parts = plan.Shortfalls.Select(cost => $"{cost.Count}x {GetName(cost.ItemId)}").ToList();
+            if (plan.Root?.Walk().Any(node => node.Reason == MissingReason.NoFreeTiles) == true)
+                parts.Add("free automation tiles");
+            return "short of " + string.Join(", ", parts);
         }
 
         /// <summary>Stops a job and releases any machines it holds.</summary>
@@ -280,16 +352,21 @@ namespace StardewLogistics.Devices
                 this.StartWork(job, network);
                 this.ApplyFairyDust(job, network);
 
-                if (job.Steps.All(step => step.IsComplete))
+                if (job.Steps.All(step => step.IsComplete) && !job.WaitingOnFields)
                 {
                     job.Status = JobStatus.Complete;
                     Log.Debug($"{job.Id} finished: {job.TargetCount}x {job.DisplayName}.");
 
                     // Anything left over -- a bulk machine's extra output, an intermediate made in whole batches
-                    // -- is the network's again.
+                    // -- is the network's again. For an order of a crop itself, that's the harvest.
                     job.Buffer?.ReturnTo(network);
                     foreach (JobStep step in job.Steps)
                         this.ReleaseReservations(job, step);
+
+                    // A stock rule's job has done its part once storage has the goods; the rule itself is the
+                    // record of it, so it doesn't stay on the list to be cleared by hand.
+                    if (job.FromStockRule)
+                        this.JobList.Remove(job);
                 }
             }
         }
@@ -555,12 +632,48 @@ namespace StardewLogistics.Devices
             return crops.Where(crop => this.GetReservation(crop.Location, crop.Tile) == null).ToList();
         }
 
-        /// <summary>The job that has reserved a growing crop, if one has.</summary>
+        /// <summary>The job that has reserved a growing crop, or a tile to plant on, if one has.</summary>
         public CraftJob GetReservation(GameLocation location, Microsoft.Xna.Framework.Vector2 tile)
         {
             return this.JobList.FirstOrDefault(job =>
                 job.Status is not (JobStatus.Complete or JobStatus.Cancelled)
-                && job.CropReservations.Any(crop => crop.Location == location && crop.Tile == tile));
+                && (job.CropReservations.Any(crop => crop.Location == location && crop.Tile == tile)
+                    || job.Plantings.Any(planting => planting.Location == location && planting.Tile == tile)));
+        }
+
+        /// <summary>The seed a job wants planted on an automation tile, if any.</summary>
+        public PlannedPlanting PlantingFor(GameLocation location, Microsoft.Xna.Framework.Vector2 tile)
+        {
+            return this.JobList
+                .Where(job => job.Status is not (JobStatus.Complete or JobStatus.Cancelled))
+                .SelectMany(job => job.Plantings)
+                .FirstOrDefault(planting => planting.Location == location && planting.Tile == tile);
+        }
+
+        /// <summary>Records that a harvester planted, or couldn't plant, a job's seed.</summary>
+        /// <remarks>Once planted, it's a reserved crop like any other: its harvest goes to the job.</remarks>
+        public void PlantingDone(PlannedPlanting planting, bool planted, int days)
+        {
+            CraftJob job = this.JobList.FirstOrDefault(candidate => candidate.Plantings.Contains(planting));
+            if (job == null)
+                return;
+
+            job.Plantings.Remove(planting);
+            if (!planted)
+            {
+                Log.Debug($"{job.Id}: couldn't plant {GetName(planting.SeedId)} at {planting.Tile}; the job will look to storage instead.");
+                return;
+            }
+
+            job.CropReservations.Add(new IncomingCrop
+            {
+                Location = planting.Location,
+                Tile = planting.Tile,
+                HarvesterTile = planting.HarvesterTile,
+                ItemId = planting.ItemId,
+                Count = planting.Count,
+                Days = days
+            });
         }
 
         /// <summary>Takes a reserved crop's harvest for its job, if it's reserved.</summary>
@@ -584,6 +697,27 @@ namespace StardewLogistics.Devices
         private void RefreshCropReservations(CraftJob job)
         {
             int longest = 0;
+
+            // Seeds not planted yet. A tile that's stopped being an automation tile, or that something else has
+            // been planted on, won't be planted: forget it rather than wait.
+            foreach (PlannedPlanting planting in job.Plantings.ToList())
+            {
+                bool occupied = planting.Location.terrainFeatures.TryGetValue(planting.Tile, out StardewValley.TerrainFeatures.TerrainFeature ground)
+                    && ground is StardewValley.TerrainFeatures.HoeDirt { crop: not null } planted
+                    && !planted.crop.dead.Value;
+                bool stillAutomation = planting.Location.Objects.TryGetValue(planting.HarvesterTile, out SObject harvester)
+                    && harvester.ItemId == ModIds.AutoHarvester
+                    && HarvesterSettings.ReadCached(harvester).IsAutomationTile(planting.HarvesterTile, planting.Tile);
+
+                if (occupied || !stillAutomation)
+                {
+                    job.Plantings.Remove(planting);
+                    Log.Debug($"{job.Id}: the automation tile at {planting.Tile} is no longer free; the job will look to storage instead.");
+                    continue;
+                }
+
+                longest = Math.Max(longest, planting.Days);
+            }
 
             foreach (IncomingCrop crop in job.CropReservations.ToList())
             {
@@ -610,11 +744,18 @@ namespace StardewLogistics.Devices
         /// <summary>Says what a job is waiting on from the fields.</summary>
         private static string DescribeCropWait(CraftJob job)
         {
+            if (job.CropReservations.Count == 0)
+            {
+                PlannedPlanting next = job.Plantings.First();
+                return $"waiting to plant {job.Plantings.Count} {StockId.GetDisplayName(next.SeedId)}";
+            }
+
             IncomingCrop last = job.CropReservations.OrderByDescending(crop => crop.Days).First();
+            int count = job.CropReservations.Count + job.Plantings.Count;
             int days = Math.Max(0, (int)Math.Ceiling(job.HarvestWaitMinutes / (double)CraftPlan.MinutesPerDay));
             return days == 0
-                ? $"waiting for {job.CropReservations.Count} {StockId.GetDisplayName(last.ItemId)} to be harvested today"
-                : $"waiting for {job.CropReservations.Count} {StockId.GetDisplayName(last.ItemId)} to grow ({days}d)";
+                ? $"waiting for {count} {StockId.GetDisplayName(last.ItemId)} to be harvested today"
+                : $"waiting for {count} {StockId.GetDisplayName(last.ItemId)} to grow ({days}d)";
         }
 
         /// <summary>Handles a machine being removed from the world, if a job was using it.</summary>
@@ -787,7 +928,7 @@ namespace StardewLogistics.Devices
             // step that can't go on without the player doing something counts as blocked.
             JobStep next = job.Steps.FirstOrDefault(step => step.RemainingBatches > 0);
             job.Status = next?.IsStuck == true ? JobStatus.Blocked : JobStatus.Waiting;
-            job.BlockedReason = next?.WaitReason;
+            job.BlockedReason = next?.WaitReason ?? (job.WaitingOnFields ? DescribeCropWait(job) : null);
         }
 
         /// <summary>Runs as many crafting batches as the materials allow. Crafting is instant.</summary>
@@ -804,7 +945,7 @@ namespace StardewLogistics.Devices
             {
                 // Normally already reserved; this only matters if something went missing along the way. Not while
                 // crops are still coming: that stock isn't this job's.
-                if (job.CropReservations.Count == 0)
+                if (!job.WaitingOnFields)
                 {
                     foreach ((string ingredient, int required) in step.CraftRecipe.recipeList)
                     {
@@ -817,7 +958,7 @@ namespace StardewLogistics.Devices
                 {
                     if (!any)
                     {
-                        if (job.CropReservations.Count > 0)
+                        if (job.WaitingOnFields)
                             step.WaitReason = DescribeCropWait(job);
                         else if (HasEarlierWork(job, step))
                             step.WaitReason = "waiting for an earlier step";
@@ -916,7 +1057,7 @@ namespace StardewLogistics.Devices
                 // While an earlier step is still making this one's input, wait for it rather than taking some from
                 // storage: that stock isn't this job's.
                 bool inputComing = HasEarlierWork(job, step);
-                bool waitingOnCrops = job.CropReservations.Count > 0;
+                bool waitingOnCrops = job.WaitingOnFields;
 
                 if (!this.TryLoadMachine(machine, recipe, job.Buffer, inputComing || waitingOnCrops ? null : network, out int minutes, out List<Item> consumed, out ItemCost? lacking))
                 {
@@ -987,7 +1128,7 @@ namespace StardewLogistics.Devices
             {
                 // A crop still growing, or an earlier step still to finish, is where the ingredient is coming from;
                 // otherwise it's gone.
-                if (job.CropReservations.Count > 0 && !HasEarlierWork(job, step))
+                if (job.WaitingOnFields && !HasEarlierWork(job, step))
                     step.WaitReason = DescribeCropWait(job);
                 else if (HasEarlierWork(job, step))
                 {
@@ -1198,7 +1339,10 @@ namespace StardewLogistics.Devices
                 return;
 
             if (step.DeliversToStorage)
+            {
+                job.Delivered += product.Stack;
                 network.Insert(product);
+            }
 
             if (product.Stack > 0)
                 job.Buffer.Add(product);

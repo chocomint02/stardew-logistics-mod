@@ -21,8 +21,12 @@ namespace StardewLogistics.Framework
         /// <remarks>The first planting always happens; after that, a crop is only planted again if it's set to replant.</remarks>
         public bool Planted { get; set; }
 
+        /// <summary>Whether the tile is set aside for autocrafting, which plants on it when a job needs a crop.</summary>
+        /// <remarks>An automation tile has no seed or fertilizer of its own; the job brings both.</remarks>
+        public bool Automation { get; set; }
+
         /// <summary>Whether the tile has nothing planned on it.</summary>
-        public bool IsEmpty => this.SeedId == null && this.FertilizerId == null;
+        public bool IsEmpty => this.SeedId == null && this.FertilizerId == null && !this.Automation;
     }
 
     /// <summary>An auto-harvester's configuration: the area it works, what to grow where, and what to replant.</summary>
@@ -97,6 +101,14 @@ namespace StardewLogistics.Framework
                 this.Tiles.Remove(outside);
         }
 
+        /// <summary>Whether a world tile is one of this harvester's automation tiles.</summary>
+        public bool IsAutomationTile(Vector2 machineTile, Vector2 tile)
+        {
+            Rectangle area = this.GetArea(machineTile);
+            Point point = new((int)tile.X - area.X, (int)tile.Y - area.Y);
+            return this.Tiles.TryGetValue(point, out TilePlan plan) && plan.Automation;
+        }
+
         /// <summary>Whether a seed will be replanted after its harvest.</summary>
         public bool ShouldReplant(string seedId, bool regrows)
         {
@@ -138,7 +150,8 @@ namespace StardewLogistics.Framework
                         {
                             SeedId = Nullable(fields[3]),
                             FertilizerId = Nullable(fields[4]),
-                            Planted = fields[5] == "1"
+                            Planted = fields[5] == "1",
+                            Automation = fields.Length >= 7 && fields[6] == "1"
                         };
                     }
                 }
@@ -184,7 +197,7 @@ namespace StardewLogistics.Framework
                 text.Append('\n').Append(string.Join("\t", "R", seed, replant ? "1" : "0"));
 
             foreach ((Point point, TilePlan plan) in this.Tiles.Where(pair => !pair.Value.IsEmpty))
-                text.Append('\n').Append(string.Join("\t", "T", point.X, point.Y, plan.SeedId ?? "", plan.FertilizerId ?? "", plan.Planted ? "1" : "0"));
+                text.Append('\n').Append(string.Join("\t", "T", point.X, point.Y, plan.SeedId ?? "", plan.FertilizerId ?? "", plan.Planted ? "1" : "0", plan.Automation ? "1" : "0"));
 
             machine.modData[ModIds.HarvesterKey] = text.ToString();
         }

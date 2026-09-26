@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using StardewValley;
@@ -25,6 +26,13 @@ namespace StardewLogistics.Framework
         /// <summary>The marker the game puts in a crop's last phase, meaning "grown": not a real length.</summary>
         private const int GrownMarker = 99999;
 
+        /// <summary>Speed-Gro, Deluxe Speed-Gro and Hyper Speed-Gro, in the order the planner offers them.</summary>
+        public static readonly string[] SpeedGro = { "(O)465", "(O)466", "(O)918" };
+
+        /// <summary>Seeds by what they yield, built from the crop data it was built from.</summary>
+        private static Dictionary<string, List<string>> SeedsByHarvest;
+        private static object SeedsSource;
+
 
         /*********
         ** Public methods
@@ -32,6 +40,10 @@ namespace StardewLogistics.Framework
         /// <summary>The crop data for a seed, or <c>null</c> if it isn't a seed.</summary>
         public static CropData GetData(string seedId)
         {
+            // Crop data is keyed by object ID; a big craftable numbered like a seed isn't one.
+            if (seedId != null && seedId.StartsWith("(") && !seedId.StartsWith("(O)", StringComparison.OrdinalIgnoreCase))
+                return null;
+
             string id = Unqualify(seedId);
             return id != null && Game1.cropData != null && Game1.cropData.TryGetValue(id, out CropData data) ? data : null;
         }
@@ -162,6 +174,76 @@ namespace StardewLogistics.Framework
             string id = GetData(seedId)?.HarvestItemId;
             return string.IsNullOrEmpty(id) ? null : ItemRegistry.QualifyItemId(id);
         }
+
+        /// <summary>The seeds whose crop yields an item.</summary>
+        /// <remarks>
+        /// The season seed packs are left out: they grow whatever forage the season picks, so they can't be
+        /// planted for anything in particular.
+        /// </remarks>
+        public static IReadOnlyList<string> SeedsFor(string itemId)
+        {
+            if (string.IsNullOrEmpty(itemId) || Game1.cropData == null)
+                return Array.Empty<string>();
+
+            if (SeedsByHarvest == null || !ReferenceEquals(SeedsSource, Game1.cropData))
+            {
+                Dictionary<string, List<string>> index = new(StringComparer.OrdinalIgnoreCase);
+                foreach ((string seed, CropData data) in Game1.cropData)
+                {
+                    if (string.IsNullOrEmpty(data?.HarvestItemId) || seed is "495" or "496" or "497" or "498")
+                        continue;
+
+                    string seedId = ItemRegistry.QualifyItemId(seed);
+                    string harvest = ItemRegistry.QualifyItemId(data.HarvestItemId);
+                    if (seedId == null || harvest == null || ItemRegistry.GetData(seedId) == null)
+                        continue;
+
+                    if (!index.TryGetValue(harvest, out List<string> seeds))
+                        index[harvest] = seeds = new List<string>();
+                    seeds.Add(seedId);
+                }
+
+                SeedsByHarvest = index;
+                SeedsSource = Game1.cropData;
+            }
+
+            return SeedsByHarvest.TryGetValue(itemId, out List<string> found) ? found : Array.Empty<string>();
+        }
+
+        /// <summary>Whether a fertilizer is one of the Speed-Gros.</summary>
+        public static bool IsSpeedGro(string fertilizerId)
+        {
+            string id = string.IsNullOrEmpty(fertilizerId) ? null : ItemRegistry.QualifyItemId(fertilizerId);
+            return id != null && SpeedGro.Contains(id, StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>The fertilizer in some soil, or <c>null</c> if it has none.</summary>
+        /// <remarks>
+        /// Read through this rather than the field: tilled soil can hold "0", which the game treats as no
+        /// fertilizer. Taken at face value, it made every hoed tile look fertilized, so Speed-Gro was never laid.
+        /// </remarks>
+        public static string FertilizerOf(HoeDirt soil)
+        {
+            return soil != null && soil.HasFertilizer() ? soil.fertilizer.Value : null;
+        }
+
+        /// <summary>Whether the crop in some soil was planted by autocrafting.</summary>
+        public static bool IsAutomationCrop(HoeDirt soil)
+        {
+            return soil?.crop != null
+                && soil.modData.TryGetValue(ModIds.AutomationCropKey, out string seed)
+                && string.Equals(seed, soil.crop.netSeedIndex.Value, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Marks the crop in some soil as planted by autocrafting.</summary>
+        public static void MarkAutomationCrop(HoeDirt soil)
+        {
+            if (soil?.crop != null)
+                soil.modData[ModIds.AutomationCropKey] = soil.crop.netSeedIndex.Value ?? "";
+        }
+
+        /// <summary>Clears the automation mark from soil whose crop is gone.</summary>
+        public static void ClearAutomationMark(HoeDirt soil) => soil?.modData.Remove(ModIds.AutomationCropKey);
 
         /// <summary>A seed's unqualified ID, which is how crop data is keyed.</summary>
         public static string Unqualify(string seedId)

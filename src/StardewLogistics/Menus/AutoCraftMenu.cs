@@ -31,7 +31,8 @@ namespace StardewLogistics.Menus
         MachineMin,
         MachineMax,
         Quality,
-        FairyDust
+        FairyDust,
+        Fertilizer
     }
 
     internal class AutoCraftMenu : IClickableMenu
@@ -90,6 +91,26 @@ namespace StardewLogistics.Menus
         /// <summary>Runs per share that Fairy Dust will speed up, for the time estimate.</summary>
         private readonly Dictionary<MachineAssignment, int> Dusted = new();
 
+        /// <summary>The fertilizer laid under crops the job plants, or <c>null</c> for none.</summary>
+        private string FertilizerId;
+
+        /// <summary>How much of that fertilizer storage holds.</summary>
+        private long FertilizerAvailable;
+
+        /// <summary>Whether the fertilizer choice is shown: the plan plants something, or a fertilizer is chosen.</summary>
+        private bool ShowFertilizer;
+
+        /// <summary>Speed-Gro icons for the fertilizer choice, by item ID.</summary>
+        private readonly Dictionary<string, Item> FertilizerIcons = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The stock rule being changed, if the menu was opened for one.</summary>
+        private readonly StockRule EditingRule;
+
+        /// <summary>Saves a stock rule, with the key of the rule it replaces if it's an edit; <c>null</c> if rules can't be set here.</summary>
+        private readonly Action<StockRule, string> OnKeepStocked;
+
+        private ClickableComponent KeepButton;
+
         /// <summary>The quality to age the product to, or <see cref="Quality.Any"/> for no aging.</summary>
         private int TargetQuality = Quality.Any;
 
@@ -113,8 +134,10 @@ namespace StardewLogistics.Menus
         /*********
         ** Public methods
         *********/
-        public AutoCraftMenu(string targetId, string targetName, StorageNetwork network, RecipeIndex crafting, MachineRecipeIndex machineRecipes, JobRunner jobs, ModConfig config, ITranslationHelper translations, Action onClose)
+        public AutoCraftMenu(string targetId, string targetName, StorageNetwork network, RecipeIndex crafting, MachineRecipeIndex machineRecipes, JobRunner jobs, ModConfig config, ITranslationHelper translations, Action onClose, StockRule rule = null, Action<StockRule, string> onKeepStocked = null)
         {
+            this.EditingRule = rule;
+            this.OnKeepStocked = onKeepStocked;
             this.TargetId = targetId;
             this.TargetName = targetName;
             this.Network = network;
@@ -145,6 +168,21 @@ namespace StardewLogistics.Menus
                 Height = 44,
                 Text = "1"
             };
+
+            // Editing a rule starts from what it's set to.
+            if (rule != null)
+            {
+                this.Quantity = Math.Clamp(rule.Target, 1, 9999);
+                this.QuantityBox.Text = this.LastText = this.Quantity.ToString();
+                this.TargetQuality = this.ShowQuality ? rule.Quality : Quality.Any;
+                this.UseFairyDust = rule.UseFairyDust;
+                this.FertilizerId = rule.FertilizerId;
+                if (rule.MaxMachines > 0)
+                {
+                    this.MaxMachines = rule.MaxMachines;
+                    this.MachinesPinned = true;
+                }
+            }
 
             this.BuildButtons();
             this.Replan();
@@ -192,7 +230,7 @@ namespace StardewLogistics.Menus
 
             foreach ((Rectangle bounds, StepAction action, int delta) in this.StepButtons)
             {
-                if (!bounds.Contains(x, y) || (action == StepAction.FairyDust && !this.CanDust))
+                if (!bounds.Contains(x, y) || (action == StepAction.FairyDust && !this.CanDust) || (action == StepAction.Fertilizer && !this.ShowFertilizer))
                     continue;
 
                 switch (action)
@@ -216,6 +254,12 @@ namespace StardewLogistics.Menus
                         this.UseFairyDust = !this.UseFairyDust;
                         this.UpdateDustEstimate();
                         break;
+                    case StepAction.Fertilizer:
+                        // None, then each Speed-Gro from weakest to strongest, then back round.
+                        int index = Array.IndexOf(CropMath.SpeedGro, this.FertilizerId);
+                        this.FertilizerId = index + 1 < CropMath.SpeedGro.Length ? CropMath.SpeedGro[index + 1] : null;
+                        this.Replan();
+                        break;
                     case StepAction.Quality:
                         this.TargetQuality = delta <= 0 ? Quality.Any : delta;
                         this.Replan();
@@ -234,11 +278,17 @@ namespace StardewLogistics.Menus
             // A processing step with more than one capable machine can be reassigned.
             PlanNode row = this.GetRowAt(x, y);
 
-            // A harvest row opens the field it's growing in.
+            // A harvest row opens the field it's growing in, or will be planted in.
             if (row?.Harvests.Count > 0)
             {
                 IncomingCrop crop = row.Harvests[0];
                 HarvesterPlanMenu.OpenFieldView(this.Jobs.NetworkManager, this.Translations, crop.Location, crop.HarvesterTile, this.Jobs.GetReservation);
+                return;
+            }
+            if (row?.Plantings.Count > 0)
+            {
+                PlannedPlanting planting = row.Plantings[0];
+                HarvesterPlanMenu.OpenFieldView(this.Jobs.NetworkManager, this.Translations, planting.Location, planting.HarvesterTile, this.Jobs.GetReservation);
                 return;
             }
 
@@ -255,8 +305,10 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.StartButton.containsPoint(x, y))
+            if (this.StartButton != null && this.StartButton.containsPoint(x, y))
                 this.Start();
+            else if (this.KeepButton != null && this.KeepButton.containsPoint(x, y))
+                this.KeepStocked();
         }
 
         /// <inheritdoc />
@@ -294,11 +346,25 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.StartButton.containsPoint(x, y))
+            if (this.StartButton?.containsPoint(x, y) == true)
             {
                 this.HoverText = this.Plan?.IsSatisfied == true
                     ? this.Translations.Get("auto.start-hint")
                     : this.Translations.Get("auto.cannot-start");
+                return;
+            }
+
+            if (this.KeepButton?.containsPoint(x, y) == true)
+            {
+                this.HoverText = this.Translations.Get("auto.keep-hint", new { count = this.Quantity, name = this.TargetName });
+                return;
+            }
+
+            if (this.ShowFertilizer && this.StepButtons.Any(button => button.Action == StepAction.Fertilizer && button.Bounds.Contains(x, y)))
+            {
+                this.HoverText = this.FertilizerId == null
+                    ? this.Translations.Get("auto.fertilizer-off")
+                    : this.Translations.Get("auto.fertilizer-on", new { name = GetName(this.FertilizerId), count = this.FertilizerAvailable });
                 return;
             }
 
@@ -310,7 +376,9 @@ namespace StardewLogistics.Menus
             }
 
             PlanNode row = this.GetRowAt(x, y);
-            if (row?.Harvests.Count > 0)
+            if (row?.Plantings.Count > 0)
+                this.HoverText = this.Translations.Get("auto.grow-hint", new { count = row.Plantings.Count });
+            else if (row?.Harvests.Count > 0)
                 this.HoverText = this.Translations.Get("auto.harvest-hint", new { count = row.Harvests.Count });
             else if (row is { Kind: PlanStepKind.Process } && row.Alternatives.Count > 1)
                 this.HoverText = this.Translations.Get("auto.change-machine");
@@ -363,7 +431,7 @@ namespace StardewLogistics.Menus
                 StringComparer.OrdinalIgnoreCase);
 
             CraftPlanner planner = new(this.Crafting, this.MachineRecipes, this.Config.MaxCraftDepth);
-            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, this.CountUsable, this.TargetQuality, this.Jobs.GetIncoming(this.Network));
+            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, this.CountUsable, this.TargetQuality, this.Jobs.GetIncoming(this.Network), this.Jobs.GetFreeTiles(this.Network), this.FertilizerId);
 
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));
@@ -386,6 +454,10 @@ namespace StardewLogistics.Menus
             this.Allocations.Clear();
             foreach (PlanNode node in processing)
                 this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable);
+
+            // Speed-Gro only matters when the plan plants something; once chosen it stays, so it can be switched off.
+            this.ShowFertilizer = this.FertilizerId != null || this.Rows.Any(node => node.Plantings.Count > 0);
+            this.FertilizerAvailable = this.FertilizerId != null ? this.Network?.CountById(this.FertilizerId) ?? 0 : this.Network?.CountById(CropMath.SpeedGro[0]) ?? 0;
 
             this.DustAvailable = (int)Math.Min(int.MaxValue, this.Network?.CountById(Devices.JobRunner.FairyDustId) ?? 0);
             this.CanDust = this.DustAvailable > 0
@@ -536,7 +608,7 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            CraftJob job = this.Jobs.TryQueue(this.TargetId, this.Quantity, this.Network, this.MaxMachines, this.Preferences, out string error, this.TargetQuality, this.UseFairyDust);
+            CraftJob job = this.Jobs.TryQueue(this.TargetId, this.Quantity, this.Network, this.MaxMachines, this.Preferences, out string error, this.TargetQuality, this.UseFairyDust, this.FertilizerId);
             if (job == null)
             {
                 Game1.addHUDMessage(new HUDMessage(error, HUDMessage.error_type));
@@ -545,6 +617,29 @@ namespace StardewLogistics.Menus
 
             Game1.playSound("bigSelect");
             Game1.addHUDMessage(new HUDMessage(this.Translations.Get("auto.queued", new { count = this.Quantity, name = this.TargetName }), HUDMessage.newQuest_type));
+            this.exitThisMenu();
+        }
+
+
+        /// <summary>Saves a minimum-stock rule for the item, at the quantity and settings chosen, and closes.</summary>
+        private void KeepStocked()
+        {
+            if (this.OnKeepStocked == null)
+                return;
+
+            StockRule rule = new()
+            {
+                ItemId = this.TargetId,
+                Quality = this.TargetQuality,
+                Target = this.Quantity,
+                UseFairyDust = this.UseFairyDust,
+                FertilizerId = this.FertilizerId,
+                MaxMachines = this.MachinesPinned ? this.MaxMachines : 0
+            };
+
+            this.OnKeepStocked(rule, this.EditingRule?.Key);
+            Game1.playSound("bigSelect");
+            Game1.addHUDMessage(new HUDMessage(this.Translations.Get("auto.rule-saved", new { count = this.Quantity, name = this.TargetName }), HUDMessage.newQuest_type));
             this.exitThisMenu();
         }
 
@@ -590,6 +685,9 @@ namespace StardewLogistics.Menus
             // Fairy Dust sits at the end of the machine row: it's another way of getting more out of the machines.
             this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 660, machineY - 2, 52, 44), StepAction.FairyDust, 0));
 
+            // And Speed-Gro beside it, which does the same for the crops the job plants.
+            this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 800, machineY - 2, 52, 44), StepAction.Fertilizer, 0));
+
             // Quality on a third row, only for things a cask can age: Normal (no aging), then a star per quality.
             if (this.ShowQuality)
             {
@@ -605,7 +703,18 @@ namespace StardewLogistics.Menus
             }
 
             this.QuantityBounds = new ClickableComponent(new Rectangle(this.QuantityBox.X, this.QuantityBox.Y, this.QuantityBox.Width, this.QuantityBox.Height), "quantity");
-            this.StartButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + (this.width / 2) - 130, this.yPositionOnScreen + this.height - 88, 260, 64), "start");
+            // Start and Keep stocked side by side; editing a rule offers only the save.
+            int buttonY = this.yPositionOnScreen + this.height - 88;
+            int centre = this.xPositionOnScreen + (this.width / 2);
+            if (this.EditingRule != null && this.OnKeepStocked != null)
+                this.KeepButton = new ClickableComponent(new Rectangle(centre - 130, buttonY, 260, 64), "keep");
+            else if (this.OnKeepStocked != null)
+            {
+                this.StartButton = new ClickableComponent(new Rectangle(centre - 270, buttonY, 260, 64), "start");
+                this.KeepButton = new ClickableComponent(new Rectangle(centre + 10, buttonY, 260, 64), "keep");
+            }
+            else
+                this.StartButton = new ClickableComponent(new Rectangle(centre - 130, buttonY, 260, 64), "start");
         }
 
         /// <summary>The area the tree is drawn in.</summary>
@@ -643,10 +752,10 @@ namespace StardewLogistics.Menus
         /// <summary>Draws the title, quantity controls and machine allowance.</summary>
         private void DrawHeader(SpriteBatch b)
         {
-            string title = this.Translations.Get("auto.title", new { name = this.TargetName });
-            Utility.drawTextWithShadow(b, title, Game1.dialogueFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 24), Game1.textColor);
+            string title = this.Translations.Get(this.EditingRule != null ? "auto.rule-title" : "auto.title", new { name = this.TargetName });
+            Marquee.Draw(b, title, Game1.dialogueFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 24), this.width - 120, Game1.textColor);
 
-            Utility.drawTextWithShadow(b, this.Translations.Get("auto.quantity"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 96), Game1.textColor);
+            Utility.drawTextWithShadow(b, this.Translations.Get(this.EditingRule != null ? "auto.keep-quantity" : "auto.quantity"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 96), Game1.textColor);
             Utility.drawTextWithShadow(b, this.Translations.Get("auto.machines"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 148), Game1.textColor);
             if (this.ShowQuality)
                 Utility.drawTextWithShadow(b, this.Translations.Get("auto.quality"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 200), Game1.textColor);
@@ -655,6 +764,26 @@ namespace StardewLogistics.Menus
             {
                 if (action == StepAction.FairyDust && !this.CanDust)
                     continue;
+
+                // Speed-Gro works the same way: the chosen one lit in gold, or plain Speed-Gro dimmed when off.
+                if (action == StepAction.Fertilizer)
+                {
+                    if (!this.ShowFertilizer)
+                        continue;
+
+                    string shown = this.FertilizerId ?? CropMath.SpeedGro[0];
+                    if (!this.FertilizerIcons.TryGetValue(shown, out Item fertilizerIcon))
+                        this.FertilizerIcons[shown] = fertilizerIcon = ItemRegistry.Create(shown, allowNull: true);
+
+                    bool on = this.FertilizerId != null;
+                    drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, on ? Color.Gold : Color.White, 2f, drawShadow: false);
+                    fertilizerIcon?.drawInMenu(b, new Vector2(bounds.Center.X - 32, bounds.Center.Y - 32), 0.6f, on ? 1f : 0.4f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+
+                    string held = "x" + this.FertilizerAvailable;
+                    Vector2 heldSize = Game1.smallFont.MeasureString(held);
+                    Utility.drawTextWithShadow(b, held, Game1.smallFont, new Vector2(bounds.Right + 8, bounds.Center.Y - (heldSize.Y / 2)), on ? Game1.textColor : Game1.textColor * 0.6f);
+                    continue;
+                }
 
                 // Fairy Dust is a picture of the dust itself: lit in a gold frame when on, dimmed when off, with
                 // how much storage holds beside it.
@@ -781,18 +910,35 @@ namespace StardewLogistics.Menus
                 Utility.drawTextWithShadow(b, shortfall, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 52), Color.Firebrick);
             }
 
-            bool enabled = this.Plan?.IsSatisfied == true;
-            Rectangle bounds = this.StartButton.bounds;
-            drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, enabled ? Color.White : Color.Gray, 3f, drawShadow: false);
+            if (this.StartButton != null)
+            {
+                bool enabled = this.Plan?.IsSatisfied == true;
+                Rectangle bounds = this.StartButton.bounds;
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, enabled ? Color.White : Color.Gray, 3f, drawShadow: false);
 
-            string label = this.Translations.Get("auto.start");
-            Vector2 size = Game1.smallFont.MeasureString(label);
-            Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), enabled ? Game1.textColor : Color.DimGray);
+                string label = this.Translations.Get("auto.start");
+                Vector2 size = Game1.smallFont.MeasureString(label);
+                Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), enabled ? Game1.textColor : Color.DimGray);
+            }
+
+            // A rule can be set whether or not the network could make any right now: it waits until it can.
+            if (this.KeepButton != null)
+            {
+                Rectangle bounds = this.KeepButton.bounds;
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.LightGoldenrodYellow, 3f, drawShadow: false);
+
+                string label = this.Translations.Get(this.EditingRule != null ? "auto.update-rule" : "auto.keep-stocked");
+                Vector2 size = Game1.smallFont.MeasureString(label);
+                Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
+            }
         }
 
         /// <summary>Describes how a plan step will be supplied.</summary>
         private string DescribeStep(PlanNode node)
         {
+            if (node.Plantings.Count > 0)
+                return this.Translations.Get("auto.step-grow", new { tiles = node.Plantings.Count, days = node.HarvestDays });
+
             if (node.Kind == PlanStepKind.FromStock && node.FromHarvest > 0)
             {
                 return node.HarvestDays <= 0

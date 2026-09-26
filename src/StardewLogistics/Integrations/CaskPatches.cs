@@ -10,8 +10,8 @@ namespace StardewLogistics.Integrations
     /// <remarks>
     /// Hitting a cask with a pickaxe or axe pops its item out as debris, which is how a player takes something
     /// out early. For a cask a job is using, that item is the job's -- a wine partway to iridium -- so it goes back
-    /// into the job instead, which then carries on aging it in another cask. The one patch the mod makes: there's
-    /// no event to hook, and by the time the debris exists the item has already left the cask.
+    /// into the job instead, which then carries on aging it in another cask. A patch because there's no event to
+    /// hook, and by the time the debris exists the item has already left the cask.
     /// </remarks>
     internal static class CaskPatches
     {

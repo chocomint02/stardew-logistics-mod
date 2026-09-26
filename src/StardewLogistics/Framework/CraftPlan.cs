@@ -47,7 +47,10 @@ namespace StardewLogistics.Framework
         RecipeLoop,
 
         /// <summary>The recipe asked for a category rather than a specific item.</summary>
-        NotAnItem
+        NotAnItem,
+
+        /// <summary>A crop that could be grown, but there aren't enough free automation tiles for it.</summary>
+        NoFreeTiles
     }
 
     /// <summary>A share of a processing step handed to one kind of machine.</summary>
@@ -94,6 +97,10 @@ namespace StardewLogistics.Framework
 
         /// <summary>The growing crops this row waits on, which a job reserves.</summary>
         public List<IncomingCrop> Harvests { get; set; } = new();
+
+        /// <summary>Seeds to plant on free automation tiles for this row, whose harvest a job waits on.</summary>
+        /// <remarks>Their seed and any fertilizer are this row's children, drawn from storage like any ingredient.</remarks>
+        public List<PlannedPlanting> Plantings { get; set; } = new();
 
         /// <summary>How much was drawn from storage at each quality, lowest first.</summary>
         public List<(int Quality, int Count)> StockParts { get; set; } = new();

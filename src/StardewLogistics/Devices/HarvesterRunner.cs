@@ -32,6 +32,15 @@ namespace StardewLogistics.Devices
         /// <summary>Every auto-harvester in the world, or <c>null</c> if they need finding again.</summary>
         private List<(GameLocation Location, Vector2 Tile)> Harvesters;
 
+        /// <summary>The tiles in harvesters' areas tonight, by location, whose soil mustn't revert.</summary>
+        private readonly Dictionary<GameLocation, HashSet<Vector2>> ProtectedTiles = new();
+
+        /// <summary>Empty soil in harvesters' areas at the end of the day, to put back if the night took it anyway.</summary>
+        private readonly List<(GameLocation Location, Vector2 Tile, string Fertilizer)> EmptySoil = new();
+
+        /// <summary>The season when <see cref="EmptySoil"/> was noted; a new season clears fertilizer from empty soil.</summary>
+        private Season EmptySoilSeason;
+
 
         /*********
         ** Accessors
@@ -39,6 +48,12 @@ namespace StardewLogistics.Devices
         /// <summary>Takes a crop's harvest for the autocrafting job that reserved it, if any.</summary>
         /// <remarks>Returns where the harvest should go instead of storage, or <c>null</c> if the crop isn't reserved.</remarks>
         public Func<GameLocation, Vector2, JobBuffer> ClaimHarvest { get; set; }
+
+        /// <summary>The seed an autocrafting job wants planted on an automation tile, if any.</summary>
+        public Func<GameLocation, Vector2, PlannedPlanting> PlantingFor { get; set; }
+
+        /// <summary>Reports a job's planting done -- or not, if it couldn't be -- with days until harvest.</summary>
+        public Action<PlannedPlanting, bool, int> PlantingDone { get; set; }
 
 
         /*********
@@ -96,9 +111,14 @@ namespace StardewLogistics.Devices
                     if (soil?.crop != null)
                     {
                         if (soil.crop.dead.Value)
+                        {
                             soil.destroyCrop(showAnimation: false);
+                            CropMath.ClearAutomationMark(soil);
+                        }
                         else if (soil.readyForHarvest())
                         {
+                            bool automationCrop = CropMath.IsAutomationCrop(soil);
+
                             // A crop an autocrafting job reserved goes to that job, not storage, so storage room
                             // doesn't matter for it.
                             JobBuffer reserved = this.ClaimHarvest?.Invoke(location, tile);
@@ -113,7 +133,31 @@ namespace StardewLogistics.Devices
                             else if (!HasRoomForHarvest(soil.crop, network))
                                 waiting++;
                             else if (this.Harvest(location, tile, soil, item => { network.Insert(item); return item.Stack <= 0; }))
+                            {
                                 harvested++;
+
+                                // A crop autocrafting planted that regrows keeps going while jobs want its harvest.
+                                // Once one goes to storage instead, nothing does: clear it and free the tile.
+                                if (automationCrop && soil.crop != null)
+                                    soil.destroyCrop(showAnimation: false);
+                            }
+
+                            if (soil.crop == null)
+                                CropMath.ClearAutomationMark(soil);
+                        }
+                    }
+
+                    // An automation tile with nothing growing: plant whatever a job is waiting to have planted.
+                    if (plan?.Automation == true && (soil?.crop == null || soil.crop.dead.Value))
+                    {
+                        PlannedPlanting order = this.PlantingFor?.Invoke(location, tile);
+                        if (order != null)
+                        {
+                            soil ??= this.Till(location, tile);
+                            bool done = soil != null && this.PlantForJob(location, tile, soil, order, network);
+                            this.PlantingDone?.Invoke(order, done, done ? CropMath.DaysUntilHarvest(soil) ?? order.Days : 0);
+                            if (done)
+                                planted++;
                         }
                     }
 
@@ -272,6 +316,169 @@ namespace StardewLogistics.Devices
                 : this.GetHarvesters().Where(entry => network.Contains(entry.Item1, entry.Item2));
         }
 
+        /// <summary>Notes every harvester's area before the night, so its soil stays tilled through it.</summary>
+        /// <remarks>
+        /// The game's own overnight decay is switched off for these tiles (see <c>SoilPatches</c>); the empty soil
+        /// noted here is the fallback, put back in the morning if something else cleared it.
+        /// </remarks>
+        public void BeforeNight()
+        {
+            this.ProtectedTiles.Clear();
+            this.EmptySoil.Clear();
+            this.EmptySoilSeason = Game1.season;
+
+            foreach ((GameLocation location, Vector2 machineTile) in this.GetHarvesters())
+            {
+                if (!location.Objects.TryGetValue(machineTile, out SObject machine) || machine.ItemId != ModIds.AutoHarvester)
+                    continue;
+
+                if (!this.ProtectedTiles.TryGetValue(location, out HashSet<Vector2> tiles))
+                    this.ProtectedTiles[location] = tiles = new HashSet<Vector2>();
+
+                Rectangle area = HarvesterSettings.ReadCached(machine).GetArea(machineTile);
+                for (int y = area.Top; y < area.Bottom; y++)
+                {
+                    for (int x = area.Left; x < area.Right; x++)
+                    {
+                        Vector2 tile = new(x, y);
+                        tiles.Add(tile);
+
+                        if (location.terrainFeatures.TryGetValue(tile, out TerrainFeature feature) && feature is HoeDirt soil && (soil.crop == null || soil.crop.dead.Value))
+                            this.EmptySoil.Add((location, tile, CropMath.FertilizerOf(soil)));
+                    }
+                }
+            }
+        }
+
+        /// <summary>Whether a tile's soil is being kept tilled tonight.</summary>
+        public bool IsProtected(GameLocation location, Vector2 tile)
+        {
+            return location != null && this.ProtectedTiles.TryGetValue(location, out HashSet<Vector2> tiles) && tiles.Contains(tile);
+        }
+
+        /// <summary>Puts back any harvester soil the night took despite the protection, as it was.</summary>
+        public void RestoreSoil()
+        {
+            int restored = 0;
+            bool newSeason = Game1.season != this.EmptySoilSeason;
+
+            foreach ((GameLocation location, Vector2 tile, string fertilizer) in this.EmptySoil)
+            {
+                if (location.terrainFeatures.ContainsKey(tile) || location.Objects.ContainsKey(tile))
+                    continue;
+
+                HoeDirt soil = new(location.IsOutdoors && location.IsRainingHere() ? HoeDirt.watered : HoeDirt.dry, location);
+
+                // A new season takes fertilizer from empty soil, as the game does for soil that stayed.
+                if (fertilizer != null && (!newSeason || location.SeedsIgnoreSeasonsHere()))
+                    soil.fertilizer.Value = fertilizer;
+
+                location.terrainFeatures.Add(tile, soil);
+                restored++;
+            }
+
+            if (restored > 0)
+                Log.Trace($"Kept {restored} tiles of soil under auto-harvesters tilled overnight.");
+
+            this.ProtectedTiles.Clear();
+            this.EmptySoil.Clear();
+        }
+
+        /// <summary>Automation tiles on a network's harvesters with nothing growing on them.</summary>
+        /// <remarks>Includes bare ground that could be tilled; the harvester tills it when it plants.</remarks>
+        public List<FreeTile> FreeTiles(StorageNetwork network)
+        {
+            List<FreeTile> free = new();
+            if (network == null)
+                return free;
+
+            foreach ((GameLocation location, Vector2 machineTile) in this.GetHarvesters())
+            {
+                if (!network.Contains(location, machineTile) || !location.Objects.TryGetValue(machineTile, out SObject machine) || machine.ItemId != ModIds.AutoHarvester)
+                    continue;
+
+                HarvesterSettings settings = HarvesterSettings.ReadCached(machine);
+                Rectangle area = settings.GetArea(machineTile);
+                foreach ((Point point, TilePlan plan) in settings.Tiles)
+                {
+                    if (!plan.Automation)
+                        continue;
+
+                    Vector2 tile = new(area.X + point.X, area.Y + point.Y);
+                    location.terrainFeatures.TryGetValue(tile, out TerrainFeature feature);
+                    HoeDirt soil = feature as HoeDirt;
+
+                    if (soil?.crop != null && !soil.crop.dead.Value)
+                        continue;
+                    if (soil == null && !HarvesterPlanCheck.CanTill(location, tile, feature))
+                        continue;
+
+                    free.Add(new FreeTile
+                    {
+                        Location = location,
+                        Tile = tile,
+                        HarvesterTile = machineTile,
+                        Fertilizer = CropMath.FertilizerOf(soil)
+                    });
+                }
+            }
+
+            return free;
+        }
+
+        /// <summary>Plants an autocrafting job's seed, laying its fertilizer first, from what the job set aside.</summary>
+        /// <returns>Whether the seed went in.</returns>
+        private bool PlantForJob(GameLocation location, Vector2 tile, HoeDirt soil, PlannedPlanting order, StorageNetwork network)
+        {
+            if (soil.crop != null)
+                soil.destroyCrop(showAnimation: false); // a dead one
+
+            // Fertilizer first, while the soil will still take it. The job's Speed-Gro replaces any other kind --
+            // soil only holds one -- which the plan counted on.
+            string existing = CropMath.FertilizerOf(soil);
+            if (order.FertilizerId != null && existing != null && !CropMath.IsSpeedGro(existing))
+                soil.fertilizer.Value = null;
+
+            if (order.FertilizerId != null && !soil.HasFertilizer() && soil.CanApplyFertilizer(order.FertilizerId))
+            {
+                Item fertilizer = order.Buffer?.Take(order.FertilizerId, 1).FirstOrDefault()
+                    ?? network.ExtractById(order.FertilizerId, 1).FirstOrDefault();
+                if (fertilizer != null && !soil.plant(order.FertilizerId, Game1.player, isFertilizer: true))
+                {
+                    if (order.Buffer != null)
+                        order.Buffer.Add(fertilizer);
+                    else
+                        network.Insert(fertilizer);
+                }
+            }
+
+            Item seed = order.Buffer?.Take(order.SeedId, 1).FirstOrDefault()
+                ?? network.ExtractById(order.SeedId, 1).FirstOrDefault();
+            if (seed == null)
+            {
+                LogOnce($"no {order.SeedId} for a job", $"Auto-harvester at {location.NameOrUniqueName}: a job wanted {StockId.GetDisplayName(order.SeedId)} planted at {tile}, but there was none left.");
+                return false;
+            }
+
+            if (!location.CanPlantSeedsHere(CropMath.Unqualify(order.SeedId), (int)tile.X, (int)tile.Y, isGardenPot: false, out _)
+                || !soil.plant(CropMath.Unqualify(order.SeedId), Game1.player, isFertilizer: false))
+            {
+                if (order.Buffer != null)
+                    order.Buffer.Add(seed);
+                else
+                    network.Insert(seed);
+                LogOnce($"refused job {order.SeedId}", $"Auto-harvester at {location.NameOrUniqueName}: the game wouldn't let {StockId.GetDisplayName(order.SeedId)} be planted at {tile} for a job.");
+                return false;
+            }
+
+            CropMath.MarkAutomationCrop(soil);
+            if (!(location.IsOutdoors && location.IsRainingHere()))
+                soil.state.Value = HoeDirt.watered;
+
+            Log.Trace($"Auto-harvester at {location.NameOrUniqueName}: planted {StockId.GetDisplayName(order.SeedId)} at {tile} for an autocrafting job.");
+            return true;
+        }
+
         /// <summary>Tills a tile for planting, if the ground allows it.</summary>
         /// <returns>The new soil, or <c>null</c> if the tile can't be tilled -- something's in the way, or it isn't soil.</returns>
         private HoeDirt Till(GameLocation location, Vector2 tile)
@@ -302,7 +509,7 @@ namespace StardewLogistics.Devices
         /// <summary>Plants the planned seed on empty soil, if it should be and there's time for it to grow.</summary>
         private bool TryPlant(GameLocation location, Vector2 tile, HoeDirt soil, TilePlan plan, HarvesterSettings settings, StorageNetwork network)
         {
-            if (!ShouldPlant(location, tile, soil.fertilizer.Value, plan, settings))
+            if (!ShouldPlant(location, tile, CropMath.FertilizerOf(soil), plan, settings))
                 return false;
 
             Item seed = network.ExtractById(plan.SeedId, 1).FirstOrDefault();
