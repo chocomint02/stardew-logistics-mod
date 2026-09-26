@@ -15,6 +15,9 @@ namespace StardewLogistics.Menus
         ** Fields
         *********/
         private List<AutoTarget> AllTargets = new();
+
+        /// <summary>Icons for job targets, built once rather than every frame.</summary>
+        private readonly Dictionary<string, Item> JobIcons = new(StringComparer.OrdinalIgnoreCase);
         private List<AutoTarget> VisibleTargets = new();
         private AutoTarget HoverTarget;
 
@@ -93,12 +96,16 @@ namespace StardewLogistics.Menus
                     .Where(id => id != null),
                 StringComparer.OrdinalIgnoreCase);
 
-            foreach (MachineRecipe recipe in this.MachineRecipes.All)
+            // Recipes taking a category are only listed for what storage holds: Starfruit in storage puts
+            // Starfruit Wine on the list, and nothing else of its kind.
+            List<Item> held = this.AllStock.Select(entry => entry.Sample).Where(sample => sample != null).ToList();
+
+            foreach (MachineRecipe recipe in this.MachineRecipes.GetOrderable(held))
             {
                 if (!available.Contains(recipe.MachineId) || targets.ContainsKey(recipe.OutputId))
                     continue;
 
-                Item sample = TryCreate(recipe.OutputId);
+                Item sample = recipe.OutputSample?.getOne() ?? TryCreate(recipe.OutputId);
                 if (sample == null)
                     continue;
 
@@ -117,10 +124,9 @@ namespace StardewLogistics.Menus
             Dictionary<string, long> stock = new(StringComparer.OrdinalIgnoreCase);
             foreach (NetworkItemStack entry in this.AllStock)
             {
-                string id = entry.Sample?.QualifiedItemId;
-                if (id == null)
-                    continue;
-                stock[id] = stock.TryGetValue(id, out long existing) ? existing + entry.Count : entry.Count;
+                // Counted both ways: a flavoured target wants its own flavour's count, a plain one wants them all.
+                foreach (string id in new[] { StockId.Of(entry.Sample), entry.Sample?.QualifiedItemId }.Where(id => id != null).Distinct())
+                    stock[id] = stock.TryGetValue(id, out long existing) ? existing + entry.Count : entry.Count;
             }
 
             foreach (AutoTarget target in targets.Values)
@@ -316,13 +322,26 @@ namespace StardewLogistics.Menus
                 int y = grid.Y + (i * rowHeight);
                 drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), grid.X, y, grid.Width, rowHeight - 8, Color.White * 0.9f, 1f, drawShadow: false);
 
-                Utility.drawTextWithShadow(b, $"{job.TargetCount}x {job.DisplayName}", Game1.smallFont, new Vector2(grid.X + 18, y + 14), Game1.textColor);
+                // The item being made, centred in the row's left edge as a 48px icon.
+                Item icon = this.GetJobIcon(job.TargetId);
+                if (icon != null)
+                {
+                    bool tall = icon is StardewValley.Object obj && obj.bigCraftable.Value;
+                    // drawInMenu centres on position + (32,32), so offset back to land a 48px icon at (x+14, y+20).
+                    icon.drawInMenu(b, new Vector2(grid.X + 6, y + 12), tall ? 0.375f : 0.75f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+                }
+
+                int textX = grid.X + 72;
+
+                // Leave the progress bar its column; text too long for the space scrolls within it.
+                int textWidth = grid.X + 420 - 16 - textX;
+                Marquee.Draw(b, $"{job.TargetCount}x {job.DisplayName}", Game1.smallFont, new Vector2(textX, y + 14), textWidth, Game1.textColor);
 
                 string status = this.Translations.Get("jobs.status-" + job.Status.ToString().ToLowerInvariant());
-                if (job.Status == JobStatus.Blocked && job.BlockedReason != null)
+                if ((job.Status is JobStatus.Blocked or JobStatus.Waiting) && job.BlockedReason != null)
                     status += $": {job.BlockedReason}";
 
-                Utility.drawTextWithShadow(b, status, Game1.smallFont, new Vector2(grid.X + 18, y + 48),
+                Marquee.Draw(b, status, Game1.smallFont, new Vector2(textX, y + 48), textWidth,
                     job.Status == JobStatus.Blocked ? Color.Firebrick : Game1.textColor * 0.65f);
 
                 // Progress bar
@@ -336,7 +355,7 @@ namespace StardewLogistics.Menus
                 string percent = $"{job.Progress * 100:0}%";
                 Utility.drawTextWithShadow(b, percent, Game1.smallFont, new Vector2(barX + barWidth + 14, y + 20), Game1.textColor);
 
-                if (job.Status is JobStatus.Running or JobStatus.Pending)
+                if (job.Status is JobStatus.Running or JobStatus.Pending or JobStatus.Waiting)
                 {
                     string eta = this.Translations.Get("jobs.eta", new { time = FormatGameTime(job.EstimatedMinutesRemaining) });
                     Utility.drawTextWithShadow(b, eta, Game1.smallFont, new Vector2(barX, y + 52), Game1.textColor * 0.7f);
@@ -408,24 +427,22 @@ namespace StardewLogistics.Menus
         /// <summary>Formats an in-game duration for the jobs list.</summary>
         private static string FormatGameTime(int minutes)
         {
-            if (minutes <= 0)
-                return "any moment";
-            if (minutes < 60)
-                return $"{minutes}m";
-            return minutes % 60 == 0 ? $"{minutes / 60}h" : $"{minutes / 60}h {minutes % 60}m";
+            return minutes <= 0 ? "any moment" : Durations.Format(minutes);
+        }
+
+        /// <summary>The icon for a job's target item.</summary>
+        private Item GetJobIcon(string targetId)
+        {
+            if (string.IsNullOrEmpty(targetId))
+                return null;
+
+            if (!this.JobIcons.TryGetValue(targetId, out Item icon))
+                this.JobIcons[targetId] = icon = StockId.Create(targetId);
+
+            return icon;
         }
 
         /// <summary>Builds a sample item, or <c>null</c> if the ID no longer resolves.</summary>
-        private static Item TryCreate(string qualifiedId)
-        {
-            try
-            {
-                return ItemRegistry.Create(qualifiedId, 1, 0, allowNull: true);
-            }
-            catch
-            {
-                return null;
-            }
-        }
+        private static Item TryCreate(string qualifiedId) => StockId.Create(qualifiedId);
     }
 }

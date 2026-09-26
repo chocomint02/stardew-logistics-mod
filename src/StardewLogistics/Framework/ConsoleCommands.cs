@@ -42,6 +42,7 @@ namespace StardewLogistics.Framework
         public void Register(ICommandHelper commands)
         {
             commands.Add("logistics_machines", "Lists indexed processing recipes. Usage: logistics_machines [name filter]", this.ListMachines);
+            commands.Add("logistics_rawmachine", "Dumps the raw Data/Machines rules for a machine. Usage: logistics_rawmachine <name filter>", this.DumpRawMachine);
             commands.Add("logistics_plan", "Builds an autocrafting plan. Usage: logistics_plan <qualified item id> [count]", this.ShowPlan);
             commands.Add("logistics_stock", "Lists what the network at your location holds.", this.ShowStock);
             commands.Add("logistics_craft", "Queues an autocrafting job. Usage: logistics_craft <item id> <count> [max machines]", this.QueueJob);
@@ -56,7 +57,7 @@ namespace StardewLogistics.Framework
         /// <summary>Prints the indexed processing recipes, optionally filtered by output name.</summary>
         private void ListMachines(string command, string[] args)
         {
-            if (this.Machines.All.Count == 0)
+            if (this.Machines.Count == 0)
             {
                 Log.Debug("No processing recipes indexed. Load a save first.");
                 return;
@@ -64,26 +65,33 @@ namespace StardewLogistics.Framework
 
             string filter = args.Length > 0 ? string.Join(" ", args) : null;
 
-            List<MachineRecipe> matches = this.Machines.All
+            // List what the network here could order, which includes recipes found from its stock.
+            List<Item> held = Context.IsWorldReady
+                ? this.GetStock().Select(entry => entry.Sample).Where(sample => sample != null).ToList()
+                : new List<Item>();
+
+            List<MachineRecipe> matches = this.Machines.GetOrderable(held)
                 .Where(recipe => filter == null
-                    || GetName(recipe.OutputId).Contains(filter, StringComparison.OrdinalIgnoreCase)
+                    || recipe.OutputName.Contains(filter, StringComparison.OrdinalIgnoreCase)
                     || recipe.MachineName.Contains(filter, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(recipe => recipe.MachineName)
-                .ThenBy(recipe => GetName(recipe.OutputId))
+                .ThenBy(recipe => recipe.OutputName)
                 .ToList();
 
             StringBuilder output = new();
-            output.AppendLine($"{matches.Count} of {this.Machines.All.Count} processing recipes ({this.Machines.SkippedRules} rules skipped as unpredictable):");
+            output.AppendLine($"{matches.Count} processing recipes match, of {this.Machines.Count} known ({this.Machines.SkippedRules} inputs skipped as unpredictable, "
+                + $"{this.Machines.ExternalRequirementSkips} outputs needing another mod's extra ingredients). "
+                + "Recipes marked [stock] are listed because their input is in storage here:");
 
             foreach (MachineRecipe recipe in matches.Take(60))
             {
                 string inputs = recipe.DescribeInputs(GetName);
                 string yield = recipe.HasVariableYield
-                    ? $"{recipe.OutputCount}-{recipe.MaxOutputCount}x {GetName(recipe.OutputId)} (planning uses {recipe.OutputCount})"
-                    : $"{recipe.OutputCount}x {GetName(recipe.OutputId)}";
+                    ? $"{recipe.OutputCount}-{recipe.MaxOutputCount}x {recipe.OutputName} (planning uses {recipe.OutputCount})"
+                    : $"{recipe.OutputCount}x {recipe.OutputName}";
 
-                if (recipe.OutputIsFlavoured)
-                    yield += $" flavoured by input ({recipe.PreserveType})";
+                if (recipe.FromStock)
+                    yield += "  [stock]";
 
                 output.AppendLine($"  {recipe.MachineName,-22} {inputs}  ->  {yield}   [{FormatTime(recipe.Minutes, recipe.Days)}]");
             }
@@ -92,6 +100,69 @@ namespace StardewLogistics.Framework
                 output.AppendLine($"  ... and {matches.Count - 60} more");
 
             Log.Debug(output.ToString());
+        }
+
+        /// <summary>Prints the unprocessed rules for a machine, exactly as Data/Machines states them.</summary>
+        /// <remarks>
+        /// The index reads this data through several assumptions, and when a recipe goes missing there is no way to
+        /// tell from the indexed side whether the data lacked it or the reading dropped it. This prints the source.
+        /// </remarks>
+        private void DumpRawMachine(string command, string[] args)
+        {
+            string filter = args.Length > 0 ? string.Join(" ", args) : null;
+            if (filter == null)
+            {
+                Log.Debug("Usage: logistics_rawmachine <name filter>");
+                return;
+            }
+
+            Dictionary<string, StardewValley.GameData.Machines.MachineData> machines;
+            try
+            {
+                machines = DataLoader.Machines(Game1.content);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug("Couldn't read Data/Machines: " + ex.Message);
+                return;
+            }
+
+            StringBuilder output = new();
+            int shown = 0;
+
+            foreach ((string machineId, StardewValley.GameData.Machines.MachineData data) in machines)
+            {
+                string name = GetName(machineId);
+                if (name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0 && machineId.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+                if (data?.OutputRules == null)
+                    continue;
+
+                shown++;
+                output.AppendLine($"{name}  [{machineId}]");
+
+                foreach (var rule in data.OutputRules)
+                {
+                    output.AppendLine($"  rule '{rule?.Id}'  {rule?.MinutesUntilReady}m / {rule?.DaysUntilReady}d");
+
+                    foreach (var trigger in rule?.Triggers ?? new List<StardewValley.GameData.Machines.MachineOutputTriggerRule>())
+                    {
+                        string tags = trigger?.RequiredTags is { Count: > 0 } ? string.Join(" ", trigger.RequiredTags) : "-";
+                        output.AppendLine($"    trigger {trigger?.Trigger} item='{trigger?.RequiredItemId ?? "-"}' tags=[{tags}] count={trigger?.RequiredCount} cond='{trigger?.Condition ?? "-"}'");
+                    }
+
+                    foreach (var item in rule?.OutputItem ?? new List<StardewValley.GameData.Machines.MachineItemOutput>())
+                    {
+                        string random = item?.RandomItemId is { Count: > 0 } ? $" random={item.RandomItemId.Count}" : "";
+                        output.AppendLine($"    out id='{item?.ItemId ?? "-"}' preserveType='{item?.PreserveType ?? "-"}' preserveId='{item?.PreserveId ?? "-"}' "
+                            + $"method='{item?.OutputMethod ?? "-"}' stack={item?.MinStack}-{item?.MaxStack}{random} cond='{item?.Condition ?? "-"}'");
+                    }
+                }
+            }
+
+            Log.Debug(shown == 0
+                ? $"No machine matched '{filter}'."
+                : $"Raw rules for {shown} machine(s) matching '{filter}':" + Environment.NewLine + output);
         }
 
         /// <summary>Builds a plan for an item and prints it as a tree.</summary>
@@ -284,25 +355,10 @@ namespace StardewLogistics.Framework
         {
             if (days > 0)
                 return days == 1 ? "overnight" : $"{days} days";
-            if (minutes <= 0)
-                return "instant";
-            if (minutes < 60)
-                return $"{minutes}m";
-
-            return minutes % 60 == 0 ? $"{minutes / 60}h" : $"{minutes / 60}h {minutes % 60}m";
+            return minutes <= 0 ? "instant" : Durations.Format(minutes);
         }
 
         /// <summary>The display name for an item ID.</summary>
-        private static string GetName(string qualifiedId)
-        {
-            try
-            {
-                return ItemRegistry.GetData(qualifiedId)?.DisplayName ?? qualifiedId;
-            }
-            catch
-            {
-                return qualifiedId;
-            }
-        }
+        private static string GetName(string qualifiedId) => StockId.GetDisplayName(qualifiedId);
     }
 }

@@ -149,13 +149,7 @@ namespace StardewLogistics.Menus
                 if (index == this.HoverIndex)
                     b.Draw(Game1.staminaRect, row, Color.Wheat * 0.55f);
 
-                Utility.drawTextWithShadow(
-                    b,
-                    this.Truncate(this.Options[index].Label, row.Width - 24),
-                    Game1.smallFont,
-                    new Vector2(row.X + 12, row.Y + 8),
-                    Game1.textColor
-                );
+                Marquee.Draw(b, this.Options[index].Label, Game1.smallFont, new Vector2(row.X + 12, row.Y + 8), row.Width - 24, Game1.textColor);
             }
 
             if (this.Options.Count > MaxVisibleRows)
@@ -203,18 +197,6 @@ namespace StardewLogistics.Menus
                 widest = Math.Max(widest, Game1.smallFont.MeasureString(option.Label).X);
 
             return Math.Clamp((int)widest + 48, 160, 420);
-        }
-
-        /// <summary>Shortens a label with an ellipsis if it won't fit.</summary>
-        private string Truncate(string text, int maxWidth)
-        {
-            if (Game1.smallFont.MeasureString(text).X <= maxWidth)
-                return text;
-
-            while (text.Length > 1 && Game1.smallFont.MeasureString(text + "...").X > maxWidth)
-                text = text.Substring(0, text.Length - 1);
-
-            return text + "...";
         }
 
 

@@ -545,9 +545,6 @@ namespace StardewLogistics.Menus
                 // Item icon, so the tree can be read at a glance rather than by reading every name.
                 DrawIcon(b, GetIcon(node.ItemId), row.X + indent, row.Y + 4, node.Kind == PlanStepKind.Missing ? 0.4f : 1f);
 
-                string label = $"{node.Requested}x {node.DisplayName}";
-                Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(row.X + indent + 38, row.Y + 6), colour);
-
                 string detail = this.DescribeStep(node);
                 Vector2 detailSize = Game1.smallFont.MeasureString(detail);
                 float detailX = row.Right - detailSize.X - 16;
@@ -555,8 +552,14 @@ namespace StardewLogistics.Menus
 
                 // And the machine's own icon next to its name, which is the quickest way to tell a Heavy
                 // Furnace step from a plain one.
-                if (node.Kind == PlanStepKind.Process && node.MachineRecipe != null)
+                bool hasMachineIcon = node.Kind == PlanStepKind.Process && node.MachineRecipe != null;
+                if (hasMachineIcon)
                     DrawIcon(b, GetIcon(node.MachineRecipe.MachineId), (int)detailX - 40, row.Y + 4, 1f);
+
+                // The item name gets whatever the step details leave; a deep, long-named row scrolls in that space.
+                int labelX = row.X + indent + 38;
+                int labelRight = (int)detailX - (hasMachineIcon ? 40 : 0) - 12;
+                Marquee.Draw(b, $"{node.Requested}x {node.DisplayName}", Game1.smallFont, new Vector2(labelX, row.Y + 6), labelRight - labelX, colour);
             }
 
             if (this.Rows.Count > visible)
@@ -626,7 +629,7 @@ namespace StardewLogistics.Menus
             Item icon = null;
             try
             {
-                icon = ItemRegistry.Create(qualifiedId, 1, 0, allowNull: true);
+                icon = StockId.Create(qualifiedId);
             }
             catch
             {
@@ -640,23 +643,7 @@ namespace StardewLogistics.Menus
         /// <summary>Formats a total duration as days, hours and minutes, dropping empty leading units.</summary>
         private static string FormatTotal(int minutes)
         {
-            if (minutes <= 0)
-                return "instant";
-
-            int days = minutes / CraftPlan.MinutesPerDay;
-            int rest = minutes % CraftPlan.MinutesPerDay;
-            int hours = rest / 60;
-            int mins = rest % 60;
-
-            List<string> parts = new();
-            if (days > 0)
-                parts.Add($"{days}d");
-            if (hours > 0)
-                parts.Add($"{hours}h");
-            if (mins > 0 || parts.Count == 0)
-                parts.Add($"{mins}m");
-
-            return string.Join(" ", parts);
+            return minutes <= 0 ? "instant" : Durations.Format(minutes);
         }
 
         /// <summary>Formats a single batch's duration, used in the machine picker.</summary>
@@ -665,17 +652,7 @@ namespace StardewLogistics.Menus
             return FormatTotal(minutes + (days * CraftPlan.MinutesPerDay));
         }
 
-        /// <summary>The display name for an item ID.</summary>
-        private static string GetName(string qualifiedId)
-        {
-            try
-            {
-                return ItemRegistry.GetData(qualifiedId)?.DisplayName ?? qualifiedId;
-            }
-            catch
-            {
-                return qualifiedId;
-            }
-        }
+        /// <summary>The display name for a stock ID.</summary>
+        private static string GetName(string qualifiedId) => StockId.GetDisplayName(qualifiedId);
     }
 }

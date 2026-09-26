@@ -71,7 +71,7 @@ namespace StardewLogistics.Network
 
             return this.Machines.Count(node =>
                 string.Equals(node.Object?.QualifiedItemId, recipe.MachineId, StringComparison.OrdinalIgnoreCase)
-                && node.AcceptsInput(recipe.InputId));
+                && node.AcceptsInput(StockId.BaseId(recipe.InputId)));
         }
 
         /// <summary>Returns every node of a given role.</summary>
@@ -120,7 +120,7 @@ namespace StardewLogistics.Network
                 IList<Item> items = entry.Chest.Items;
                 for (int i = 0; i < items.Count; i++)
                 {
-                    if (items[i] != null && string.Equals(items[i].QualifiedItemId, qualifiedItemId, StringComparison.OrdinalIgnoreCase))
+                    if (StockId.Matches(items[i], qualifiedItemId))
                         total += items[i].Stack;
                 }
             }
@@ -152,7 +152,7 @@ namespace StardewLogistics.Network
                 for (int i = 0; i < items.Count && remaining > 0; i++)
                 {
                     Item item = items[i];
-                    if (item == null || !string.Equals(item.QualifiedItemId, qualifiedItemId, StringComparison.OrdinalIgnoreCase))
+                    if (!StockId.Matches(item, qualifiedItemId))
                         continue;
 
                     int take = Math.Min(remaining, item.Stack);

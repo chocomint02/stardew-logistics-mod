@@ -157,8 +157,13 @@ namespace StardewLogistics.Framework
         /*********
         ** Accessors
         *********/
-        /// <summary>In-game minutes the game counts between one morning and the next.</summary>
-        public const int MinutesPerDay = 1600;
+        /// <summary>In-game minutes a machine counts down between one morning and the next.</summary>
+        /// <remarks>
+        /// Machines tick ten minutes at a time while the player is awake, and when they sleep the game credits
+        /// <c>Utility.CalculateMinutesUntilMorning</c> -- the time from bedtime to 6am. However late the player
+        /// stays up, the two always add up to a full 24 hours.
+        /// </remarks>
+        public const int MinutesPerDay = 1440;
 
         /// <summary>The requested item.</summary>
         public PlanNode Root { get; init; }

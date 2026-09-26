@@ -335,7 +335,7 @@ namespace StardewLogistics.Menus
                     icon.drawInMenu(b, new Vector2(x - 16, y - 20), 0.5f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
 
                 string name = this.Entry.Recipe.getNameFromIndex(ingredient.Key);
-                Utility.drawTextWithShadow(b, Truncate(name, columnWidth - 160), Game1.smallFont, new Vector2(x + 30, y), Game1.textColor);
+                Marquee.Draw(b, name, Game1.smallFont, new Vector2(x + 30, y), columnWidth - 160, Game1.textColor);
 
                 string counts = $"{have} / {needed}";
                 Vector2 size = Game1.smallFont.MeasureString(counts);
@@ -398,18 +398,6 @@ namespace StardewLogistics.Menus
             {
                 return null;
             }
-        }
-
-        /// <summary>Shortens text with an ellipsis if it won't fit.</summary>
-        private static string Truncate(string text, float maxWidth)
-        {
-            if (string.IsNullOrEmpty(text) || Game1.smallFont.MeasureString(text).X <= maxWidth)
-                return text ?? "";
-
-            while (text.Length > 1 && Game1.smallFont.MeasureString(text + "...").X > maxWidth)
-                text = text.Substring(0, text.Length - 1);
-
-            return text + "...";
         }
     }
 }

@@ -145,15 +145,8 @@ namespace StardewLogistics.Menus
                 drawShadow: false
             );
 
-            // Clip the label so a long mod name can't spill past the button edge.
-            string text = label;
-            int room = button.bounds.Width - 40;
-            while (text.Length > 1 && Game1.smallFont.MeasureString(text).X > room)
-                text = text.Substring(0, text.Length - 1);
-            if (text != label && text.Length > 1)
-                text = text.Substring(0, text.Length - 1) + "..";
-
-            Utility.drawTextWithShadow(b, text, Game1.smallFont, new Vector2(button.bounds.X + 14, button.bounds.Y + 10), Game1.textColor);
+            // A long mod name scrolls within the button rather than spilling past its edge or the caret.
+            Marquee.Draw(b, label, Game1.smallFont, new Vector2(button.bounds.X + 14, button.bounds.Y + 10), button.bounds.Width - 40, Game1.textColor);
 
             // A small caret marking it as a dropdown.
             b.Draw(
@@ -330,8 +323,10 @@ namespace StardewLogistics.Menus
 
                 drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), grid.X, y, grid.Width, RowHeight - 8, Color.White * 0.9f, 1f, drawShadow: false);
 
-                Utility.drawTextWithShadow(b, row.Title, Game1.smallFont, new Vector2(grid.X + 18, y + 16), Game1.textColor);
-                Utility.drawTextWithShadow(b, row.Subtitle, Game1.smallFont, new Vector2(grid.X + 18, y + 52), Game1.textColor * 0.6f);
+                // Names run up to the priority buttons; a chest named at length scrolls rather than running under them.
+                int nameWidth = this.GetPriorityButton(grid, y, increase: false).X - 12 - (grid.X + 18);
+                Marquee.Draw(b, row.Title, Game1.smallFont, new Vector2(grid.X + 18, y + 16), nameWidth, Game1.textColor);
+                Marquee.Draw(b, row.Subtitle, Game1.smallFont, new Vector2(grid.X + 18, y + 52), nameWidth, Game1.textColor * 0.6f);
 
                 // Priority controls
                 if (row.HasPriority)

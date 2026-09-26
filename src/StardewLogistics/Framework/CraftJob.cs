@@ -20,6 +20,9 @@ namespace StardewLogistics.Framework
         /// <summary>Stalled: something it needs can't be supplied.</summary>
         Blocked,
 
+        /// <summary>Nothing wrong, just queued behind something: busy machines, or an earlier step still running.</summary>
+        Waiting,
+
         /// <summary>Stopped by the player.</summary>
         Cancelled
     }
@@ -36,8 +39,15 @@ namespace StardewLogistics.Framework
         /// <summary>How many in-game minutes the run was expected to take.</summary>
         public int ExpectedMinutes { get; init; }
 
+        /// <summary>How many in-game minutes the machine had left when last checked.</summary>
+        public int MinutesLeft { get; set; }
+
         /// <summary>How many of the output this run will yield.</summary>
         public int Yield { get; init; }
+
+        /// <summary>The exact items put into the machine, kept so cancelling can give them back.</summary>
+        /// <remarks>The real items rather than a recipe's list, so a gold Starfruit comes back gold.</remarks>
+        public List<Item> Inputs { get; init; } = new();
     }
 
     /// <summary>One stage of a job: make N of something, either by crafting or by running a machine.</summary>
@@ -75,7 +85,17 @@ namespace StardewLogistics.Framework
         /// <summary>The total number of runs this step began with.</summary>
         public int TotalBatches { get; init; }
 
-        /// <summary>How many machines the player has allowed this step to occupy at once.</summary>
+        /// <summary>Why the step couldn't start anything on its last attempt, for the Jobs tab.</summary>
+        public string WaitReason { get; set; }
+
+        /// <summary>Whether that reason is a real problem rather than ordinary queuing.</summary>
+        public bool IsStuck { get; set; }
+
+        /// <summary>Whether this step makes the item the job was ordered for, so its output goes to storage.</summary>
+        /// <remarks>Every other step makes something the job needs next, which stays in the job's buffer.</remarks>
+        public bool DeliversToStorage { get; init; }
+
+        /// <summary>How many machines a step may occupy at once; zero for no limit.</summary>
         /// <remarks>Zero means no limit beyond however many the network has.</remarks>
         public int MaxMachines { get; set; }
 
@@ -129,6 +149,16 @@ namespace StardewLogistics.Framework
         /// <summary>Why the job is blocked, if it is.</summary>
         public string BlockedReason { get; set; }
 
+        /// <summary>A value unique to this job across sessions, used to claim machines and name its buffer.</summary>
+        /// <remarks>
+        /// <see cref="Id"/> restarts at J1 every session, so a claim left on a keg by last session's J1 would
+        /// otherwise look like it belonged to this session's.
+        /// </remarks>
+        public string Token { get; init; }
+
+        /// <summary>The ingredients and intermediates this job has set aside.</summary>
+        public StardewLogistics.Devices.JobBuffer Buffer { get; init; }
+
         /// <summary>Whether the player asked for this job, or a minimum-stock rule did.</summary>
         public bool FromStockRule { get; init; }
 
@@ -165,8 +195,11 @@ namespace StardewLogistics.Framework
                     int waves = (int)Math.Ceiling(step.RemainingBatches / (double)parallel);
 
                     total += waves * step.MinutesPerBatch;
+
+                    // What the busiest machine actually has left, so the estimate counts down while a keg works
+                    // rather than showing a full week until the wine comes out.
                     if (step.InFlight.Count > 0)
-                        total += step.MinutesPerBatch;
+                        total += step.InFlight.Max(batch => batch.MinutesLeft);
                 }
 
                 return total;

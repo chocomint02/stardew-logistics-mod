@@ -50,6 +50,7 @@ namespace StardewLogistics
             this.CraftingRecipes = new RecipeIndex();
 
             this.Jobs = new JobRunner(this.Networks, this.MachineRecipes, this.CraftingRecipes, this.Config);
+            this.Ticker.IsLiveClaim = this.Jobs.IsLiveClaim;
 
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
@@ -148,6 +149,9 @@ namespace StardewLogistics
         private void OnReturnedToTitle(object sender, ReturnedToTitleEventArgs e)
         {
             this.Networks.InvalidateAll();
+
+            // Jobs belong to the save that queued them; carried into the next save they'd drive its machines.
+            this.Jobs.Reset();
         }
 
         /// <summary>Rescans a location when something is placed or broken in it.</summary>
@@ -164,18 +168,21 @@ namespace StardewLogistics
             if (!Context.IsWorldReady || !Context.IsMainPlayer)
                 return;
 
-            // Respect the game's own sense of whether time is passing, so buses pause with the world.
-            if (!Game1.shouldTimePass())
+            if (!e.IsMultipleOf((uint)this.Config.BusIntervalTicks))
                 return;
 
-            if (e.IsMultipleOf((uint)this.Config.BusIntervalTicks))
-            {
-                // Jobs first: the job collector must get its claimed machines before the general ticker sweeps
-                // them, otherwise a job's output is swept into storage as ordinary machine output and the job
-                // only learns about it second-hand.
-                this.Jobs.Run();
+            // Jobs first: the job collector must get its claimed machines before the general ticker sweeps them,
+            // otherwise a job's output is swept into storage as ordinary machine output and the job only learns
+            // about it second-hand.
+            //
+            // Jobs run even while time is stopped. In single player time stops whenever a menu is open, and
+            // gating jobs on it meant an order placed from the terminal sat untouched until the terminal closed.
+            // Loading a machine doesn't need the clock; the machine only counts down once time moves again.
+            this.Jobs.Run();
+
+            // Buses and machine collection do respect it, so they pause with the world.
+            if (Game1.shouldTimePass())
                 this.Ticker.Run();
-            }
         }
 
         /// <summary>Opens the terminal when the player activates one.</summary>

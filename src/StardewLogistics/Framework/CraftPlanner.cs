@@ -63,6 +63,11 @@ namespace StardewLogistics.Framework
             CraftPlan plan = new() { RequestedCount = count };
             this.CountUsable = countUsableMachines;
 
+            // Make sure whatever is in storage has been tried in the machines, so a keg recipe for a fruit that
+            // only just arrived is there to plan with.
+            if (stock != null)
+                this.Machines?.ExpandFor(stock.Select(entry => entry.Sample).Where(sample => sample != null));
+
             PlanNode root = this.Resolve(targetId, count, ledger, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0, preferredMachines, plan);
             return new CraftPlan { Root = root, RequestedCount = count, HitDepthLimit = plan.HitDepthLimit };
         }
@@ -310,26 +315,8 @@ namespace StardewLogistics.Framework
             }
         }
 
-        /// <summary>The display name for an item ID, falling back to the ID itself.</summary>
-        private static string GetDisplayName(string itemId)
-        {
-            if (string.IsNullOrWhiteSpace(itemId))
-                return "?";
-
-            try
-            {
-                // A category ingredient has no item to name, so the raw ID stands in until the UI can label it.
-                if (itemId.StartsWith("-"))
-                    return itemId;
-
-                ParsedItemData data = ItemRegistry.GetData(itemId);
-                return data?.DisplayName ?? itemId;
-            }
-            catch
-            {
-                return itemId;
-            }
-        }
+        /// <summary>The display name for a stock ID, falling back to the ID itself.</summary>
+        private static string GetDisplayName(string itemId) => StockId.GetDisplayName(itemId);
 
 
         /*********
@@ -340,6 +327,9 @@ namespace StardewLogistics.Framework
         /// A plan is hypothetical, so it can't consume the real chests. This is a running tally that starts from
         /// the aggregated stock and is drawn down as branches claim things, which is what keeps two branches from
         /// both planning to use the same materials.
+        ///
+        /// Keyed by <see cref="StockId"/>, so Starfruit Wine and Blueberry Wine are counted apart. A request for a
+        /// plain ID still draws on every flavour, which is what a recipe asking for "any roe" means.
         /// </remarks>
         private class Ledger
         {
@@ -352,7 +342,7 @@ namespace StardewLogistics.Framework
 
                 foreach (IFilterableEntry entry in stock)
                 {
-                    string id = entry.Sample?.QualifiedItemId;
+                    string id = StockId.Of(entry.Sample);
                     if (string.IsNullOrEmpty(id))
                         continue;
 
@@ -365,7 +355,33 @@ namespace StardewLogistics.Framework
             /// <summary>Claims up to a number of an item, returning how many were actually available.</summary>
             public int Take(string itemId, int wanted)
             {
-                if (wanted <= 0 || itemId == null || !this.Available.TryGetValue(itemId, out long have) || have <= 0)
+                if (wanted <= 0 || itemId == null)
+                    return 0;
+
+                int taken = this.TakeExact(itemId, wanted);
+
+                // A plain ID accepts any flavour of that item, so draw on those once the unflavoured ones run out.
+                if (taken < wanted && !StockId.IsFlavoured(itemId))
+                {
+                    List<string> variants = this.Available.Keys
+                        .Where(key => StockId.IsFlavoured(key) && string.Equals(StockId.BaseId(key), itemId, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (string variant in variants)
+                    {
+                        taken += this.TakeExact(variant, wanted - taken);
+                        if (taken >= wanted)
+                            break;
+                    }
+                }
+
+                return taken;
+            }
+
+            /// <summary>Claims up to a number of exactly one stock ID.</summary>
+            private int TakeExact(string itemId, int wanted)
+            {
+                if (wanted <= 0 || !this.Available.TryGetValue(itemId, out long have) || have <= 0)
                     return 0;
 
                 int taken = (int)Math.Min(wanted, have);

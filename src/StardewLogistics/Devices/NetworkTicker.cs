@@ -1,3 +1,4 @@
+using System;
 using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewValley;
@@ -22,6 +23,14 @@ namespace StardewLogistics.Devices
         *********/
         private readonly NetworkManager Networks;
         private readonly ModConfig Config;
+
+
+        /*********
+        ** Accessors
+        *********/
+        /// <summary>Whether a machine claim belongs to an autocrafting job that's still running.</summary>
+        /// <remarks>Set once the job runner exists; until then every claim is treated as live.</remarks>
+        public Func<string, bool> IsLiveClaim { get; set; }
 
 
         /*********
@@ -66,9 +75,16 @@ namespace StardewLogistics.Devices
                 if (machine?.heldObject.Value == null || !machine.readyForHarvest.Value)
                     continue;
 
-                // An autocrafting job is waiting on this one; taking it here would lose the job's progress.
-                if (machine.modData.ContainsKey(ModIds.JobKey))
-                    continue;
+                // An autocrafting job is waiting on this one; taking it here would lose the job's progress. A claim
+                // from a job that no longer exists -- jobs don't survive a reload -- is cleared instead, or the
+                // machine's output would sit there forever.
+                if (machine.modData.TryGetValue(ModIds.JobKey, out string claim))
+                {
+                    if (this.IsLiveClaim?.Invoke(claim) ?? true)
+                        continue;
+
+                    machine.modData.Remove(ModIds.JobKey);
+                }
 
                 int moved = MachineIO.TryCollect(machine, network);
                 if (moved > 0)
