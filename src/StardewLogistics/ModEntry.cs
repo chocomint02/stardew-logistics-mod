@@ -58,6 +58,11 @@ namespace StardewLogistics
             CaskPatches.Apply(new HarmonyLib.Harmony(this.ModManifest.UniqueID), this.Jobs.ReclaimFromCask);
             this.Harvesters = new HarvesterRunner(this.Networks, helper.Translation);
 
+            // Growing crops feed autocrafting, and reserved ones go to their job when harvested.
+            this.Jobs.Forecast = this.Harvesters.Forecast;
+            this.Jobs.HarvestersOn = network => this.Harvesters.GetHarvestersOn(network);
+            this.Harvesters.ClaimHarvest = this.Jobs.ClaimHarvest;
+
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
             this.Content = new ContentInjector(helper.Translation);
@@ -344,7 +349,7 @@ namespace StardewLogistics
                     StorageNetwork network = this.Networks.GetNetworkAt(where, at);
                     if (Context.IsMainPlayer && network != null)
                         this.Harvesters.Work(where, at, machine, network);
-                });
+                }, this.Jobs.GetReservation);
                 return;
             }
 

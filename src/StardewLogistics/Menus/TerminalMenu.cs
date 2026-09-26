@@ -29,7 +29,8 @@ namespace StardewLogistics.Menus
         Auto,
         Jobs,
         Storage,
-        Network
+        Network,
+        Farm
     }
 
     /// <summary>The storage terminal: one searchable, sortable view of everything on the network.</summary>
@@ -275,6 +276,12 @@ namespace StardewLogistics.Menus
             if (this.Tab == TerminalTab.Jobs)
             {
                 this.ReceiveClickOnJobs(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Farm)
+            {
+                this.ReceiveClickOnFarm(x, y);
                 return;
             }
 
@@ -536,6 +543,9 @@ namespace StardewLogistics.Menus
                 case TerminalTab.Network:
                     this.DrawNetworkTab(b);
                     break;
+                case TerminalTab.Farm:
+                    this.DrawFarmTab(b);
+                    break;
             }
 
             this.PlayerInventory.draw(b);
@@ -657,6 +667,7 @@ namespace StardewLogistics.Menus
                 yield return nameof(TerminalTab.Auto);
                 yield return nameof(TerminalTab.Jobs);
             }
+            yield return nameof(TerminalTab.Farm);
             yield return nameof(TerminalTab.Storage);
             yield return nameof(TerminalTab.Network);
         }
@@ -720,6 +731,9 @@ namespace StardewLogistics.Menus
 
                 case TerminalTab.Network:
                     return 0;
+
+                case TerminalTab.Farm:
+                    return Math.Max(0, this.GetFarmRows().Count - (this.GetGridBounds().Height / 96));
 
                 default:
                     int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);

@@ -173,6 +173,12 @@ namespace StardewLogistics.Framework
         /// <summary>The quality the job ages its product to, or <see cref="Quality.Any"/>.</summary>
         public int TargetQuality { get; init; } = Quality.Any;
 
+        /// <summary>Crops still growing that this job has reserved, whose harvest comes to it instead of storage.</summary>
+        public List<IncomingCrop> CropReservations { get; } = new();
+
+        /// <summary>In-game minutes until the last reserved crop is ready, kept current by the scheduler.</summary>
+        public int HarvestWaitMinutes { get; set; }
+
         /// <summary>Whether the job speeds its machines up with Fairy Dust.</summary>
         /// <remarks>Dust reserved when the job was queued is used first; after that, and for a job switched on later, from storage.</remarks>
         public bool UseFairyDust { get; set; }
@@ -239,7 +245,8 @@ namespace StardewLogistics.Framework
                         total += step.InFlight.Max(batch => batch.MinutesLeft);
                 }
 
-                return total;
+                // Nothing can start until the crops it's waiting on are harvested.
+                return total + this.HarvestWaitMinutes;
             }
         }
 

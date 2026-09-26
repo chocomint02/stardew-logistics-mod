@@ -106,6 +106,13 @@ namespace StardewLogistics.Menus
             // Starfruit Wine on the list, and nothing else of its kind.
             List<Item> held = this.AllStock.Select(entry => entry.Sample).Where(sample => sample != null).ToList();
 
+            // Crops growing under a harvester count as held: Starfruit in the field puts Starfruit Wine on the list.
+            held.AddRange(this.Jobs.GetIncoming(this.Network)
+                .Select(crop => crop.ItemId)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(id => ItemRegistry.Create(id, allowNull: true))
+                .Where(item => item != null));
+
             foreach (MachineRecipe recipe in this.MachineRecipes.GetOrderable(held))
             {
                 if (!available.Contains(recipe.MachineId) || targets.ContainsKey(recipe.OutputId))
@@ -181,6 +188,7 @@ namespace StardewLogistics.Menus
 
             IReadOnlyList<IFilterableEntry> stock = this.AllStock.Cast<IFilterableEntry>().ToList();
             CraftPlanner planner = new(this.Recipes, this.MachineRecipes, this.Config.MaxCraftDepth);
+            List<IncomingCrop> incoming = this.Jobs.GetIncoming(this.Network);
 
             int planned = 0;
             foreach (AutoTarget target in this.AllTargets)
@@ -194,10 +202,10 @@ namespace StardewLogistics.Menus
                 try
                 {
                     // Same rule as an order: "can make one" means can produce one, not "there's one on the shelf".
-                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines).IsSatisfied
+                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines, Quality.Any, incoming).IsSatisfied
                         // or there's one on the shelf a cask could take further
                         || (this.MachineRecipes.CanAge(target.ItemId)
-                            && planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines, StardewValley.Object.bestQuality).IsSatisfied);
+                            && planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines, StardewValley.Object.bestQuality, incoming).IsSatisfied);
                 }
                 catch
                 {

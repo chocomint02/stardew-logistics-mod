@@ -31,6 +31,9 @@ namespace StardewLogistics.Framework
         /// </remarks>
         private Func<MachineRecipe, int> CountUsable;
 
+        /// <summary>Growing crops not yet planned on, soonest first.</summary>
+        private List<IncomingCrop> Incoming = new();
+
         /// <summary>Item prices by stock ID, for ordering ingredients cheapest first.</summary>
         private static readonly Dictionary<string, int> PriceCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -61,9 +64,11 @@ namespace StardewLogistics.Framework
         /// two call sites that forgot to pass it produced a plan preview that disagreed with the queued job.
         /// </remarks>
         /// <param name="targetQuality">The quality wanted, which adds a cask step; <see cref="Quality.Any"/> for none.</param>
-        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, Func<MachineRecipe, int> countUsableMachines = null, int targetQuality = Quality.Any)
+        /// <param name="incoming">Crops growing under auto-harvesters, which the plan can wait for once storage runs short.</param>
+        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, Func<MachineRecipe, int> countUsableMachines = null, int targetQuality = Quality.Any, IReadOnlyList<IncomingCrop> incoming = null)
         {
             Ledger ledger = new(stock);
+            this.Incoming = incoming?.OrderBy(crop => crop.Days).ToList() ?? new List<IncomingCrop>();
             CraftPlan plan = new() { RequestedCount = count };
             this.CountUsable = countUsableMachines;
 
@@ -71,6 +76,9 @@ namespace StardewLogistics.Framework
             // only just arrived is there to plan with.
             if (stock != null)
                 this.Machines?.ExpandFor(stock.Select(entry => entry.Sample).Where(sample => sample != null));
+
+            // Crops still growing count too: Starfruit ready in five days makes Starfruit Wine something to plan.
+            this.Machines?.ExpandFor(this.Incoming.Select(crop => crop.ItemId).Distinct().Select(id => ItemRegistry.Create(id, allowNull: true)).Where(item => item != null));
 
             PlanNode root = targetQuality > 0
                 ? this.PlanAging(targetId, count, targetQuality, ledger, preferredMachines, plan)
@@ -181,6 +189,24 @@ namespace StardewLogistics.Framework
                 node.Missing = remaining;
                 node.Reason = MissingReason.NotEnoughStock;
                 return node;
+            }
+
+            // Then crops still growing under a harvester, soonest first. A harvest can't be split, so whole tiles
+            // are taken; anything a tile gives beyond what's needed goes back to storage when the job ends.
+            if (remaining > 0 && depth > 0 && useStock && quality < 0)
+            {
+                foreach (IncomingCrop crop in this.Incoming.Where(crop => string.Equals(crop.ItemId, itemId, StringComparison.OrdinalIgnoreCase)).ToList())
+                {
+                    if (remaining <= 0)
+                        break;
+
+                    this.Incoming.Remove(crop);
+                    node.Harvests.Add(crop);
+                    node.FromHarvest += crop.Count;
+                    node.HarvestDays = Math.Max(node.HarvestDays, crop.Days);
+                    remaining -= crop.Count;
+                }
+                remaining = Math.Max(0, remaining);
             }
             if (remaining <= 0)
             {
@@ -505,6 +531,35 @@ namespace StardewLogistics.Framework
         /// </remarks>
         private static void AddChild(PlanNode parent, PlanNode child)
         {
+            // Part from storage and part from a harvest: storage's share splits by quality as usual, and the
+            // harvest gets a row of its own, so it's clear what's on the shelf and what's still growing.
+            if (child.Kind == PlanStepKind.FromStock && child.FromHarvest > 0)
+            {
+                PlanNode harvest = new()
+                {
+                    Kind = PlanStepKind.FromStock,
+                    ItemId = child.ItemId,
+                    DisplayName = child.DisplayName,
+                    Requested = Math.Max(0, child.Requested - child.FromStock),
+                    FromHarvest = child.FromHarvest,
+                    HarvestDays = child.HarvestDays,
+                    Harvests = child.Harvests,
+                    Depth = child.Depth
+                };
+
+                if (child.StockParts.Count > 0)
+                {
+                    child.Requested = child.FromStock;
+                    child.FromHarvest = 0;
+                    child.HarvestDays = 0;
+                    child.Harvests = new List<IncomingCrop>();
+                    AddChild(parent, child);
+                }
+
+                parent.Children.Add(harvest);
+                return;
+            }
+
             bool fromStockOnly = child.Kind == PlanStepKind.FromStock && child.StockParts.Count > 0;
             if (!fromStockOnly)
             {

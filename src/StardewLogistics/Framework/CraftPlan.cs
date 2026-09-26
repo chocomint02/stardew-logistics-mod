@@ -86,6 +86,15 @@ namespace StardewLogistics.Framework
         /// <summary>The quality this item must be, or <see cref="Quality.Any"/>.</summary>
         public int RequiredQuality { get; set; } = Quality.Any;
 
+        /// <summary>How many will come from crops still growing under an auto-harvester.</summary>
+        public int FromHarvest { get; set; }
+
+        /// <summary>Days until the last of those crops is ready.</summary>
+        public int HarvestDays { get; set; }
+
+        /// <summary>The growing crops this row waits on, which a job reserves.</summary>
+        public List<IncomingCrop> Harvests { get; set; } = new();
+
         /// <summary>How much was drawn from storage at each quality, lowest first.</summary>
         public List<(int Quality, int Count)> StockParts { get; set; } = new();
 

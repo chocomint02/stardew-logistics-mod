@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using StardewLogistics.Devices;
 using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewModdingAPI;
@@ -60,6 +61,9 @@ namespace StardewLogistics.Menus
         /// <summary>Whether this is the read-only view of what's growing, rather than the planner.</summary>
         private readonly bool IsPreview;
 
+        /// <summary>Finds the autocrafting job that has reserved a growing crop, if any.</summary>
+        private readonly Func<GameLocation, Vector2, CraftJob> ReservedBy;
+
         /// <summary>Whether the player confirmed their changes.</summary>
         private bool Confirmed;
 
@@ -107,8 +111,9 @@ namespace StardewLogistics.Menus
         /*********
         ** Public methods
         *********/
-        public HarvesterPlanMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 machineTile, HarvesterSettings settings, HarvesterSettings original, bool preview, Action<bool, IReadOnlyList<Vector2>> onClose)
+        public HarvesterPlanMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 machineTile, HarvesterSettings settings, HarvesterSettings original, bool preview, Action<bool, IReadOnlyList<Vector2>> onClose, Func<GameLocation, Vector2, CraftJob> reservedBy = null)
         {
+            this.ReservedBy = reservedBy;
             this.Networks = networks;
             this.Translations = translations;
             this.Location = location;
@@ -568,6 +573,10 @@ namespace StardewLogistics.Menus
                     if (tile == this.MachineTile)
                         this.DrawOutline(b, cell, Color.SteelBlue, 3);
 
+                    // A crop an autocrafting job is waiting on, outlined in gold.
+                    if (soil?.crop != null && this.ReservedBy?.Invoke(this.Location, tile) != null)
+                        this.DrawOutline(b, cell, Color.Gold, 3);
+
                     // Crops Force change will clear, outlined so it's clear what goes.
                     if (!this.IsPreview && this.ForcePoints.Contains(point))
                         this.DrawOutline(b, cell, Color.OrangeRed, 3);
@@ -943,6 +952,11 @@ namespace StardewLogistics.Menus
                 lines.Add(left == 0
                     ? this.Translations.Get("plan.growing-ready", new { name = growing })
                     : left != null ? this.Translations.Get("plan.growing-days", new { name = growing, days = left }) : growing);
+
+                CraftJob job = this.ReservedBy?.Invoke(this.Location, tile);
+                lines.Add(job != null
+                    ? this.Translations.Get("plan.reserved", new { count = job.TargetCount, name = job.DisplayName })
+                    : this.Translations.Get("plan.not-reserved"));
             }
 
             // What's planned, when planning.
@@ -961,6 +975,20 @@ namespace StardewLogistics.Menus
             }
 
             return string.Join("\n", lines);
+        }
+
+        /// <summary>Opens a harvester's field view, read-only, from any menu, returning to it when closed.</summary>
+        /// <returns>Whether there was a harvester there to show.</returns>
+        public static bool OpenFieldView(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 harvesterTile, Func<GameLocation, Vector2, CraftJob> reservedBy)
+        {
+            if (location == null || !location.Objects.TryGetValue(harvesterTile, out SObject machine) || machine.ItemId != ModIds.AutoHarvester)
+                return false;
+
+            IClickableMenu parent = Game1.activeClickableMenu;
+            HarvesterSettings settings = HarvesterSettings.Read(machine);
+            Game1.playSound("bigSelect");
+            Game1.activeClickableMenu = new HarvesterPlanMenu(networks, translations, location, harvesterTile, settings, settings, preview: true, onClose: (_, _) => Game1.activeClickableMenu = parent, reservedBy);
+            return true;
         }
 
         /// <summary>A crop for drawing a seed's sprites, made once per seed.</summary>

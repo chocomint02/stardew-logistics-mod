@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
@@ -30,6 +31,14 @@ namespace StardewLogistics.Devices
 
         /// <summary>Every auto-harvester in the world, or <c>null</c> if they need finding again.</summary>
         private List<(GameLocation Location, Vector2 Tile)> Harvesters;
+
+
+        /*********
+        ** Accessors
+        *********/
+        /// <summary>Takes a crop's harvest for the autocrafting job that reserved it, if any.</summary>
+        /// <remarks>Returns where the harvest should go instead of storage, or <c>null</c> if the crop isn't reserved.</remarks>
+        public Func<GameLocation, Vector2, JobBuffer> ClaimHarvest { get; set; }
 
 
         /*********
@@ -90,11 +99,20 @@ namespace StardewLogistics.Devices
                             soil.destroyCrop(showAnimation: false);
                         else if (soil.readyForHarvest())
                         {
-                            // Leave it in the field rather than harvest onto the ground: it keeps there until
-                            // storage has room, and the next pass tries again.
-                            if (!HasRoomForHarvest(soil.crop, network))
+                            // A crop an autocrafting job reserved goes to that job, not storage, so storage room
+                            // doesn't matter for it.
+                            JobBuffer reserved = this.ClaimHarvest?.Invoke(location, tile);
+                            if (reserved != null)
+                            {
+                                if (this.Harvest(location, tile, soil, item => { reserved.Add(item); return true; }))
+                                    harvested++;
+                            }
+
+                            // Otherwise leave it in the field rather than harvest onto the ground: it keeps there
+                            // until storage has room, and the next pass tries again.
+                            else if (!HasRoomForHarvest(soil.crop, network))
                                 waiting++;
-                            else if (this.Harvest(location, tile, soil, network))
+                            else if (this.Harvest(location, tile, soil, item => { network.Insert(item); return item.Stack <= 0; }))
                                 harvested++;
                         }
                     }
@@ -147,7 +165,8 @@ namespace StardewLogistics.Devices
         /// The game drops the produce wherever the <em>player</em> is, not where the crop is -- so a morning harvest,
         /// with the player just awake in the farmhouse, drops it on the farmhouse floor. Both places are checked.
         /// </remarks>
-        private bool Harvest(GameLocation location, Vector2 tile, HoeDirt soil, StorageNetwork network)
+        /// <param name="store">Takes one harvested item, returning whether all of it was taken.</param>
+        private bool Harvest(GameLocation location, Vector2 tile, HoeDirt soil, Func<Item, bool> store)
         {
             Crop crop = soil.crop;
             GameLocation playerLocation = Game1.currentLocation;
@@ -165,9 +184,9 @@ namespace StardewLogistics.Devices
                 return false;
             }
 
-            TakeNewDrops(location, before, network);
+            TakeNewDrops(location, before, store);
             if (playerLocation != null && playerLocation != location)
-                TakeNewDrops(playerLocation, beforeElsewhere, network);
+                TakeNewDrops(playerLocation, beforeElsewhere, store);
 
             // A one-harvest crop is spent; a regrowing one has already reset itself for its next harvest.
             if (done && !crop.RegrowsAfterHarvest())
@@ -185,18 +204,72 @@ namespace StardewLogistics.Devices
         }
 
         /// <summary>Moves items dropped since a point in a location's debris list into storage.</summary>
-        private static void TakeNewDrops(GameLocation location, int before, StorageNetwork network)
+        private static void TakeNewDrops(GameLocation location, int before, Func<Item, bool> store)
         {
             for (int i = location.debris.Count - 1; i >= before; i--)
             {
                 Item item = location.debris[i].item;
-                if (item == null)
-                    continue;
-
-                network.Insert(item);
-                if (item.Stack <= 0)
+                if (item != null && store(item))
                     location.debris.RemoveAt(i);
             }
+        }
+
+        /// <summary>Every crop growing under the harvesters on a network, with when each will be ready.</summary>
+        /// <remarks>
+        /// A crop that won't be ready before its season -- or run of seasons -- ends is left out: it will die first,
+        /// so nothing can be planned on it. Only the guaranteed yield is counted.
+        /// </remarks>
+        public List<IncomingCrop> Forecast(StorageNetwork network)
+        {
+            List<IncomingCrop> crops = new();
+            if (network == null)
+                return crops;
+
+            foreach ((GameLocation location, Vector2 machineTile) in this.GetHarvesters())
+            {
+                if (!network.Contains(location, machineTile) || !location.Objects.TryGetValue(machineTile, out SObject machine))
+                    continue;
+
+                Rectangle area = HarvesterSettings.ReadCached(machine).GetArea(machineTile);
+                for (int y = area.Top; y < area.Bottom; y++)
+                {
+                    for (int x = area.Left; x < area.Right; x++)
+                    {
+                        Vector2 tile = new(x, y);
+                        if (!location.terrainFeatures.TryGetValue(tile, out TerrainFeature feature) || feature is not HoeDirt { crop: not null } soil || soil.crop.dead.Value)
+                            continue;
+
+                        int? days = CropMath.DaysUntilHarvest(soil);
+                        string harvest = soil.crop.indexOfHarvest.Value;
+                        if (days == null || string.IsNullOrEmpty(harvest))
+                            continue;
+
+                        int window = CropMath.DaysLeftToGrow(soil.crop.netSeedIndex.Value, location);
+                        if (window != int.MaxValue && days > Math.Max(0, window))
+                            continue;
+
+                        crops.Add(new IncomingCrop
+                        {
+                            Location = location,
+                            Tile = tile,
+                            HarvesterTile = machineTile,
+                            ItemId = ItemRegistry.QualifyItemId(harvest),
+                            Count = Math.Max(1, soil.crop.GetData()?.HarvestMinStack ?? 1),
+                            Days = days.Value
+                        });
+                    }
+                }
+            }
+
+            return crops;
+        }
+
+        /// <summary>The auto-harvesters on a network.</summary>
+        public IEnumerable<(GameLocation Location, Vector2 Tile)> GetHarvestersOn(StorageNetwork network)
+        {
+            return network == null
+                ? Enumerable.Empty<(GameLocation, Vector2)>()
+                : this.GetHarvesters().Where(entry => network.Contains(entry.Item1, entry.Item2));
         }
 
         /// <summary>Tills a tile for planting, if the ground allows it.</summary>

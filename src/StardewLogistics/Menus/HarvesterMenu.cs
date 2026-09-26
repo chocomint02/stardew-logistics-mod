@@ -25,6 +25,9 @@ namespace StardewLogistics.Menus
         private readonly ITranslationHelper Translations;
         private readonly Action<GameLocation, Vector2, SObject> OnPlanSaved;
 
+        /// <summary>Finds the autocrafting job that has reserved a growing crop, for the field view.</summary>
+        private readonly Func<GameLocation, Vector2, CraftJob> ReservedBy;
+
         /// <summary>The settings being edited, written back to the machine on every change.</summary>
         private HarvesterSettings Settings;
 
@@ -48,7 +51,7 @@ namespace StardewLogistics.Menus
         /*********
         ** Public methods
         *********/
-        public HarvesterMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 tile, SObject machine, Action<GameLocation, Vector2, SObject> onPlanSaved)
+        public HarvesterMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 tile, SObject machine, Action<GameLocation, Vector2, SObject> onPlanSaved, Func<GameLocation, Vector2, CraftJob> reservedBy = null)
             : base((Game1.uiViewport.Width - MenuWidth) / 2, (Game1.uiViewport.Height - MenuHeight) / 2, MenuWidth, MenuHeight, showUpperRightCloseButton: true)
         {
             this.Networks = networks;
@@ -57,6 +60,7 @@ namespace StardewLogistics.Menus
             this.Tile = tile;
             this.Machine = machine;
             this.OnPlanSaved = onPlanSaved;
+            this.ReservedBy = reservedBy;
             this.Settings = HarvesterSettings.Read(machine);
 
             this.Layout();
@@ -208,7 +212,7 @@ namespace StardewLogistics.Menus
 
                 this.Settings = HarvesterSettings.Read(this.Machine);
                 Game1.activeClickableMenu = this;
-            });
+            }, this.ReservedBy);
         }
 
         /// <summary>An offset as a signed number: "+3", "-2", "0".</summary>

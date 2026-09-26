@@ -233,6 +233,15 @@ namespace StardewLogistics.Menus
 
             // A processing step with more than one capable machine can be reassigned.
             PlanNode row = this.GetRowAt(x, y);
+
+            // A harvest row opens the field it's growing in.
+            if (row?.Harvests.Count > 0)
+            {
+                IncomingCrop crop = row.Harvests[0];
+                HarvesterPlanMenu.OpenFieldView(this.Jobs.NetworkManager, this.Translations, crop.Location, crop.HarvesterTile, this.Jobs.GetReservation);
+                return;
+            }
+
             if (row is { Kind: PlanStepKind.Process } && row.Alternatives.Count > 1)
             {
                 this.PendingMachineChoice = row;
@@ -301,7 +310,9 @@ namespace StardewLogistics.Menus
             }
 
             PlanNode row = this.GetRowAt(x, y);
-            if (row is { Kind: PlanStepKind.Process } && row.Alternatives.Count > 1)
+            if (row?.Harvests.Count > 0)
+                this.HoverText = this.Translations.Get("auto.harvest-hint", new { count = row.Harvests.Count });
+            else if (row is { Kind: PlanStepKind.Process } && row.Alternatives.Count > 1)
                 this.HoverText = this.Translations.Get("auto.change-machine");
         }
 
@@ -352,7 +363,7 @@ namespace StardewLogistics.Menus
                 StringComparer.OrdinalIgnoreCase);
 
             CraftPlanner planner = new(this.Crafting, this.MachineRecipes, this.Config.MaxCraftDepth);
-            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, this.CountUsable, this.TargetQuality);
+            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, this.CountUsable, this.TargetQuality, this.Jobs.GetIncoming(this.Network));
 
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));
@@ -501,9 +512,13 @@ namespace StardewLogistics.Menus
         /// <summary>The whole plan's processing time, with each step spread across its machines.</summary>
         private int GetTotalMinutes()
         {
-            return this.Rows
+            int processing = this.Rows
                 .Where(node => node.Kind == PlanStepKind.Process)
                 .Sum(this.GetStepMinutes);
+
+            // Waiting for crops comes first: nothing that needs them can start until they're harvested.
+            int wait = this.Rows.Select(node => node.HarvestDays).DefaultIfEmpty(0).Max();
+            return processing + (wait > 0 ? Utility.CalculateMinutesUntilMorning(Game1.timeOfDay, wait) : 0);
         }
 
         /// <summary>Counts the machines that could run a recipe, respecting any input filters set on them.</summary>
@@ -778,6 +793,13 @@ namespace StardewLogistics.Menus
         /// <summary>Describes how a plan step will be supplied.</summary>
         private string DescribeStep(PlanNode node)
         {
+            if (node.Kind == PlanStepKind.FromStock && node.FromHarvest > 0)
+            {
+                return node.HarvestDays <= 0
+                    ? this.Translations.Get("auto.step-harvest-today")
+                    : this.Translations.Get("auto.step-harvest", new { days = node.HarvestDays });
+            }
+
             return node.Kind switch
             {
                 PlanStepKind.FromStock => this.Translations.Get("auto.step-stock"),
