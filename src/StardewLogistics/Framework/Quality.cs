@@ -1,3 +1,4 @@
+using System;
 using SObject = StardewValley.Object;
 
 namespace StardewLogistics.Framework
@@ -23,6 +24,25 @@ namespace StardewLogistics.Framework
                 SObject.bestQuality => "iridium",
                 _ => "normal"
             };
+        }
+
+        /// <summary>How many quality levels lie between two qualities: normal to iridium is three.</summary>
+        /// <remarks>Fairy Dust on a cask moves its item up one level, so this is how many a cask run needs.</remarks>
+        public static int Steps(int from, int to)
+        {
+            int steps = 0;
+            int quality = Math.Max(SObject.lowQuality, from);
+            while (quality < to)
+            {
+                quality = quality switch
+                {
+                    SObject.lowQuality => SObject.medQuality,
+                    SObject.medQuality => SObject.highQuality,
+                    _ => SObject.bestQuality
+                };
+                steps++;
+            }
+            return steps;
         }
 
         /// <summary>How much more a quality sells for than normal, which is how much more it costs to use one.</summary>

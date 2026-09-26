@@ -45,6 +45,9 @@ namespace StardewLogistics.Framework
         /// <summary>How many of the output this run will yield.</summary>
         public int Yield { get; init; }
 
+        /// <summary>Whether Fairy Dust has already been used on this run. A cask is the exception: it takes one per quality.</summary>
+        public bool Dusted { get; set; }
+
         /// <summary>The exact items put into the machine, kept so cancelling can give them back.</summary>
         /// <remarks>The real items rather than a recipe's list, so a gold Starfruit comes back gold.</remarks>
         public List<Item> Inputs { get; init; } = new();
@@ -87,6 +90,17 @@ namespace StardewLogistics.Framework
 
         /// <summary>Why the step couldn't start anything on its last attempt, for the Jobs tab.</summary>
         public string WaitReason { get; set; }
+
+        /// <summary>Whether the step has no machine on the network that could run it at all.</summary>
+        public bool NoMachines { get; set; }
+
+        /// <summary>Idle machines this step has claimed ahead of its inputs arriving, by location and tile.</summary>
+        /// <remarks>
+        /// While a keg works on the wine, the cask it will go into is held for it, so another job can't take the
+        /// cask in the meantime. Claims are made as machines come free -- including casks placed after the job
+        /// was queued -- and released when the step no longer needs them.
+        /// </remarks>
+        public List<(string Location, Microsoft.Xna.Framework.Vector2 Tile)> Reserved { get; } = new();
 
         /// <summary>Whether that reason is a real problem rather than ordinary queuing.</summary>
         public bool IsStuck { get; set; }
@@ -156,6 +170,23 @@ namespace StardewLogistics.Framework
         /// </remarks>
         public string Token { get; init; }
 
+        /// <summary>The quality the job ages its product to, or <see cref="Quality.Any"/>.</summary>
+        public int TargetQuality { get; init; } = Quality.Any;
+
+        /// <summary>Whether the job speeds its machines up with Fairy Dust.</summary>
+        /// <remarks>Dust reserved when the job was queued is used first; after that, and for a job switched on later, from storage.</remarks>
+        public bool UseFairyDust { get; set; }
+
+        /// <summary>Machines the player has taken this job's item out of today, which it leaves alone until tomorrow.</summary>
+        /// <remarks>Striking a cask is how a player takes it back. Refilling it straight away would undo that.</remarks>
+        public List<(string Location, Microsoft.Xna.Framework.Vector2 Tile)> Excluded { get; } = new();
+
+        /// <summary>The day <see cref="Excluded"/> applies to.</summary>
+        public int ExcludedDay { get; set; }
+
+        /// <summary>Whether a machine this job was using was removed since the scheduler last looked.</summary>
+        public bool MachineLost { get; set; }
+
         /// <summary>The ingredients and intermediates this job has set aside.</summary>
         public StardewLogistics.Devices.JobBuffer Buffer { get; init; }
 
@@ -171,7 +202,13 @@ namespace StardewLogistics.Framework
                 if (total <= 0)
                     return this.Status == JobStatus.Complete ? 1 : 0;
 
-                return Math.Clamp(this.Steps.Sum(step => step.CompletedBatches) / (double)total, 0, 1);
+                // Runs in flight count for how far along they are, so a week of wine moves the bar day by day
+                // rather than sitting at zero -- and jumps when Fairy Dust hurries it along.
+                double done = this.Steps.Sum(step => step.CompletedBatches + step.InFlight.Sum(batch => batch.ExpectedMinutes > 0
+                    ? Math.Clamp(1 - (batch.MinutesLeft / (double)batch.ExpectedMinutes), 0, 1)
+                    : 0));
+
+                return Math.Clamp(done / total, 0, 1);
             }
         }
 

@@ -211,7 +211,7 @@ namespace StardewLogistics.Menus
                     NetworkItemStack entry = this.VisibleStock[index];
                     // The count is drawn separately on its own plate; the game still draws the quality star, which is
                     // the only way to tell a gold stack from a normal one.
-                    entry.Sample.drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
+                    (entry.Icon ?? entry.Sample).drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
 
                     // Vanilla stack numbers max out long before a network does, so draw the count ourselves.
                     DrawSlotCount(b, NumberFormat.Abbreviate(entry.Count), x, y);
@@ -300,6 +300,9 @@ namespace StardewLogistics.Menus
         private string DescribeMachine(NetworkNode node)
         {
             SObject machine = node.Object;
+
+            if (!Devices.MachineIO.IsOperable(machine))
+                return this.Translations.Get("device.cask-invalid");
 
             if (machine.readyForHarvest.Value && machine.heldObject.Value != null)
                 return this.Translations.Get("device.machine-ready", new { item = machine.heldObject.Value.DisplayName });

@@ -16,6 +16,9 @@ namespace StardewLogistics.Menus
         *********/
         private List<AutoTarget> AllTargets = new();
 
+        /// <summary>The Fairy Dust icon for job rows.</summary>
+        private Item FairyDustIcon;
+
         /// <summary>Icons for job targets, built once rather than every frame.</summary>
         private readonly Dictionary<string, Item> JobIcons = new(StringComparer.OrdinalIgnoreCase);
         private List<AutoTarget> VisibleTargets = new();
@@ -120,6 +123,32 @@ namespace StardewLogistics.Menus
                 };
             }
 
+            // Anything on the shelf a cask could age, even with nothing to make more of it from: ordering one at
+            // a quality ages what's there. Only offered when a cask the network can use is wired up.
+            bool hasCask = (this.Network?.Machines ?? Enumerable.Empty<Network.NetworkNode>())
+                .Any(node => Devices.MachineIO.IsOperable(node.Object) && this.MachineRecipes.IsAgingMachine(node.Object.QualifiedItemId));
+            if (hasCask)
+            {
+                foreach (Item sample in held)
+                {
+                    string id = StockId.Of(sample);
+                    if (id == null || targets.ContainsKey(id) || sample.Quality >= StardewValley.Object.bestQuality || !this.MachineRecipes.CanAge(id))
+                        continue;
+
+                    Item icon = sample.getOne();
+                    icon.Quality = StardewValley.Object.lowQuality;
+                    targets[id] = new AutoTarget
+                    {
+                        ItemId = id,
+                        DisplayName = icon.DisplayName,
+                        Category = icon.Category,
+                        SourceMod = ItemSource.GetSourceName(icon),
+                        Sample = icon,
+                        NeedsMachine = true
+                    };
+                }
+            }
+
             // Show what's already in storage next to each, so the player can see what's worth ordering.
             Dictionary<string, long> stock = new(StringComparer.OrdinalIgnoreCase);
             foreach (NetworkItemStack entry in this.AllStock)
@@ -162,7 +191,10 @@ namespace StardewLogistics.Menus
                 try
                 {
                     // Same rule as an order: "can make one" means can produce one, not "there's one on the shelf".
-                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines).IsSatisfied;
+                    target.CanMake = planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines).IsSatisfied
+                        // or there's one on the shelf a cask could take further
+                        || (this.MachineRecipes.CanAge(target.ItemId)
+                            && planner.Plan(target.ItemId, 1, stock, null, this.Network.CountUsableMachines, StardewValley.Object.bestQuality).IsSatisfied);
                 }
                 catch
                 {
@@ -323,13 +355,8 @@ namespace StardewLogistics.Menus
                 drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), grid.X, y, grid.Width, rowHeight - 8, Color.White * 0.9f, 1f, drawShadow: false);
 
                 // The item being made, centred in the row's left edge as a 48px icon.
-                Item icon = this.GetJobIcon(job.TargetId);
-                if (icon != null)
-                {
-                    bool tall = icon is StardewValley.Object obj && obj.bigCraftable.Value;
-                    // drawInMenu centres on position + (32,32), so offset back to land a 48px icon at (x+14, y+20).
-                    icon.drawInMenu(b, new Vector2(grid.X + 6, y + 12), tall ? 0.375f : 0.75f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
-                }
+                Item icon = this.GetJobIcon(job.TargetId, job.TargetQuality);
+                ItemIcon.Draw(b, icon, new Rectangle(grid.X + 14, y + 20, 48, 48));
 
                 int textX = grid.X + 72;
 
@@ -361,6 +388,18 @@ namespace StardewLogistics.Menus
                     Utility.drawTextWithShadow(b, eta, Game1.smallFont, new Vector2(barX, y + 52), Game1.textColor * 0.7f);
                 }
 
+                // Fairy Dust for a job still running: lit when on. Switching it on draws dust from storage.
+                if (job.Status is not (JobStatus.Complete or JobStatus.Cancelled))
+                {
+                    Rectangle dust = GetDustBounds(grid, y);
+                    drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), dust.X, dust.Y, dust.Width, dust.Height, job.UseFairyDust ? Color.Gold : Color.White * 0.8f, 2f, drawShadow: false);
+                    this.FairyDustIcon ??= ItemRegistry.Create(Devices.JobRunner.FairyDustId);
+                    this.FairyDustIcon.drawInMenu(b, new Vector2(dust.Center.X - 32, dust.Center.Y - 32), 0.55f, job.UseFairyDust ? 1f : 0.45f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+
+                    if (dust.Contains(Game1.getMouseX(), Game1.getMouseY()))
+                        this.HoverText = this.Translations.Get(job.UseFairyDust ? "jobs.dust-on" : "jobs.dust-off");
+                }
+
                 Rectangle button = GetCancelBounds(grid, y);
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), button.X, button.Y, button.Width, button.Height, Color.White, 2f, drawShadow: false);
 
@@ -387,10 +426,17 @@ namespace StardewLogistics.Menus
                 if (index >= jobs.Count)
                     break;
 
+                CraftJob job = jobs[index];
+
+                if (job.Status is not (JobStatus.Complete or JobStatus.Cancelled) && GetDustBounds(grid, grid.Y + (i * rowHeight)).Contains(x, y))
+                {
+                    job.UseFairyDust = !job.UseFairyDust;
+                    Game1.playSound(job.UseFairyDust ? "yoba" : "smallSelect");
+                    return;
+                }
+
                 if (!GetCancelBounds(grid, grid.Y + (i * rowHeight)).Contains(x, y))
                     continue;
-
-                CraftJob job = jobs[index];
                 bool acted = job.Status is JobStatus.Complete or JobStatus.Cancelled
                     ? this.Jobs.Dismiss(job.Id)
                     : this.Jobs.Cancel(job.Id);
@@ -421,6 +467,9 @@ namespace StardewLogistics.Menus
             Utility.drawTextWithShadow(b, text, Game1.smallFont, position, colour);
         }
 
+        /// <summary>The bounds of a job row's Fairy Dust toggle, just left of Cancel.</summary>
+        private static Rectangle GetDustBounds(Rectangle grid, int rowY) => new(grid.Right - 206, rowY + 22, 48, 44);
+
         /// <summary>The bounds of a job row's cancel button.</summary>
         private static Rectangle GetCancelBounds(Rectangle grid, int rowY) => new(grid.Right - 150, rowY + 22, 130, 44);
 
@@ -431,13 +480,18 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>The icon for a job's target item.</summary>
-        private Item GetJobIcon(string targetId)
+        private Item GetJobIcon(string targetId, int quality)
         {
             if (string.IsNullOrEmpty(targetId))
                 return null;
 
-            if (!this.JobIcons.TryGetValue(targetId, out Item icon))
-                this.JobIcons[targetId] = icon = StockId.Create(targetId);
+            string key = quality > 0 ? $"{targetId}#{quality}" : targetId;
+            if (!this.JobIcons.TryGetValue(key, out Item icon))
+            {
+                this.JobIcons[key] = icon = StockId.Create(targetId);
+                if (icon != null && quality > 0)
+                    icon.Quality = quality;
+            }
 
             return icon;
         }

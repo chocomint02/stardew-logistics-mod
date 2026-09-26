@@ -54,6 +54,8 @@ namespace StardewLogistics
             this.Jobs = new JobRunner(this.Networks, this.MachineRecipes, this.CraftingRecipes, this.Config);
             this.Ticker.IsLiveClaim = this.Jobs.IsLiveClaim;
 
+            CaskPatches.Apply(new HarmonyLib.Harmony(this.ModManifest.UniqueID), this.Jobs.ReclaimFromCask);
+
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
             this.Content = new ContentInjector(helper.Translation);
@@ -161,6 +163,19 @@ namespace StardewLogistics
         /// <summary>Rescans a location when something is placed or broken in it.</summary>
         private void OnObjectListChanged(object sender, ObjectListChangedEventArgs e)
         {
+            // Before the location is rescanned, while the network still knows what the removed machines were
+            // wired to. Only the host moves items, as everywhere else.
+            if (Context.IsMainPlayer)
+            {
+                foreach (KeyValuePair<Vector2, SObject> removed in e.Removed)
+                {
+                    if (this.Jobs.HandleMachineRemoved(e.Location, removed.Key, removed.Value))
+                        continue;
+
+                    MachineIO.RefundRemoved(removed.Value, this.Networks.GetNetworkTouching(e.Location, removed.Key), e.Location, removed.Key);
+                }
+            }
+
             this.Networks.Invalidate(e.Location);
 
             // Where the wireless devices are is worked out across the whole world, so only placing or removing

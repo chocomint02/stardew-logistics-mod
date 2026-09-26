@@ -57,6 +57,20 @@ namespace StardewLogistics.Framework
         /// </remarks>
         public Item OutputSample { get; init; }
 
+        /// <summary>Whether this is a cask aging an item to a better quality, rather than a machine transforming it.</summary>
+        /// <remarks>
+        /// Casks don't fit the mould of other machines: the output is the input, a run lasts until a quality is
+        /// reached rather than a set time, and how long depends on the quality it went in at. The planner treats
+        /// aging as an ordinary processing step, with these fields saying what "done" means.
+        /// </remarks>
+        public bool IsAging { get; init; }
+
+        /// <summary>The quality an aging run stops at.</summary>
+        public int TargetQuality { get; init; } = Quality.Any;
+
+        /// <summary>How many cask-days pass per real day for this item: Wine 1, Cheese 4.</summary>
+        public float AgingRate { get; init; } = 1f;
+
         /// <summary>Whether the output takes its identity from the input, like a wine from its fruit.</summary>
         public bool OutputIsFlavoured => StockId.IsFlavoured(this.OutputId);
 
@@ -88,7 +102,9 @@ namespace StardewLogistics.Framework
         public bool HasVariableYield => this.MaxOutputCount > this.OutputCount;
 
         /// <summary>A stable key for this recipe, used to remember the player's machine preferences.</summary>
-        public string Key => $"{this.MachineId}|{this.InputId}|{this.OutputId}" + (this.InputQuality >= 0 ? $"|q{this.InputQuality}" : "");
+        public string Key => $"{this.MachineId}|{this.InputId}|{this.OutputId}"
+            + (this.InputQuality >= 0 ? $"|q{this.InputQuality}" : "")
+            + (this.IsAging ? $"|age{this.TargetQuality}" : "");
 
         /// <summary>The output's display name.</summary>
         public string OutputName => this.OutputSample?.DisplayName ?? StockId.GetDisplayName(this.OutputId);

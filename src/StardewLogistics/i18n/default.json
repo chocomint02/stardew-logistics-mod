@@ -64,6 +64,7 @@
   "device.chest-slots": "{{used}} of {{total}} stacks used",
   "device.machine": "{{name}} at ({{x}}, {{y}})",
   "device.elsewhere": " in {{location}}",
+  "device.cask-invalid": "Can't age anything here, so autocrafting ignores it",
   "device.machine-ready": "Ready: {{item}}",
   "device.machine-busy": "Working, {{minutes}} minutes left",
   "device.machine-idle": "Idle",
@@ -116,6 +117,8 @@
   "jobs.none": "No autocrafting jobs running.",
   "jobs.cancel": "Cancel",
   "jobs.eta": "{{time}} left",
+  "jobs.dust-off": "Use Fairy Dust from storage to speed this job up",
+  "jobs.dust-on": "Using Fairy Dust. Click to stop",
   "jobs.status-pending": "Queued",
   "jobs.status-running": "Running",
   "jobs.status-complete": "Done",
@@ -125,6 +128,10 @@
   "jobs.clear": "Clear",
   "auto.machines-available": "up to {{count}}",
   "auto.tab-legend": "Dimmed: short of materials.   Blue corner: needs a machine.",
+  "auto.quality": "Quality",
+  "auto.quality-normal": "Normal",
+  "auto.fairy-dust-off": "Fairy Dust: off. Click to speed this job up with the {{count}} in storage.",
+  "auto.fairy-dust-on": "Fairy Dust: on. The job will use dust from storage ({{count}} held). Click to turn off.",
   "auto.min": "Min",
   "auto.max": "Max"
 }

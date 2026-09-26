@@ -36,6 +36,9 @@ namespace StardewLogistics.Devices
         private readonly List<CraftJob> JobList = new();
         private int NextJobNumber = 1;
 
+        /// <summary>The Fairy Dust item.</summary>
+        public const string FairyDustId = "(O)872";
+
         /// <summary>Scheduler ticks since leftover buffers were last looked for.</summary>
         private int TicksSinceOrphanCheck;
 
@@ -65,7 +68,9 @@ namespace StardewLogistics.Devices
         /// <param name="maxMachines">How many machines each processing step may occupy at once; zero for no limit.</param>
         /// <param name="preferredMachines">The player's machine choice per output item.</param>
         /// <param name="error">Why the job couldn't be queued.</param>
-        public CraftJob TryQueue(string targetId, int count, StorageNetwork network, int maxMachines, IReadOnlyDictionary<string, string> preferredMachines, out string error)
+        /// <param name="targetQuality">The quality to age the product to in casks, or <see cref="Quality.Any"/>.</param>
+        /// <param name="useFairyDust">Whether to set aside Fairy Dust from storage and use it on the job's machines.</param>
+        public CraftJob TryQueue(string targetId, int count, StorageNetwork network, int maxMachines, IReadOnlyDictionary<string, string> preferredMachines, out string error, int targetQuality = Quality.Any, bool useFairyDust = false)
         {
             error = null;
 
@@ -80,7 +85,7 @@ namespace StardewLogistics.Devices
             this.CraftingRecipes.Refresh(filterable);
 
             CraftPlanner planner = new(this.CraftingRecipes, this.MachineRecipes, this.Config.MaxCraftDepth);
-            CraftPlan plan = planner.Plan(targetId, count, filterable, preferredMachines, network.CountUsableMachines);
+            CraftPlan plan = planner.Plan(targetId, count, filterable, preferredMachines, network.CountUsableMachines, targetQuality);
 
             if (!plan.IsSatisfied)
             {
@@ -98,6 +103,7 @@ namespace StardewLogistics.Devices
                 Token = token,
                 Buffer = JobBuffer.Create(token, locationName, anchor),
                 TargetId = targetId,
+                TargetQuality = targetQuality,
                 DisplayName = GetName(targetId),
                 TargetCount = count,
                 LocationName = locationName,
@@ -117,6 +123,12 @@ namespace StardewLogistics.Devices
                 job.Buffer.ReturnTo(network);
                 error = "storage changed while queuing (" + shortfall + "); try again";
                 return null;
+            }
+
+            if (useFairyDust)
+            {
+                job.UseFairyDust = true;
+                this.ReserveFairyDust(job, network);
             }
 
             job.Status = JobStatus.Pending;
@@ -141,8 +153,9 @@ namespace StardewLogistics.Devices
             foreach (JobStep step in job.Steps)
             {
                 foreach (RunningBatch batch in step.InFlight)
-                    this.StopRun(job, batch);
+                    this.StopRun(job, step, batch);
                 step.InFlight.Clear();
+                this.ReleaseReservations(job, step);
             }
 
             job.Status = JobStatus.Cancelled;
@@ -163,7 +176,7 @@ namespace StardewLogistics.Devices
         /// A run that hasn't finished gives back its inputs. One that has finished gives back its product
         /// instead: the work is done, and undoing it would only throw away the time spent.
         /// </remarks>
-        private void StopRun(CraftJob job, RunningBatch batch)
+        private void StopRun(CraftJob job, JobStep step, RunningBatch batch)
         {
             SObject machine = this.FindMachine(batch);
             if (machine == null)
@@ -174,7 +187,13 @@ namespace StardewLogistics.Devices
             if (!machine.modData.TryGetValue(ModIds.JobKey, out string claim) || claim != job.Token)
                 return;
 
-            if (machine.readyForHarvest.Value && machine.heldObject.Value != null)
+            // A cask holds the item itself, partly aged; that's what goes back, at whatever quality it reached.
+            if (step.MachineRecipe?.IsAging == true)
+            {
+                if (machine.heldObject.Value != null)
+                    job.Buffer?.Add(machine.heldObject.Value);
+            }
+            else if (machine.readyForHarvest.Value && machine.heldObject.Value != null)
                 job.Buffer?.Add(machine.heldObject.Value);
             else
             {
@@ -243,6 +262,7 @@ namespace StardewLogistics.Devices
 
                 this.CollectFinished(job, network);
                 this.StartWork(job, network);
+                this.ApplyFairyDust(job, network);
 
                 if (job.Steps.All(step => step.IsComplete))
                 {
@@ -252,6 +272,8 @@ namespace StardewLogistics.Devices
                     // Anything left over -- a bulk machine's extra output, an intermediate made in whole batches
                     // -- is the network's again.
                     job.Buffer?.ReturnTo(network);
+                    foreach (JobStep step in job.Steps)
+                        this.ReleaseReservations(job, step);
                 }
             }
         }
@@ -396,9 +418,19 @@ namespace StardewLogistics.Devices
                     SObject machine = this.FindMachine(batch);
                     if (machine == null)
                     {
-                        // The machine was broken or removed while working; the run is lost, so put the batch back.
+                        // Gone without the removal being seen (removal is normally handled as it happens). Take
+                        // back what went in and run it again elsewhere.
+                        foreach (Item input in batch.Inputs)
+                            job.Buffer?.Add(input);
                         step.InFlight.Remove(batch);
                         step.RemainingBatches++;
+                        job.MachineLost = true;
+                        continue;
+                    }
+
+                    if (step.MachineRecipe?.IsAging == true)
+                    {
+                        this.CheckAging(job, step, batch, machine, network);
                         continue;
                     }
 
@@ -424,6 +456,178 @@ namespace StardewLogistics.Devices
                     }
                 }
             }
+        }
+
+        /// <summary>Collects an aging run once it reaches its quality, and keeps its time left up to date.</summary>
+        private void CheckAging(CraftJob job, JobStep step, RunningBatch batch, SObject machine, StorageNetwork network)
+        {
+            int target = step.MachineRecipe.TargetQuality;
+            SObject held = machine.heldObject.Value;
+
+            // Emptied early: a player hitting the cask pops the item out. It's theirs now, so run the batch again
+            // with another from the buffer or storage.
+            if (held == null)
+            {
+                machine.modData.Remove(ModIds.JobKey);
+                step.InFlight.Remove(batch);
+                step.RemainingBatches++;
+                Log.Trace($"{job.Id}: a cask was emptied before its item reached {Quality.Name(target)}; aging another.");
+                return;
+            }
+
+            if (held.Quality >= target)
+            {
+                this.Collect(machine, job, step, batch, network);
+                return;
+            }
+
+            if (machine is StardewValley.Objects.Cask cask)
+                batch.MinutesLeft = MachineRecipeIndex.AgingDaysLeft(cask, target) * CraftPlan.MinutesPerDay;
+        }
+
+        /// <summary>Takes a job's item back out of a cask the player has struck, so it isn't dropped.</summary>
+        /// <returns>Whether the cask was a job's, in which case its item is back in the job and the cask is empty.</returns>
+        /// <remarks>
+        /// The item is partly aged, so it goes back into the job rather than storage: the job ages that same item
+        /// on in another cask, from the quality it reached, rather than starting a fresh one. The struck cask is
+        /// left alone for the rest of the day -- striking it is how a player says they want it.
+        /// </remarks>
+        public bool ReclaimFromCask(StardewValley.Objects.Cask cask)
+        {
+            if (!StardewModdingAPI.Context.IsMainPlayer || cask?.heldObject.Value == null)
+                return false;
+            if (!cask.modData.TryGetValue(ModIds.JobKey, out string claim) || !this.IsLiveClaim(claim))
+                return false;
+
+            string locationName = cask.Location?.NameOrUniqueName;
+            Microsoft.Xna.Framework.Vector2 tile = cask.TileLocation;
+            CraftJob job = this.JobList.First(candidate => candidate.Token == claim);
+
+            foreach (JobStep step in job.Steps.Where(step => step.MachineRecipe?.IsAging == true))
+            {
+                RunningBatch batch = step.InFlight.FirstOrDefault(candidate => candidate.LocationName == locationName && candidate.Tile == tile);
+                if (batch == null)
+                    continue;
+
+                SObject held = cask.heldObject.Value;
+                job.Buffer?.Add(held);
+
+                cask.heldObject.Value = null;
+                cask.readyForHarvest.Value = false;
+                cask.minutesUntilReady.Value = 0;
+                cask.modData.Remove(ModIds.JobKey);
+
+                step.InFlight.Remove(batch);
+                step.RemainingBatches++;
+
+                if (job.ExcludedDay != Game1.Date.TotalDays)
+                    job.Excluded.Clear();
+                job.ExcludedDay = Game1.Date.TotalDays;
+                job.Excluded.Add((locationName, tile));
+
+                Log.Debug($"{job.Id}: the player struck a cask aging {held.DisplayName} ({Quality.Name(held.Quality)}); it's back in the job and will age on in another cask.");
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Handles a machine being removed from the world, if a job was using it.</summary>
+        /// <returns>Whether the machine belonged to a job, in which case the job has dealt with its contents.</returns>
+        /// <remarks>
+        /// Breaking a working machine destroys what's in it. For a job's machine the exact inputs are known, so
+        /// they go back into the job's buffer and the run is started again on another machine. A run that had
+        /// already finished gives its product instead. If no machine of that kind is left, the job is cancelled
+        /// on the next scheduler pass and everything it holds returns to storage.
+        /// </remarks>
+        public bool HandleMachineRemoved(GameLocation location, Microsoft.Xna.Framework.Vector2 tile, SObject machine)
+        {
+            string locationName = location?.NameOrUniqueName;
+            if (locationName == null || machine == null)
+                return false;
+
+            foreach (CraftJob job in this.JobList)
+            {
+                if (job.Status is JobStatus.Complete or JobStatus.Cancelled)
+                    continue;
+
+                foreach (JobStep step in job.Steps)
+                {
+                    // A machine held for later: just forget it.
+                    if (step.Reserved.RemoveAll(reserved => reserved.Location == locationName && reserved.Tile == tile) > 0)
+                    {
+                        job.MachineLost = true;
+                        return true;
+                    }
+
+                    RunningBatch batch = step.InFlight.FirstOrDefault(candidate => candidate.LocationName == locationName && candidate.Tile == tile);
+                    if (batch == null)
+                        continue;
+
+                    SObject held = machine.heldObject.Value;
+                    bool aging = step.MachineRecipe?.IsAging == true;
+
+                    if (!aging && machine.readyForHarvest.Value && held != null)
+                    {
+                        // Finished: keep the product and count the run.
+                        StorageNetwork network = this.ResolveNetwork(job);
+                        if (network != null)
+                            this.Deliver(held, job, step, network);
+                        else
+                            job.Buffer?.Add(held);
+                        step.CompletedBatches++;
+                    }
+                    else
+                    {
+                        // Unfinished: the inputs come back and the run goes again. A cask's item is the input.
+                        if (aging)
+                        {
+                            if (held != null)
+                                job.Buffer?.Add(held);
+                        }
+                        else
+                        {
+                            foreach (Item input in batch.Inputs)
+                                job.Buffer?.Add(input);
+                        }
+                        step.RemainingBatches++;
+                    }
+
+                    step.InFlight.Remove(batch);
+                    job.MachineLost = true;
+                    Log.Debug($"{job.Id}: a {machine.DisplayName} it was using was removed; its run has been returned to the job.");
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Forgets one reserved machine that's been put to other use.</summary>
+        /// <remarks>The claim is only removed if none of the job's own runs is using the machine.</remarks>
+        private void DropReservation(CraftJob job, JobStep step, NetworkNode node, StorageNetwork network)
+        {
+            string here = (node.Location ?? network.Location)?.NameOrUniqueName;
+            if (step.Reserved.RemoveAll(reserved => reserved.Location == here && reserved.Tile == node.Tile) == 0)
+                return;
+
+            bool running = job.Steps.Any(other => other.InFlight.Any(batch => batch.LocationName == here && batch.Tile == node.Tile));
+            if (!running && node.Object.modData.TryGetValue(ModIds.JobKey, out string claim) && claim == job.Token)
+                node.Object.modData.Remove(ModIds.JobKey);
+        }
+
+        /// <summary>Lets go of machines a step claimed ahead of time and no longer needs.</summary>
+        private void ReleaseReservations(CraftJob job, JobStep step)
+        {
+            foreach ((string locationName, Microsoft.Xna.Framework.Vector2 tile) in step.Reserved)
+            {
+                SObject machine = this.FindMachine(new RunningBatch { LocationName = locationName, Tile = tile });
+                if (machine != null && machine.heldObject.Value == null
+                    && machine.modData.TryGetValue(ModIds.JobKey, out string claim) && claim == job.Token)
+                    machine.modData.Remove(ModIds.JobKey);
+            }
+
+            step.Reserved.Clear();
         }
 
         /// <summary>Takes a finished machine's output and closes off the batch.</summary>
@@ -465,6 +669,26 @@ namespace StardewLogistics.Devices
 
             if (job.Status == JobStatus.Complete)
                 return;
+
+            // A step with nothing left to reserve machines for lets them go.
+            foreach (JobStep step in job.Steps.Where(step => step.RemainingBatches <= 0 && step.Reserved.Count > 0))
+                this.ReleaseReservations(job, step);
+
+            // A machine the job was using was removed, and now a step has no machine left to run on at all.
+            // Waiting would wait forever, so give everything back instead.
+            if (job.MachineLost)
+            {
+                job.MachineLost = false;
+                JobStep stranded = job.Steps.FirstOrDefault(step => step.RemainingBatches > 0 && step.NoMachines && step.InFlight.Count == 0);
+                if (stranded != null)
+                {
+                    string machineName = stranded.MachineRecipe?.MachineName ?? "machine";
+                    Log.Debug($"{job.Id} cancelled: the last {machineName} it could use was removed. Its materials are back in storage.");
+                    Game1.addHUDMessage(new HUDMessage($"{job.DisplayName}: cancelled, no {machineName} left. Materials returned.", HUDMessage.error_type));
+                    this.Cancel(job.Id);
+                    return;
+                }
+            }
 
             if (didSomething || job.Steps.Any(step => step.InFlight.Count > 0))
             {
@@ -573,33 +797,68 @@ namespace StardewLogistics.Devices
                 if (!node.AcceptsInput(StockId.BaseId(recipe.InputId)))
                     continue;
 
+                // A cask where aging isn't allowed is wired up but useless.
+                if (!MachineIO.IsOperable(machine))
+                    continue;
+
                 usable++;
 
-                // Busy, or claimed by a job that's still running. A claim left by a job that's gone is ignored,
-                // or one reload would take the machine out of service for good.
-                if (machine.heldObject.Value != null || machine.MinutesUntilReady > 0)
+                // One the player took this job's item out of today.
+                if (this.IsExcluded(job, (node.Location ?? network.Location)?.NameOrUniqueName, node.Tile))
                     continue;
-                if (machine.modData.TryGetValue(ModIds.JobKey, out string claim) && this.IsLiveClaim(claim))
+
+                // Busy, or claimed by another job that's still running. A claim left by a job that's gone is
+                // ignored, or one reload would take the machine out of service for good; this job's own claim is
+                // a machine it reserved, and is exactly the one to use.
+                if (machine.heldObject.Value != null || machine.MinutesUntilReady > 0)
+                {
+                    // A machine this step was holding has been put to other use -- by the player's hand, say. Let
+                    // it go, or the network would never collect whatever the player put in it.
+                    this.DropReservation(job, step, node, network);
+                    continue;
+                }
+                if (machine.modData.TryGetValue(ModIds.JobKey, out string claim) && claim != job.Token && this.IsLiveClaim(claim))
                     continue;
 
                 free++;
 
-                if (!this.TryLoadMachine(machine, recipe, job.Buffer, network, out int minutes, out List<Item> consumed, out ItemCost? lacking))
+                // While an earlier step is still making this one's input, wait for it rather than taking some from
+                // storage: that stock isn't this job's.
+                bool inputComing = HasEarlierWork(job, step);
+
+                if (!this.TryLoadMachine(machine, recipe, job.Buffer, inputComing ? null : network, out int minutes, out List<Item> consumed, out ItemCost? lacking))
                 {
                     missing ??= lacking;
+
+                    // Hold the machine for when the input arrives, so another job can't take it meanwhile.
+                    string here = (node.Location ?? network.Location)?.NameOrUniqueName;
+                    if (inputComing && here != null
+                        && step.Reserved.Count < Math.Min(step.RemainingBatches, allowance)
+                        && !step.Reserved.Any(reserved => reserved.Location == here && reserved.Tile == node.Tile))
+                    {
+                        machine.modData[ModIds.JobKey] = job.Token;
+                        step.Reserved.Add((here, node.Tile));
+                    }
                     continue;
                 }
 
+                // Now running, so no longer merely held -- by this step or any other in the job.
+                string loaded = (node.Location ?? network.Location)?.NameOrUniqueName;
+                foreach (JobStep other in job.Steps)
+                    other.Reserved.RemoveAll(reserved => reserved.Location == loaded && reserved.Tile == node.Tile);
                 machine.modData[ModIds.JobKey] = job.Token;
                 step.InFlight.Add(new RunningBatch
                 {
                     // The machine's own location: on a wirelessly linked network it may be the cellar, not here.
                     LocationName = (node.Location ?? network.Location)?.NameOrUniqueName,
                     Tile = node.Tile,
-                    ExpectedMinutes = minutes,
                     MinutesLeft = minutes,
                     Yield = recipe.OutputCount,
-                    Inputs = consumed
+                    Inputs = consumed,
+
+                    // An aging run is measured against the whole climb from normal, so a silver wine going back in
+                    // shows as already a quarter done rather than starting the bar again.
+                    ExpectedMinutes = recipe.IsAging ? Math.Max(minutes, recipe.Days * CraftPlan.MinutesPerDay) : minutes
                 });
 
                 step.RemainingBatches--;
@@ -616,10 +875,14 @@ namespace StardewLogistics.Devices
         /// <summary>Records why a processing step couldn't start a run.</summary>
         private void ExplainIdleProcessStep(CraftJob job, JobStep step, MachineRecipe recipe, int usable, int free, ItemCost? missing)
         {
+            step.NoMachines = usable == 0;
+
             if (usable == 0)
             {
                 // Removed, or every one filtered against this input. Nothing will change until the player acts.
-                step.WaitReason = $"no {recipe.MachineName} on the network will take {StockId.GetDisplayName(recipe.InputId)}";
+                step.WaitReason = recipe.IsAging
+                    ? $"no {recipe.MachineName} on the network is somewhere it can age things"
+                    : $"no {recipe.MachineName} on the network will take {StockId.GetDisplayName(recipe.InputId)}";
                 step.IsStuck = true;
             }
             else if (free == 0)
@@ -630,7 +893,11 @@ namespace StardewLogistics.Devices
             {
                 // An earlier step still to finish is where the ingredient is coming from; otherwise it's gone.
                 if (HasEarlierWork(job, step))
+                {
                     step.WaitReason = $"waiting for {StockId.GetDisplayName(lacking.ItemId)} from an earlier step";
+                    if (step.Reserved.Count > 0)
+                        step.WaitReason += $"; {step.Reserved.Count} {recipe.MachineName} reserved";
+                }
                 else
                 {
                     step.WaitReason = $"missing {lacking.Count}x {StockId.GetDisplayName(lacking.ItemId)}";
@@ -652,11 +919,16 @@ namespace StardewLogistics.Devices
 
         /// <summary>Takes a run's inputs from storage and sets the machine working.</summary>
         /// <returns>Whether the machine was loaded.</returns>
+        /// <param name="network">Where a shortfall may be drawn from, or <c>null</c> to use only what the job holds.</param>
         private bool TryLoadMachine(SObject machine, MachineRecipe recipe, JobBuffer buffer, StorageNetwork network, out int minutes, out List<Item> consumed, out ItemCost? missing)
         {
             minutes = 0;
             consumed = new List<Item>();
             missing = null;
+
+            if (recipe.IsAging)
+                return this.TryStartAging(machine, recipe, buffer, network, out minutes, out consumed, out missing);
+
             List<ItemCost> inputs = recipe.GetAllInputs().ToList();
 
             // Check everything is in the job's buffer before taking any of it, so a partial load can't strand
@@ -713,6 +985,114 @@ namespace StardewLogistics.Devices
         /*********
         ** Private methods: lookup
         *********/
+        /// <summary>Puts one item from the job into a cask to age towards the step's quality.</summary>
+        private bool TryStartAging(SObject machine, MachineRecipe recipe, JobBuffer buffer, StorageNetwork network, out int minutes, out List<Item> consumed, out ItemCost? missing)
+        {
+            minutes = 0;
+            consumed = new List<Item>();
+            missing = null;
+
+            Item input = buffer.TakeBestBelow(recipe.InputId, recipe.TargetQuality);
+            if (input == null && network != null && buffer.EnsureHas(recipe.InputId, 1, network))
+                input = buffer.TakeBestBelow(recipe.InputId, recipe.TargetQuality);
+
+            if (input == null)
+            {
+                missing = new ItemCost(recipe.InputId, 1);
+                return false;
+            }
+
+            if (!this.MachineRecipes.StartAging(machine, input))
+            {
+                buffer.Add(input);
+                return false;
+            }
+
+            consumed.Add(input);
+            minutes = MachineRecipeIndex.AgingDays(input.Quality, recipe.TargetQuality, recipe.AgingRate) * CraftPlan.MinutesPerDay;
+            return true;
+        }
+
+        /// <summary>Whether the player has taken this job's item out of a machine today.</summary>
+        private bool IsExcluded(CraftJob job, string locationName, Microsoft.Xna.Framework.Vector2 tile)
+        {
+            if (job.Excluded.Count == 0)
+                return false;
+
+            if (job.ExcludedDay != Game1.Date.TotalDays)
+            {
+                job.Excluded.Clear();
+                return false;
+            }
+
+            return job.Excluded.Any(excluded => excluded.Location == locationName && excluded.Tile == tile);
+        }
+
+        /// <summary>Sets aside the Fairy Dust a job could use from storage.</summary>
+        /// <remarks>
+        /// One per run on a machine that takes dust, and one per quality level for a cask run, since each use only
+        /// moves a cask's item up a level. Counted from normal quality, so it may be more than a job ends up using;
+        /// what's left over returns with everything else when the job finishes.
+        /// </remarks>
+        private void ReserveFairyDust(CraftJob job, StorageNetwork network)
+        {
+            int wanted = job.Steps
+                .Where(step => step.Kind == PlanStepKind.Process && step.MachineRecipe != null && this.MachineRecipes.AllowsFairyDust(step.MachineRecipe.MachineId))
+                .Sum(step => step.RemainingBatches * (step.MachineRecipe.IsAging ? Quality.Steps(SObject.lowQuality, step.MachineRecipe.TargetQuality) : 1));
+
+            int available = (int)Math.Min(int.MaxValue, network.CountById(FairyDustId));
+            int take = Math.Min(wanted, available);
+            if (take <= 0)
+                return;
+
+            foreach (Item dust in network.ExtractById(FairyDustId, take))
+                job.Buffer.Add(dust);
+
+            Log.Debug($"{job.Id}: set aside {take} Fairy Dust for {wanted} possible uses.");
+        }
+
+        /// <summary>Uses Fairy Dust on the job's running machines, if the job has it switched on.</summary>
+        /// <remarks>
+        /// Uses the game's own <c>TryApplyFairyDust</c>, the same as sprinkling it by hand, so each machine behaves
+        /// as it would for the player: most finish their run, a cask moves its item up one quality. Dust comes
+        /// from what the job set aside, then from storage. A cask gets one a tick until it reaches the job's
+        /// quality; any other machine one per run.
+        /// </remarks>
+        private void ApplyFairyDust(CraftJob job, StorageNetwork network)
+        {
+            if (!job.UseFairyDust || job.Status is JobStatus.Complete or JobStatus.Cancelled)
+                return;
+
+            foreach (JobStep step in job.Steps.Where(step => step.Kind == PlanStepKind.Process && step.MachineRecipe != null))
+            {
+                bool aging = step.MachineRecipe.IsAging;
+
+                foreach (RunningBatch batch in step.InFlight)
+                {
+                    if (!aging && batch.Dusted)
+                        continue;
+
+                    SObject machine = this.FindMachine(batch);
+                    if (machine == null)
+                        continue;
+                    if (aging && (machine.heldObject.Value == null || machine.heldObject.Value.Quality >= step.MachineRecipe.TargetQuality))
+                        continue;
+                    if (!machine.TryApplyFairyDust(probe: true))
+                        continue;
+
+                    Item dust = job.Buffer.Take(FairyDustId, 1).FirstOrDefault()
+                        ?? network.ExtractById(FairyDustId, 1).FirstOrDefault();
+                    if (dust == null)
+                        return; // out of dust; nothing more to do this tick
+
+                    if (machine.TryApplyFairyDust(probe: false))
+                        batch.Dusted = true;
+                    else
+                        job.Buffer.Add(dust);
+                }
+            }
+        }
+
         /// <summary>Puts a step's output where it belongs: storage for the ordered item, the buffer for the rest.</summary>
         /// <remarks>If storage is full, the ordered item waits in the buffer too, rather than being lost.</remarks>
         private void Deliver(Item product, CraftJob job, JobStep step, StorageNetwork network)

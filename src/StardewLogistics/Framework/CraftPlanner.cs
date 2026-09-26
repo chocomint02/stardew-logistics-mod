@@ -60,7 +60,8 @@ namespace StardewLogistics.Framework
         /// stock, which is what the ledger is for. This is deliberately not a parameter -- it was one, and the
         /// two call sites that forgot to pass it produced a plan preview that disagreed with the queued job.
         /// </remarks>
-        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, Func<MachineRecipe, int> countUsableMachines = null)
+        /// <param name="targetQuality">The quality wanted, which adds a cask step; <see cref="Quality.Any"/> for none.</param>
+        public CraftPlan Plan(string targetId, int count, IReadOnlyList<IFilterableEntry> stock, IReadOnlyDictionary<string, string> preferredMachines = null, Func<MachineRecipe, int> countUsableMachines = null, int targetQuality = Quality.Any)
         {
             Ledger ledger = new(stock);
             CraftPlan plan = new() { RequestedCount = count };
@@ -71,7 +72,9 @@ namespace StardewLogistics.Framework
             if (stock != null)
                 this.Machines?.ExpandFor(stock.Select(entry => entry.Sample).Where(sample => sample != null));
 
-            PlanNode root = this.Resolve(targetId, count, ledger, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0, preferredMachines, plan);
+            PlanNode root = targetQuality > 0
+                ? this.PlanAging(targetId, count, targetQuality, ledger, preferredMachines, plan)
+                : this.Resolve(targetId, count, ledger, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0, preferredMachines, plan);
             return new CraftPlan { Root = root, RequestedCount = count, HitDepthLimit = plan.HitDepthLimit };
         }
 
@@ -79,8 +82,78 @@ namespace StardewLogistics.Framework
         /*********
         ** Private methods
         *********/
+        /// <summary>Plans an item aged in casks to a quality: a cask step, fed from stock and from whatever makes it.</summary>
+        /// <remarks>
+        /// The cask step's inputs are this same item below the target quality. Stock is used best first -- a silver
+        /// wine is fourteen days nearer iridium than a normal one, which is the opposite of how ingredients are
+        /// spent elsewhere, and deliberately so. Stock already at or above the target isn't used: an order for
+        /// five iridium wines makes five, the same rule as every other order. Whatever stock can't cover is made
+        /// by the usual route -- Starfruit into a keg -- and aged from normal.
+        /// </remarks>
+        private PlanNode PlanAging(string itemId, int count, int targetQuality, Ledger ledger, IReadOnlyDictionary<string, string> preferred, CraftPlan plan)
+        {
+            PlanNode node = new()
+            {
+                ItemId = itemId,
+                RequiredQuality = targetQuality,
+                DisplayName = GetDisplayName(itemId),
+                Requested = count,
+                Depth = 0
+            };
+
+            MachineRecipe aging = this.Machines?.GetAgingRecipe(itemId, targetQuality);
+            if (aging == null)
+            {
+                node.Kind = PlanStepKind.Missing;
+                node.Missing = count;
+                node.Reason = MissingReason.NoRecipe;
+                return node;
+            }
+
+            if (this.CountUsable != null && this.CountUsable(aging) <= 0)
+            {
+                node.Kind = PlanStepKind.Missing;
+                node.Missing = count;
+                node.Reason = MissingReason.NoMachineAvailable;
+                node.Alternatives = new[] { aging };
+                return node;
+            }
+
+            node.Kind = PlanStepKind.Process;
+            node.ToProduce = count;
+            node.Alternatives = new[] { aging };
+            node.Assignments.Add(new MachineAssignment { Recipe = aging, Runs = count });
+            node.Batches = count;
+            node.MinutesPerBatch = aging.Minutes;
+            node.DaysPerBatch = aging.Days;
+
+            // Stock below the target, best first.
+            List<(int Quality, int Count)> parts = ledger.TakeParts(itemId, count, belowQuality: targetQuality, highestFirst: true);
+            int taken = parts.Sum(part => part.Count);
+            if (taken > 0)
+            {
+                AddChild(node, new PlanNode
+                {
+                    Kind = PlanStepKind.FromStock,
+                    ItemId = itemId,
+                    DisplayName = GetDisplayName(itemId),
+                    Requested = taken,
+                    FromStock = taken,
+                    StockParts = parts,
+                    Depth = 1
+                });
+            }
+
+            // The rest is made. It mustn't be drawn from the stock just set aside as too good to age.
+            if (count - taken > 0)
+                AddChild(node, this.Resolve(itemId, count - taken, ledger, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 1, preferred, plan, useStock: false));
+
+            return node;
+        }
+
         /// <summary>Resolves how to supply a number of one item.</summary>
-        private PlanNode Resolve(string itemId, int needed, Ledger ledger, HashSet<string> inProgress, int depth, IReadOnlyDictionary<string, string> preferred, CraftPlan plan, int quality = Quality.Any)
+        /// <param name="useStock">Whether storage may supply this item, or it must be made.</param>
+        private PlanNode Resolve(string itemId, int needed, Ledger ledger, HashSet<string> inProgress, int depth, IReadOnlyDictionary<string, string> preferred, CraftPlan plan, int quality = Quality.Any, bool useStock = true)
         {
             PlanNode node = new()
             {
@@ -94,7 +167,7 @@ namespace StardewLogistics.Framework
             // Spend what's already in storage first. This is what stops two branches both planning around the
             // same hundred stone. The item being ordered can be exempt, so that an order for five produces five
             // rather than pointing at the five already on the shelf.
-            List<(int Quality, int Count)> parts = depth == 0 ? new() : ledger.TakeParts(itemId, needed, quality);
+            List<(int Quality, int Count)> parts = depth == 0 || !useStock ? new() : ledger.TakeParts(itemId, needed, quality);
             int taken = parts.Sum(part => part.Count);
             node.FromStock = taken;
             node.StockParts = parts;
@@ -626,8 +699,13 @@ namespace StardewLogistics.Framework
                 return this.TakeParts(itemId, wanted, quality).Sum(part => part.Count);
             }
 
-            /// <summary>Claims up to a number of an item, returning how many were taken at each quality, lowest first.</summary>
-            public List<(int Quality, int Count)> TakeParts(string itemId, int wanted, int quality = Quality.Any)
+            /// <summary>Claims up to a number of an item, returning how many were taken at each quality.</summary>
+            /// <param name="itemId">The stock ID. A plain ID accepts any flavour.</param>
+            /// <param name="wanted">How many to claim.</param>
+            /// <param name="quality">The quality required, or <see cref="Quality.Any"/>.</param>
+            /// <param name="belowQuality">Only claim items below this quality.</param>
+            /// <param name="highestFirst">Claim the best first, rather than the lowest.</param>
+            public List<(int Quality, int Count)> TakeParts(string itemId, int wanted, int quality = Quality.Any, int belowQuality = int.MaxValue, bool highestFirst = false)
             {
                 List<(int Quality, int Count)> parts = new();
                 if (wanted <= 0 || itemId == null)
@@ -635,12 +713,11 @@ namespace StardewLogistics.Framework
 
                 // Every (flavour, quality) the request could draw on, lowest quality first. The sort is stable,
                 // so within a quality the exact ID still comes before its flavoured variants.
-                var slots = this.KeysFor(itemId)
+                var candidates = this.KeysFor(itemId)
                     .SelectMany(key => this.Available[key]
-                        .Where(pair => pair.Value > 0 && (quality < 0 || pair.Key == quality))
-                        .Select(pair => (Key: key, Quality: pair.Key)))
-                    .OrderBy(slot => slot.Quality)
-                    .ToList();
+                        .Where(pair => pair.Value > 0 && (quality < 0 || pair.Key == quality) && pair.Key < belowQuality)
+                        .Select(pair => (Key: key, Quality: pair.Key)));
+                var slots = (highestFirst ? candidates.OrderByDescending(slot => slot.Quality) : candidates.OrderBy(slot => slot.Quality)).ToList();
 
                 int taken = 0;
                 foreach ((string key, int slotQuality) in slots)

@@ -29,7 +29,9 @@ namespace StardewLogistics.Menus
         Quantity,
         MachineDelta,
         MachineMin,
-        MachineMax
+        MachineMax,
+        Quality,
+        FairyDust
     }
 
     internal class AutoCraftMenu : IClickableMenu
@@ -67,6 +69,33 @@ namespace StardewLogistics.Menus
         private int Quantity = 1;
         private int MaxMachines = 1;
 
+        /// <summary>Whether the player has set the machine count themselves; until they do, it follows the most available.</summary>
+        private bool MachinesPinned;
+
+        /// <summary>Whether to speed the job up with Fairy Dust from storage.</summary>
+        private bool UseFairyDust;
+
+        /// <summary>The display row listing the Fairy Dust the job would use, when it's switched on.</summary>
+        private PlanNode DustRow;
+
+        /// <summary>The Fairy Dust icon for the toggle.</summary>
+        private Item FairyDustIcon;
+
+        /// <summary>How much Fairy Dust storage holds.</summary>
+        private int DustAvailable;
+
+        /// <summary>Whether the plan has any machine Fairy Dust works on, with dust in storage to use.</summary>
+        private bool CanDust;
+
+        /// <summary>Runs per share that Fairy Dust will speed up, for the time estimate.</summary>
+        private readonly Dictionary<MachineAssignment, int> Dusted = new();
+
+        /// <summary>The quality to age the product to, or <see cref="Quality.Any"/> for no aging.</summary>
+        private int TargetQuality = Quality.Any;
+
+        /// <summary>Whether the quality row is shown: the item can be aged, and a usable cask is on the network.</summary>
+        private readonly bool ShowQuality;
+
         /// <summary>The most machines this plan could put to work, which caps the control.</summary>
         private int MachinesAvailable = 1;
 
@@ -100,6 +129,13 @@ namespace StardewLogistics.Menus
             this.height = Math.Min(760, Game1.uiViewport.Height - 80);
             this.xPositionOnScreen = (Game1.uiViewport.Width - this.width) / 2;
             this.yPositionOnScreen = (Game1.uiViewport.Height - this.height) / 2;
+
+            // Quality is only worth offering where a cask can deliver it. An item with nothing to make more of it
+            // from -- a wine on the shelf whose fruit is gone -- can only be aged, so the dialog opens on iridium.
+            MachineRecipe aging = machineRecipes.GetAgingRecipe(targetId, StardewValley.Object.bestQuality);
+            this.ShowQuality = aging != null && network != null && network.CountUsableMachines(aging) > 0;
+            if (this.ShowQuality && !machineRecipes.CanProduce(targetId) && crafting.FindByOutput(targetId) == null)
+                this.TargetQuality = StardewValley.Object.bestQuality;
 
             this.QuantityBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
             {
@@ -156,7 +192,7 @@ namespace StardewLogistics.Menus
 
             foreach ((Rectangle bounds, StepAction action, int delta) in this.StepButtons)
             {
-                if (!bounds.Contains(x, y))
+                if (!bounds.Contains(x, y) || (action == StepAction.FairyDust && !this.CanDust))
                     continue;
 
                 switch (action)
@@ -166,12 +202,23 @@ namespace StardewLogistics.Menus
                         break;
                     case StepAction.MachineDelta:
                         this.SetMachines(this.MaxMachines + delta);
+                        this.MachinesPinned = this.MaxMachines < this.MachinesAvailable;
                         break;
                     case StepAction.MachineMin:
                         this.SetMachines(this.MachinesFloor);
+                        this.MachinesPinned = this.MaxMachines < this.MachinesAvailable;
                         break;
                     case StepAction.MachineMax:
                         this.SetMachines(this.MachinesAvailable);
+                        this.MachinesPinned = false;
+                        break;
+                    case StepAction.FairyDust:
+                        this.UseFairyDust = !this.UseFairyDust;
+                        this.UpdateDustEstimate();
+                        break;
+                    case StepAction.Quality:
+                        this.TargetQuality = delta <= 0 ? Quality.Any : delta;
+                        this.Replan();
                         break;
                 }
 
@@ -246,6 +293,13 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            // The Fairy Dust button is a picture, so it says what it does on hover.
+            if (this.CanDust && this.StepButtons.Any(button => button.Action == StepAction.FairyDust && button.Bounds.Contains(x, y)))
+            {
+                this.HoverText = this.Translations.Get(this.UseFairyDust ? "auto.fairy-dust-on" : "auto.fairy-dust-off", new { count = this.DustAvailable });
+                return;
+            }
+
             PlanNode row = this.GetRowAt(x, y);
             if (row is { Kind: PlanStepKind.Process } && row.Alternatives.Count > 1)
                 this.HoverText = this.Translations.Get("auto.change-machine");
@@ -298,7 +352,7 @@ namespace StardewLogistics.Menus
                 StringComparer.OrdinalIgnoreCase);
 
             CraftPlanner planner = new(this.Crafting, this.MachineRecipes, this.Config.MaxCraftDepth);
-            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, this.CountUsable);
+            this.Plan = planner.Plan(this.TargetId, this.Quantity, filterable, this.Preferences, this.CountUsable, this.TargetQuality);
 
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));
@@ -312,11 +366,83 @@ namespace StardewLogistics.Menus
                 ? 1
                 : processing.Max(node => MachineAllocator.MaximumBudget(node, this.CountUsable));
 
-            this.MaxMachines = Math.Clamp(this.MaxMachines, this.MachinesFloor, this.MachinesAvailable);
+            // Every machine that can help, unless the player has asked for fewer. Ordering more wine should put
+            // more kegs to work without having to raise the count by hand each time.
+            this.MaxMachines = this.MachinesPinned
+                ? Math.Clamp(this.MaxMachines, this.MachinesFloor, this.MachinesAvailable)
+                : this.MachinesAvailable;
 
             this.Allocations.Clear();
             foreach (PlanNode node in processing)
                 this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable);
+
+            this.DustAvailable = (int)Math.Min(int.MaxValue, this.Network?.CountById(Devices.JobRunner.FairyDustId) ?? 0);
+            this.CanDust = this.DustAvailable > 0
+                && processing.Any(node => node.Assignments.Any(assignment => this.MachineRecipes.AllowsFairyDust(assignment.Recipe.MachineId)));
+            if (!this.CanDust)
+                this.UseFairyDust = false;
+            this.UpdateDustEstimate();
+        }
+
+        /// <summary>Shows the Fairy Dust the job would set aside as its own row at the foot of the plan.</summary>
+        /// <remarks>
+        /// Counted the way the job reserves it -- a run per dust on most machines, a quality level per dust in a
+        /// cask, from normal -- so the row says exactly what will leave storage. Display only: the dust isn't an
+        /// ingredient of any step, so it isn't part of the plan itself.
+        /// </remarks>
+        private void UpdateDustRow()
+        {
+            if (this.DustRow != null)
+                this.Rows.Remove(this.DustRow);
+            this.DustRow = null;
+
+            if (!this.UseFairyDust)
+                return;
+
+            int wanted = this.Rows
+                .Where(node => node.Kind == PlanStepKind.Process)
+                .SelectMany(node => node.Assignments)
+                .Where(assignment => this.MachineRecipes.AllowsFairyDust(assignment.Recipe.MachineId))
+                .Sum(assignment => assignment.Runs * (assignment.Recipe.IsAging ? Quality.Steps(StardewValley.Object.lowQuality, assignment.Recipe.TargetQuality) : 1));
+
+            int used = Math.Min(wanted, this.DustAvailable);
+            if (used <= 0)
+                return;
+
+            this.DustRow = new PlanNode
+            {
+                Kind = PlanStepKind.FromStock,
+                ItemId = Devices.JobRunner.FairyDustId,
+                DisplayName = GetName(Devices.JobRunner.FairyDustId),
+                Requested = used,
+                FromStock = used,
+                Depth = 1
+            };
+            this.Rows.Add(this.DustRow);
+        }
+
+        /// <summary>Works out which runs the dust in storage would speed up, longest steps first.</summary>
+        private void UpdateDustEstimate()
+        {
+            this.Dusted.Clear();
+            this.UpdateDustRow();
+            if (!this.UseFairyDust)
+                return;
+
+            int dust = this.DustAvailable;
+            foreach (PlanNode node in this.Rows.Where(node => node.Kind == PlanStepKind.Process).OrderByDescending(node => node.MinutesPerBatch + (node.DaysPerBatch * CraftPlan.MinutesPerDay)))
+            {
+                foreach (MachineAssignment assignment in node.Assignments.Where(assignment => this.MachineRecipes.AllowsFairyDust(assignment.Recipe.MachineId)))
+                {
+                    int perRun = assignment.Recipe.IsAging ? Math.Max(1, Quality.Steps(StardewValley.Object.lowQuality, assignment.Recipe.TargetQuality)) : 1;
+                    int covered = Math.Min(assignment.Runs, dust / perRun);
+                    if (covered <= 0)
+                        continue;
+
+                    this.Dusted[assignment] = covered;
+                    dust -= covered * perRun;
+                }
+            }
         }
 
         /// <summary>Sets the quantity and re-plans.</summary>
@@ -369,7 +495,7 @@ namespace StardewLogistics.Menus
         /// <summary>How long a processing step takes under the current allocation.</summary>
         private int GetStepMinutes(PlanNode node)
         {
-            return MachineAllocator.StepMinutes(node, this.GetAllocation(node));
+            return MachineAllocator.StepMinutes(node, this.GetAllocation(node), this.UseFairyDust ? this.Dusted : null);
         }
 
         /// <summary>The whole plan's processing time, with each step spread across its machines.</summary>
@@ -395,7 +521,7 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            CraftJob job = this.Jobs.TryQueue(this.TargetId, this.Quantity, this.Network, this.MaxMachines, this.Preferences, out string error);
+            CraftJob job = this.Jobs.TryQueue(this.TargetId, this.Quantity, this.Network, this.MaxMachines, this.Preferences, out string error, this.TargetQuality, this.UseFairyDust);
             if (job == null)
             {
                 Game1.addHUDMessage(new HUDMessage(error, HUDMessage.error_type));
@@ -446,12 +572,33 @@ namespace StardewLogistics.Menus
             mx += 50;
             this.StepButtons.Add((new Rectangle(mx, machineY, 64, 40), StepAction.MachineMax, 0));
 
+            // Fairy Dust sits at the end of the machine row: it's another way of getting more out of the machines.
+            this.StepButtons.Add((new Rectangle(this.xPositionOnScreen + 660, machineY - 2, 52, 44), StepAction.FairyDust, 0));
+
+            // Quality on a third row, only for things a cask can age: Normal (no aging), then a star per quality.
+            if (this.ShowQuality)
+            {
+                int qualityY = machineY + 52;
+                int qx = this.xPositionOnScreen + 200;
+                this.StepButtons.Add((new Rectangle(qx, qualityY, 110, 40), StepAction.Quality, 0));
+                qx += 116;
+                foreach (int quality in new[] { StardewValley.Object.medQuality, StardewValley.Object.highQuality, StardewValley.Object.bestQuality })
+                {
+                    this.StepButtons.Add((new Rectangle(qx, qualityY, 64, 40), StepAction.Quality, quality));
+                    qx += 70;
+                }
+            }
+
             this.QuantityBounds = new ClickableComponent(new Rectangle(this.QuantityBox.X, this.QuantityBox.Y, this.QuantityBox.Width, this.QuantityBox.Height), "quantity");
             this.StartButton = new ClickableComponent(new Rectangle(this.xPositionOnScreen + (this.width / 2) - 130, this.yPositionOnScreen + this.height - 88, 260, 64), "start");
         }
 
         /// <summary>The area the tree is drawn in.</summary>
-        private Rectangle GetTreeBounds() => new(this.xPositionOnScreen + 28, this.yPositionOnScreen + 204, this.width - 56, this.height - 204 - 108);
+        private Rectangle GetTreeBounds()
+        {
+            int top = this.ShowQuality ? 256 : 204;
+            return new(this.xPositionOnScreen + 28, this.yPositionOnScreen + top, this.width - 56, this.height - top - 108);
+        }
 
         /// <summary>How many tree rows fit.</summary>
         private int GetVisibleRows() => Math.Max(1, this.GetTreeBounds().Height / RowHeight);
@@ -486,16 +633,50 @@ namespace StardewLogistics.Menus
 
             Utility.drawTextWithShadow(b, this.Translations.Get("auto.quantity"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 96), Game1.textColor);
             Utility.drawTextWithShadow(b, this.Translations.Get("auto.machines"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 148), Game1.textColor);
+            if (this.ShowQuality)
+                Utility.drawTextWithShadow(b, this.Translations.Get("auto.quality"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 200), Game1.textColor);
 
             foreach ((Rectangle bounds, StepAction action, int delta) in this.StepButtons)
             {
-                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
+                if (action == StepAction.FairyDust && !this.CanDust)
+                    continue;
+
+                // Fairy Dust is a picture of the dust itself: lit in a gold frame when on, dimmed when off, with
+                // how much storage holds beside it.
+                if (action == StepAction.FairyDust)
+                {
+                    drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, this.UseFairyDust ? Color.Gold : Color.White, 2f, drawShadow: false);
+                    this.FairyDustIcon ??= ItemRegistry.Create(Devices.JobRunner.FairyDustId);
+                    this.FairyDustIcon.drawInMenu(b, new Vector2(bounds.Center.X - 32, bounds.Center.Y - 32), 0.6f, this.UseFairyDust ? 1f : 0.4f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+
+                    string count = "x" + this.DustAvailable;
+                    Vector2 countSize = Game1.smallFont.MeasureString(count);
+                    Utility.drawTextWithShadow(b, count, Game1.smallFont, new Vector2(bounds.Right + 8, bounds.Center.Y - (countSize.Y / 2)), this.UseFairyDust ? Game1.textColor : Game1.textColor * 0.6f);
+                    continue;
+                }
+
+                bool selected = action == StepAction.Quality && (delta <= 0 ? this.TargetQuality <= 0 : this.TargetQuality == delta);
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, selected ? Color.Wheat : Color.White, 2f, drawShadow: false);
+
+                // A quality button shows its star, like the stars on items, rather than a word.
+                if (action == StepAction.Quality && delta > 0)
+                {
+                    Rectangle star = delta switch
+                    {
+                        StardewValley.Object.medQuality => new Rectangle(338, 400, 8, 8),
+                        StardewValley.Object.highQuality => new Rectangle(346, 400, 8, 8),
+                        _ => new Rectangle(346, 392, 8, 8)
+                    };
+                    b.Draw(Game1.mouseCursors, new Rectangle(bounds.Center.X - 12, bounds.Center.Y - 12, 24, 24), star, Color.White);
+                    continue;
+                }
 
                 string label = action switch
                 {
                     StepAction.MachineMin => this.Translations.Get("auto.min"),
                     StepAction.MachineMax => this.Translations.Get("auto.max"),
                     StepAction.MachineDelta => delta > 0 ? "+" : "-",
+                    StepAction.Quality => this.Translations.Get("auto.quality-normal"),
                     _ => delta > 0 ? "+" + delta : delta.ToString()
                 };
                 Vector2 size = Game1.smallFont.MeasureString(label);
@@ -609,24 +790,8 @@ namespace StardewLogistics.Menus
         /// <summary>Draws a small item icon inside a tree row.</summary>
         private static void DrawIcon(SpriteBatch b, Item icon, int x, int y, float alpha)
         {
-            if (icon == null)
-                return;
-
-            // drawInMenu centres on position + (32,32) in a 64px cell, so offset back to land a 32px icon here.
-            bool tall = icon is StardewValley.Object obj && obj.bigCraftable.Value;
-            icon.drawInMenu(b, new Vector2(x - 16, y - 16), tall ? 0.25f : 0.5f, alpha, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
-
-            // The quality star is how rows of one item differ, so it's drawn here rather than by the game: the
-            // game places it at a fixed offset meant for a full-size icon, which lands below a half-size one.
-            Rectangle? star = icon.Quality switch
-            {
-                StardewValley.Object.medQuality => new Rectangle(338, 400, 8, 8),
-                StardewValley.Object.highQuality => new Rectangle(346, 400, 8, 8),
-                StardewValley.Object.bestQuality => new Rectangle(346, 392, 8, 8),
-                _ => null
-            };
-            if (star != null)
-                b.Draw(Game1.mouseCursors, new Rectangle(x - 2, y + 18, 16, 16), star.Value, Color.White * alpha, 0f, Vector2.Zero, SpriteEffects.None, 1f);
+            // Sized to the row, with the quality star in its corner: it's how rows of one item differ.
+            ItemIcon.Draw(b, icon, new Rectangle(x, y, 32, 32), alpha);
         }
 
         /// <summary>Builds a drawable icon for an item ID, cached for the life of the menu.</summary>

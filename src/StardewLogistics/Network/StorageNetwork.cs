@@ -134,6 +134,7 @@ namespace StardewLogistics.Network
 
             return this.Machines.Count(node =>
                 string.Equals(node.Object?.QualifiedItemId, recipe.MachineId, StringComparison.OrdinalIgnoreCase)
+                && StardewLogistics.Devices.MachineIO.IsOperable(node.Object)
                 && node.AcceptsInput(StockId.BaseId(recipe.InputId)));
         }
 

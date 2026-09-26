@@ -5,6 +5,7 @@ using System.Linq;
 using StardewValley;
 using StardewValley.GameData.Machines;
 using StardewValley.ItemTypeDefinitions;
+using StardewValley.Objects;
 using SObject = StardewValley.Object;
 
 namespace StardewLogistics.Framework
@@ -46,6 +47,12 @@ namespace StardewLogistics.Framework
 
         /// <summary>Every machine the index can resolve against.</summary>
         private readonly List<MachineContext> MachineList = new();
+
+        /// <summary>Machines that age items rather than transform them: those whose rules hand off to the cask's code.</summary>
+        private readonly List<MachineContext> AgingMachines = new();
+
+        /// <summary>What ages each item, and how fast, or <c>null</c> for items nothing ages.</summary>
+        private readonly Dictionary<string, (MachineContext Context, float Rate)?> AgingCache = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Each machine's any-quality recipe for an input, to compare quality-specific ones against.</summary>
         private readonly Dictionary<string, MachineRecipe> General = new(StringComparer.OrdinalIgnoreCase);
@@ -91,6 +98,8 @@ namespace StardewLogistics.Framework
             this.KnownKeys.Clear();
             this.General.Clear();
             this.MachineList.Clear();
+            this.AgingMachines.Clear();
+            this.AgingCache.Clear();
             this.SkippedRules = 0;
             this.ExternalRequirementSkips = 0;
             StockId.Reset();
@@ -129,6 +138,11 @@ namespace StardewLogistics.Framework
 
                 this.MachineList.Add(new MachineContext(machineId, GetDisplayName(machineId), data, machine, ReadExtraInputs(data)));
             }
+
+            // Casks, and anything a mod makes that ages the same way. Their rules are skipped as unpredictable
+            // below, since the output is computed in code; aging is handled on its own terms instead.
+            this.AgingMachines.AddRange(this.MachineList.Where(context => context.Data.OutputRules.Any(rule =>
+                rule?.OutputItem?.Any(output => output?.OutputMethod?.Contains("OutputCask", StringComparison.OrdinalIgnoreCase) == true) == true)));
 
             // Resolve every input a rule names outright. Flavoured outputs are left for the stock pass: a named
             // input can still make one (oats into oat milk), and it should appear the same way a keg's fruit does,
@@ -261,6 +275,184 @@ namespace StardewLogistics.Framework
             }
 
             return orderable;
+        }
+
+        /// <summary>Whether Fairy Dust can speed up a machine.</summary>
+        public bool AllowsFairyDust(string machineId)
+        {
+            return this.MachineList.Any(context => string.Equals(context.MachineId, machineId, StringComparison.OrdinalIgnoreCase) && context.Data.AllowFairyDust);
+        }
+
+        /// <summary>Whether a machine ages items the way a cask does.</summary>
+        public bool IsAgingMachine(string machineId) => this.AgingMachines.Any(context => string.Equals(context.MachineId, machineId, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>Whether a cask can age an item.</summary>
+        public bool CanAge(string stockId) => this.GetAging(stockId) != null;
+
+        /// <summary>A recipe for aging an item to a quality in a cask, or <c>null</c> if nothing ages it.</summary>
+        /// <remarks>Its time is from normal quality, the longest it can take; a better starting item finishes sooner.</remarks>
+        public MachineRecipe GetAgingRecipe(string stockId, int targetQuality)
+        {
+            if (targetQuality <= SObject.lowQuality || this.GetAging(stockId) is not { } aging)
+                return null;
+
+            Item sample = StockId.Create(stockId);
+            if (sample == null)
+                return null;
+            sample.Quality = targetQuality;
+
+            return new MachineRecipe
+            {
+                MachineId = aging.Context.MachineId,
+                MachineName = aging.Context.MachineName,
+                InputId = stockId,
+                InputCount = 1,
+                OutputId = stockId,
+                OutputSample = sample,
+                OutputCount = 1,
+                MaxOutputCount = 1,
+                Minutes = 0,
+                Days = AgingDays(SObject.lowQuality, targetQuality, aging.Rate),
+                IsAging = true,
+                TargetQuality = targetQuality,
+                AgingRate = aging.Rate,
+                FromStock = true
+            };
+        }
+
+        /// <summary>Puts an item in a cask to age, the way the game would.</summary>
+        /// <returns>Whether the cask took it. A cask somewhere aging isn't allowed, or one that won't take this item, doesn't.</returns>
+        /// <remarks>
+        /// The game's own <c>Cask.OutputCask</c> does the work, so the aging rate, starting maturity and any mod
+        /// that changes casks all behave exactly as for a player's hand.
+        /// </remarks>
+        public bool StartAging(SObject cask, Item input)
+        {
+            if (cask is not Cask real || !real.IsValidCaskLocation())
+            {
+                Log.Trace($"Didn't put {input?.DisplayName} in the cask at {cask?.TileLocation}: it isn't somewhere aging is allowed.");
+                return false;
+            }
+
+            MachineData data = cask.GetMachineData();
+            if (data == null || TryGetAgingRate(cask, data, input, out MachineOutputRule rule, out MachineItemOutput output) == null)
+            {
+                Log.Trace($"Didn't put {input?.DisplayName} (quality {input?.Quality}) in the cask at {cask.TileLocation}: the cask's rules don't accept it.");
+                return false;
+            }
+
+            try
+            {
+                Item aging = Cask.OutputCask(cask, input, probe: false, output, Game1.player, out int? overrideMinutes);
+                if (aging is not SObject held)
+                {
+                    Log.Trace($"Didn't put {input.DisplayName} (quality {input.Quality}) in the cask at {cask.TileLocation}: the cask turned it down.");
+                    return false;
+                }
+
+                cask.heldObject.Value = held;
+                cask.minutesUntilReady.Value = Math.Max(0, overrideMinutes ?? rule.MinutesUntilReady);
+                cask.readyForHarvest.Value = false;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Trace($"Couldn't start {input.DisplayName} aging in a cask: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>Whole days to age from one quality to another at a rate, matching how a cask counts.</summary>
+        /// <remarks>
+        /// A cask starts an item at the days its quality stands for -- normal 56, silver 42, gold 28, iridium 0 --
+        /// and takes off its aging rate each night, moving up a quality as it passes each mark.
+        /// </remarks>
+        public static int AgingDays(int fromQuality, int toQuality, float rate)
+        {
+            float days = DaysForQuality(fromQuality) - DaysForQuality(toQuality);
+            return days <= 0 ? 0 : (int)Math.Ceiling(days / Math.Max(0.01f, rate));
+        }
+
+        /// <summary>Days a cask has left before its item reaches a quality.</summary>
+        public static int AgingDaysLeft(Cask cask, int toQuality)
+        {
+            float days = cask.daysToMature.Value - DaysForQuality(toQuality);
+            return days <= 0 ? 0 : (int)Math.Ceiling(days / Math.Max(0.01f, cask.agingRate.Value));
+        }
+
+        /// <summary>The cask maturity mark for a quality, as <c>Cask.GetDaysForQuality</c> sets it.</summary>
+        private static float DaysForQuality(int quality)
+        {
+            return quality switch
+            {
+                SObject.bestQuality => 0,
+                SObject.highQuality => 28,
+                SObject.medQuality => 42,
+                _ => 56
+            };
+        }
+
+        /// <summary>Finds what ages an item, remembering the answer.</summary>
+        private (MachineContext Context, float Rate)? GetAging(string stockId)
+        {
+            if (string.IsNullOrEmpty(stockId) || this.AgingMachines.Count == 0)
+                return null;
+
+            if (this.AgingCache.TryGetValue(stockId, out var cached))
+                return cached;
+
+            (MachineContext, float)? found = null;
+            Item input = StockId.Create(stockId);
+            if (input is SObject)
+            {
+                foreach (MachineContext context in this.AgingMachines)
+                {
+                    float? rate = TryGetAgingRate(context.Machine, context.Data, input, out _, out _);
+                    if (rate != null)
+                    {
+                        found = (context, rate.Value);
+                        break;
+                    }
+                }
+            }
+
+            return this.AgingCache[stockId] = found;
+        }
+
+        /// <summary>The aging rate a cask would give an item, or <c>null</c> if it wouldn't take it.</summary>
+        private static float? TryGetAgingRate(SObject cask, MachineData data, Item input, out MachineOutputRule rule, out MachineItemOutput output)
+        {
+            rule = null;
+            output = null;
+            Farmer who = Game1.player;
+            GameLocation location = cask.Location ?? who?.currentLocation ?? Game1.getFarm();
+
+            try
+            {
+                if (!MachineDataUtility.TryGetMachineOutputRule(cask, data, MachineOutputTrigger.ItemPlacedInMachine, input, who, location,
+                        out rule, out MachineOutputTriggerRule trigger, out _, out _)
+                    || rule == null || trigger == null)
+                    return null;
+
+                List<MachineItemOutput> candidates = rule.OutputItem?.Where(item => !HasExternalRequirement(item)).ToList();
+                if (candidates == null || candidates.Count == 0)
+                    return null;
+
+                output = MachineDataUtility.GetOutputData(candidates, rule.UseFirstValidOutput, input, who, location);
+                if (output?.OutputMethod?.Contains("OutputCask", StringComparison.OrdinalIgnoreCase) != true)
+                    return null;
+
+                return output.CustomData != null
+                    && output.CustomData.TryGetValue("AgingMultiplier", out string raw)
+                    && float.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float multiplier)
+                    && multiplier > 0
+                        ? multiplier
+                        : 1f;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         /// <summary>Returns the ways an item can be produced by a machine.</summary>

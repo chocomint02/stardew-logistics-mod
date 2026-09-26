@@ -100,7 +100,10 @@ namespace StardewLogistics.Framework
 
         /// <summary>How long a step takes under a given allocation.</summary>
         /// <remarks>Shares occupy different machines and run side by side, so the step is as long as its slowest.</remarks>
-        public static int StepMinutes(PlanNode node, IReadOnlyDictionary<MachineAssignment, int> allocation)
+        /// <param name="node">The step.</param>
+        /// <param name="allocation">Machines per share.</param>
+        /// <param name="dusted">Runs per share that Fairy Dust will finish almost at once, if any.</param>
+        public static int StepMinutes(PlanNode node, IReadOnlyDictionary<MachineAssignment, int> allocation, IReadOnlyDictionary<MachineAssignment, int> dusted = null)
         {
             if (node?.Assignments == null || node.Assignments.Count == 0)
                 return 0;
@@ -109,7 +112,15 @@ namespace StardewLogistics.Framework
             foreach (MachineAssignment assignment in node.Assignments)
             {
                 int machines = allocation.TryGetValue(assignment, out int got) ? got : 1;
-                longest = Math.Max(longest, TimeFor(assignment, machines));
+                int sped = dusted != null && dusted.TryGetValue(assignment, out int count) ? count : 0;
+                int slow = Math.Max(0, assignment.Runs - sped);
+
+                // Dusted runs still take a moment each; the rest take their usual time on what machines there are.
+                int time = slow > 0 ? TimeFor(assignment, machines, slow) : 0;
+                if (sped > 0)
+                    time = Math.Max(time, 10);
+
+                longest = Math.Max(longest, time);
             }
 
             return longest;
@@ -151,10 +162,10 @@ namespace StardewLogistics.Framework
         }
 
         /// <summary>How long a share takes on a number of machines.</summary>
-        private static int TimeFor(MachineAssignment assignment, int machines)
+        private static int TimeFor(MachineAssignment assignment, int machines, int? runs = null)
         {
             int count = Math.Max(1, machines);
-            int waves = (int)Math.Ceiling(Math.Max(1, assignment.Runs) / (double)count);
+            int waves = (int)Math.Ceiling(Math.Max(1, runs ?? assignment.Runs) / (double)count);
             return waves * assignment.MinutesPerRun;
         }
     }

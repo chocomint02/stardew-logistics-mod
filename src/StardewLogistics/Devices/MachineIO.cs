@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Xna.Framework;
 using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewValley;
@@ -25,6 +28,67 @@ namespace StardewLogistics.Devices
             return obj is not null
                 && obj is not StardewValley.Objects.Chest
                 && obj.GetMachineData() != null;
+        }
+
+        /// <summary>Returns what was in a machine that has just been broken, into the network it was wired to.</summary>
+        /// <remarks>
+        /// Breaking a working machine normally destroys what's inside. On the network, what went in comes back
+        /// instead: the item last put in, plus anything the machine always consumes on top (a furnace's coal).
+        /// Finished output, and a cask's item, come back as they are. Whatever storage has no room for drops at
+        /// the machine's tile rather than vanishing.
+        /// </remarks>
+        public static void RefundRemoved(SObject machine, StorageNetwork network, GameLocation location, Vector2 tile)
+        {
+            if (!IsMachine(machine) || network == null)
+                return;
+
+            // An Auto-Grabber's "held object" is the chest it fills, and the game won't let one be picked up
+            // unless that chest is empty; there is nothing to return.
+            SObject held = machine.heldObject.Value;
+            if (held == null || held is StardewValley.Objects.Chest)
+                return;
+
+            List<Item> refund = new();
+            if (machine.readyForHarvest.Value || machine is StardewValley.Objects.Cask)
+                refund.Add(held);
+            else
+            {
+                Item last = machine.lastInputItem.Value;
+                if (last != null)
+                {
+                    Item copy = last.getOne();
+                    copy.Stack = Math.Max(1, last.Stack);
+                    refund.Add(copy);
+                }
+
+                foreach (var extra in machine.GetMachineData()?.AdditionalConsumedItems ?? new List<StardewValley.GameData.Machines.MachineItemAdditionalConsumedItems>())
+                {
+                    Item item = ItemRegistry.Create(extra.ItemId, Math.Max(1, extra.RequiredCount), allowNull: true);
+                    if (item != null)
+                        refund.Add(item);
+                }
+            }
+
+            foreach (Item item in refund)
+            {
+                string name = item.DisplayName;
+                int count = item.Stack;
+                network.Insert(item);
+                if (item.Stack > 0)
+                    Game1.createItemDebris(item, (tile * Game1.tileSize) + new Vector2(Game1.tileSize / 2f), -1, location);
+
+                Log.Debug($"A {machine.DisplayName} was broken while working; returned {count}x {name} to the network.");
+            }
+        }
+
+        /// <summary>Whether a wired machine can actually run where it's placed.</summary>
+        /// <remarks>
+        /// A cask ages only where the location allows it -- the cellar, or a modded location that opts in. One
+        /// placed anywhere else still attaches to the network but is never planned around or loaded.
+        /// </remarks>
+        public static bool IsOperable(SObject obj)
+        {
+            return obj is not StardewValley.Objects.Cask cask || cask.IsValidCaskLocation();
         }
 
         /// <summary>Takes a finished machine's output onto the network.</summary>

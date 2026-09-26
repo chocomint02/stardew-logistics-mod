@@ -162,6 +162,36 @@ namespace StardewLogistics.Devices
             return taken;
         }
 
+        /// <summary>Takes one item of the best quality below a mark, for putting in a cask.</summary>
+        /// <remarks>The best one is nearest to done: a silver wine reaches iridium two weeks before a normal one.</remarks>
+        public Item TakeBestBelow(string stockId, int belowQuality)
+        {
+            if (!Game1.player.team.globalInventories.ContainsKey(this.Key))
+                return null;
+
+            Inventory items = this.Items;
+            int best = -1;
+            for (int i = 0; i < items.Count; i++)
+            {
+                Item item = items[i];
+                if (StockId.Matches(item, stockId) && item.Quality < belowQuality && (best < 0 || item.Quality > items[best].Quality))
+                    best = i;
+            }
+
+            if (best < 0)
+                return null;
+
+            Item chosen = items[best];
+            Item one = chosen.getOne();
+            one.Stack = 1;
+            chosen.Stack--;
+            if (chosen.Stack <= 0)
+                items[best] = null;
+
+            items.RemoveEmptySlots();
+            return one;
+        }
+
         /// <summary>Makes sure the buffer holds a number of an item, drawing any shortfall from storage.</summary>
         /// <remarks>
         /// A job's ingredients are all reserved when it's queued and its intermediates are made into the buffer,

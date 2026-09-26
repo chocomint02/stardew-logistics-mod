@@ -67,6 +67,26 @@ namespace StardewLogistics.Network
                 .FirstOrDefault(network => network.Contains(location, tile));
         }
 
+        /// <summary>Returns the network a tile is attached to: cable under it, or cable beside it.</summary>
+        /// <remarks>Works for a machine that has just been removed, since the cable it sat on or beside is still there.</remarks>
+        public StorageNetwork GetNetworkTouching(GameLocation location, Vector2 tile)
+        {
+            foreach (StorageNetwork network in this.GetNetworks(location))
+            {
+                foreach (StorageNetwork segment in network.Segments.Where(segment => segment.Location == location))
+                {
+                    if (segment.CableTiles.Contains(tile)
+                        || segment.CableTiles.Contains(tile + new Vector2(0, -1))
+                        || segment.CableTiles.Contains(tile + new Vector2(0, 1))
+                        || segment.CableTiles.Contains(tile + new Vector2(-1, 0))
+                        || segment.CableTiles.Contains(tile + new Vector2(1, 0)))
+                        return network;
+                }
+            }
+
+            return null;
+        }
+
         /// <summary>Returns the node at a tile together with its network.</summary>
         public bool TryGetNode(GameLocation location, Vector2 tile, out NetworkNode node, out StorageNetwork network)
         {
