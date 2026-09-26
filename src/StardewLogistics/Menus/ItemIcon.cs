@@ -5,6 +5,8 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewLogistics.Framework;
 using StardewValley;
+using StardewValley.ItemTypeDefinitions;
+using StardewValley.Objects;
 using SObject = StardewValley.Object;
 
 namespace StardewLogistics.Menus
@@ -43,7 +45,7 @@ namespace StardewLogistics.Menus
             if (item == null)
                 return;
 
-            if (!TryDrawArtisanSprite(b, item, area, alpha))
+            if (!TryDrawArtisanSprite(b, item, area, alpha) && !TryDrawColoredSprite(b, item, area, alpha))
             {
                 // The game's drawing centres the sprite on position + (32, 32) of a 64px slot. A big craftable is
                 // twice as tall, so it takes half the scale to fit the same box.
@@ -100,6 +102,42 @@ namespace StardewLogistics.Menus
                 {
                     int size = area.Width / 2;
                     b.Draw(texture, new Rectangle(area.X, area.Y, size, size), badge, Color.White * alpha, 0f, Vector2.Zero, SpriteEffects.None, 0.91f);
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>Draws a tinted item -- a flavoured wine or jelly -- from its sprite, fitted to the box.</summary>
+        /// <remarks>
+        /// The game's <c>ColoredObject.drawInMenu</c> positions itself differently from a plain item's and only
+        /// centres correctly at full size, so a half-size wine drew up and to the left of its slot. Drawing it
+        /// here is the base sprite, then its colour layer tinted -- the same two layers the game draws. Smoked fish
+        /// has drawing of its own and is left to the game.
+        /// </remarks>
+        private static bool TryDrawColoredSprite(SpriteBatch b, Item item, Rectangle area, float alpha)
+        {
+            if (item is not ColoredObject coloured || coloured.bigCraftable.Value || coloured.QualifiedItemId == "(O)SmokedFish")
+                return false;
+
+            try
+            {
+                ParsedItemData data = ItemRegistry.GetDataOrErrorItem(coloured.QualifiedItemId);
+                Texture2D texture = data.GetTexture();
+                Rectangle baseSprite = data.GetSourceRect();
+
+                if (coloured.ColorSameIndexAsParentSheetIndex)
+                {
+                    b.Draw(texture, area, baseSprite, coloured.color.Value * alpha, 0f, Vector2.Zero, SpriteEffects.None, 0.9f);
+                }
+                else
+                {
+                    b.Draw(texture, area, baseSprite, Color.White * alpha, 0f, Vector2.Zero, SpriteEffects.None, 0.9f);
+                    b.Draw(texture, area, data.GetSourceRect(1), coloured.color.Value * alpha, 0f, Vector2.Zero, SpriteEffects.None, 0.91f);
                 }
 
                 return true;

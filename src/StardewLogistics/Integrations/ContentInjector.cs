@@ -20,15 +20,16 @@ namespace StardewLogistics.Integrations
         /*********
         ** Accessors
         *********/
-        /// <summary>The crafting recipes this mod adds, mapped to the mining level that teaches them.</summary>
+        /// <summary>The crafting recipes this mod adds, mapped to the skill and level that teach them.</summary>
         /// <remarks>Recipe keys double as the entries in <c>Data/CraftingRecipes</c>, so they stay in English.</remarks>
-        public static readonly IReadOnlyDictionary<string, int> RecipeUnlockLevels = new Dictionary<string, int>
+        public static readonly IReadOnlyDictionary<string, (int Skill, int Level)> RecipeUnlockLevels = new Dictionary<string, (int Skill, int Level)>
         {
-            ["Logistics Cable"] = 2,
-            ["Storage Terminal"] = 4,
-            ["Crafting Terminal"] = 8,
-            ["Wireless Transmitter"] = 7,
-            ["Wireless Receiver"] = 7
+            ["Logistics Cable"] = (StardewValley.Farmer.miningSkill, 2),
+            ["Storage Terminal"] = (StardewValley.Farmer.miningSkill, 4),
+            ["Crafting Terminal"] = (StardewValley.Farmer.miningSkill, 8),
+            ["Wireless Transmitter"] = (StardewValley.Farmer.miningSkill, 7),
+            ["Wireless Receiver"] = (StardewValley.Farmer.miningSkill, 7),
+            ["Auto-Harvester"] = (StardewValley.Farmer.farmingSkill, 6)
         };
 
 
@@ -49,6 +50,7 @@ namespace StardewLogistics.Integrations
             this.AddCraftable(data, ModIds.CraftingTerminal, "crafting-terminal", spriteIndex: 3, price: 900);
             this.AddCraftable(data, ModIds.WirelessTransmitter, "wireless-transmitter", spriteIndex: 4, price: 1200);
             this.AddCraftable(data, ModIds.WirelessReceiver, "wireless-receiver", spriteIndex: 5, price: 700);
+            this.AddCraftable(data, ModIds.AutoHarvester, "auto-harvester", spriteIndex: 0, price: 1500);
         }
 
         /// <summary>Adds the cable item to <c>Data/Objects</c>.</summary>
@@ -124,6 +126,9 @@ namespace StardewLogistics.Integrations
             // The transmitter costs more: a channel needs only one, and it's what makes the link at all.
             data["Wireless Transmitter"] = $"336 2 338 5 787 1/Home/{ModIds.WirelessTransmitter} 1/true/null/{this.Name("wireless-transmitter")}";
             data["Wireless Receiver"] = $"336 1 338 2 787 1/Home/{ModIds.WirelessReceiver} 1/true/null/{this.Name("wireless-receiver")}";
+
+            // 621 quality sprinkler: the harvester waters, so it's built around one.
+            data["Auto-Harvester"] = $"335 5 336 2 621 1 787 1/Home/{ModIds.AutoHarvester} 1/true/null/{this.Name("auto-harvester")}";
         }
 
 

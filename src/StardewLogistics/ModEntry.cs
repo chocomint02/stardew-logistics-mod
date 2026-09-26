@@ -32,6 +32,7 @@ namespace StardewLogistics
         private MachineRecipeIndex MachineRecipes;
         private RecipeIndex CraftingRecipes;
         private JobRunner Jobs;
+        private HarvesterRunner Harvesters;
 
 
         /*********
@@ -55,6 +56,7 @@ namespace StardewLogistics
             this.Ticker.IsLiveClaim = this.Jobs.IsLiveClaim;
 
             CaskPatches.Apply(new HarmonyLib.Harmony(this.ModManifest.UniqueID), this.Jobs.ReclaimFromCask);
+            this.Harvesters = new HarvesterRunner(this.Networks, helper.Translation);
 
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
@@ -70,6 +72,7 @@ namespace StardewLogistics
             helper.Events.World.ObjectListChanged += this.OnObjectListChanged;
             helper.Events.World.TerrainFeatureListChanged += this.OnTerrainFeatureListChanged;
             helper.Events.Display.RenderedWorld += this.OnRenderedWorld;
+            helper.Events.GameLoop.TimeChanged += this.OnTimeChanged;
         }
 
 
@@ -149,6 +152,11 @@ namespace StardewLogistics
         {
             this.Networks.InvalidateAll();
             this.UnlockRecipes();
+
+            // Crops grew overnight: harvest what's ready and plant for the new day first thing.
+            this.Harvesters.Invalidate();
+            if (Context.IsMainPlayer)
+                this.Harvesters.Run();
         }
 
         /// <summary>Drops world state when returning to the title screen.</summary>
@@ -158,6 +166,13 @@ namespace StardewLogistics
 
             // Jobs belong to the save that queued them; carried into the next save they'd drive its machines.
             this.Jobs.Reset();
+        }
+
+        /// <summary>Lets auto-harvesters work through the day, so a new plan starts within ten minutes.</summary>
+        private void OnTimeChanged(object sender, TimeChangedEventArgs e)
+        {
+            if (Context.IsMainPlayer)
+                this.Harvesters.Run();
         }
 
         /// <summary>Rescans a location when something is placed or broken in it.</summary>
@@ -182,6 +197,9 @@ namespace StardewLogistics
             // one of them makes that search run again.
             if (e.Added.Any(pair => NetworkManager.IsWirelessDevice(pair.Value)) || e.Removed.Any(pair => NetworkManager.IsWirelessDevice(pair.Value)))
                 this.Networks.InvalidateWireless();
+
+            if (e.Added.Any(pair => pair.Value?.ItemId == ModIds.AutoHarvester) || e.Removed.Any(pair => pair.Value?.ItemId == ModIds.AutoHarvester))
+                this.Harvesters.Invalidate();
         }
 
         /// <summary>Rescans a location when cable is laid or lifted there.</summary>
@@ -212,6 +230,12 @@ namespace StardewLogistics
 
             foreach ((Vector2 tile, SObject obj) in Game1.currentLocation.Objects.Pairs)
             {
+                if (obj?.ItemId == ModIds.AutoHarvester)
+                {
+                    this.DrawHarvesterArea(e.SpriteBatch, tile, obj);
+                    continue;
+                }
+
                 if (!NetworkManager.IsWirelessDevice(obj) || Vector2.Distance(tile, player) > radius)
                     continue;
 
@@ -225,6 +249,36 @@ namespace StardewLogistics
                 e.SpriteBatch.Draw(Game1.staminaRect, plate, new Color(26, 22, 32) * 0.8f);
                 e.SpriteBatch.DrawString(Game1.smallFont, label, new Vector2(plate.X + 6, plate.Y + 2), Color.White, 0f, Vector2.Zero, 0.6f, SpriteEffects.None, 1f);
             }
+        }
+
+        /// <summary>Shades an auto-harvester's area green, when it's set to show or its menu is open.</summary>
+        private void DrawHarvesterArea(SpriteBatch b, Vector2 machineTile, SObject machine)
+        {
+            bool editing = Game1.activeClickableMenu is HarvesterMenu menu && menu.Machine == machine;
+            HarvesterSettings settings = HarvesterSettings.ReadCached(machine);
+            if (!settings.ShowPreview && !editing)
+                return;
+
+            Rectangle area = settings.GetArea(machineTile);
+            Color fill = Color.LimeGreen * (editing ? 0.35f : 0.2f);
+            for (int y = area.Top; y < area.Bottom; y++)
+            {
+                for (int x = area.Left; x < area.Right; x++)
+                {
+                    Vector2 local = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * Game1.tileSize, y * Game1.tileSize));
+                    b.Draw(Game1.staminaRect, new Rectangle((int)local.X, (int)local.Y, Game1.tileSize, Game1.tileSize), fill);
+                }
+            }
+
+            // An outline, so the edge reads even over green grass.
+            Vector2 corner = Game1.GlobalToLocal(Game1.viewport, new Vector2(area.X * Game1.tileSize, area.Y * Game1.tileSize));
+            int w = area.Width * Game1.tileSize;
+            int h = area.Height * Game1.tileSize;
+            Color edge = Color.LimeGreen * 0.9f;
+            b.Draw(Game1.staminaRect, new Rectangle((int)corner.X, (int)corner.Y, w, 3), edge);
+            b.Draw(Game1.staminaRect, new Rectangle((int)corner.X, (int)corner.Y + h - 3, w, 3), edge);
+            b.Draw(Game1.staminaRect, new Rectangle((int)corner.X, (int)corner.Y, 3, h), edge);
+            b.Draw(Game1.staminaRect, new Rectangle((int)corner.X + w - 3, (int)corner.Y, 3, h), edge);
         }
 
         /// <summary>Services wired machines on the host.</summary>
@@ -270,12 +324,29 @@ namespace StardewLogistics
                 return;
 
             NodeKind? kind = NetworkNode.GetKind(obj.ItemId);
-            if (kind is not (NodeKind.Terminal or NodeKind.CraftingTerminal or NodeKind.WirelessTransmitter or NodeKind.WirelessReceiver))
+            if (kind is not (NodeKind.Terminal or NodeKind.CraftingTerminal or NodeKind.WirelessTransmitter or NodeKind.WirelessReceiver or NodeKind.Harvester))
                 return;
 
             // Don't let the player operate a device from across the farm.
             if (!Utility.tileWithinRadiusOfPlayer((int)tile.X, (int)tile.Y, 1, Game1.player))
                 return;
+
+            if (kind == NodeKind.Harvester)
+            {
+                if (!isAction)
+                    return;
+
+                this.Helper.Input.Suppress(e.Button);
+                Game1.playSound("bigSelect");
+                Game1.activeClickableMenu = new HarvesterMenu(this.Networks, this.Helper.Translation, location, tile, obj, onPlanSaved: (where, at, machine) =>
+                {
+                    // Start on a new plan straight away rather than at the next ten-minute tick.
+                    StorageNetwork network = this.Networks.GetNetworkAt(where, at);
+                    if (Context.IsMainPlayer && network != null)
+                        this.Harvesters.Work(where, at, machine, network);
+                });
+                return;
+            }
 
             if (kind is NodeKind.WirelessTransmitter or NodeKind.WirelessReceiver)
             {
@@ -346,9 +417,9 @@ namespace StardewLogistics
             if (!Context.IsWorldReady)
                 return;
 
-            foreach (KeyValuePair<string, int> recipe in ContentInjector.RecipeUnlockLevels)
+            foreach (KeyValuePair<string, (int Skill, int Level)> recipe in ContentInjector.RecipeUnlockLevels)
             {
-                if (!this.Config.UnlockAllRecipes && Game1.player.MiningLevel < recipe.Value)
+                if (!this.Config.UnlockAllRecipes && Game1.player.GetSkillLevel(recipe.Value.Skill) < recipe.Value.Level)
                     continue;
                 if (Game1.player.craftingRecipes.ContainsKey(recipe.Key))
                     continue;

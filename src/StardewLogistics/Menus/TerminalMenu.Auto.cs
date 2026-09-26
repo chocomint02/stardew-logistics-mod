@@ -19,6 +19,9 @@ namespace StardewLogistics.Menus
         /// <summary>The Fairy Dust icon for job rows.</summary>
         private Item FairyDustIcon;
 
+        /// <summary>How much Fairy Dust storage held when the Jobs tab was last drawn.</summary>
+        private long DustInStorage;
+
         /// <summary>Icons for job targets, built once rather than every frame.</summary>
         private readonly Dictionary<string, Item> JobIcons = new(StringComparer.OrdinalIgnoreCase);
         private List<AutoTarget> VisibleTargets = new();
@@ -344,6 +347,9 @@ namespace StardewLogistics.Menus
             const int rowHeight = 96;
             int visible = grid.Height / rowHeight;
 
+            // Counted once per frame, not per row: it walks every chest.
+            this.DustInStorage = this.Network?.CountById(Devices.JobRunner.FairyDustId) ?? 0;
+
             for (int i = 0; i < visible; i++)
             {
                 int index = this.ScrollOffset + i;
@@ -389,7 +395,7 @@ namespace StardewLogistics.Menus
                 }
 
                 // Fairy Dust for a job still running: lit when on. Switching it on draws dust from storage.
-                if (job.Status is not (JobStatus.Complete or JobStatus.Cancelled))
+                if (this.ShowsDustButton(job))
                 {
                     Rectangle dust = GetDustBounds(grid, y);
                     drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), dust.X, dust.Y, dust.Width, dust.Height, job.UseFairyDust ? Color.Gold : Color.White * 0.8f, 2f, drawShadow: false);
@@ -428,7 +434,7 @@ namespace StardewLogistics.Menus
 
                 CraftJob job = jobs[index];
 
-                if (job.Status is not (JobStatus.Complete or JobStatus.Cancelled) && GetDustBounds(grid, grid.Y + (i * rowHeight)).Contains(x, y))
+                if (this.ShowsDustButton(job) && GetDustBounds(grid, grid.Y + (i * rowHeight)).Contains(x, y))
                 {
                     job.UseFairyDust = !job.UseFairyDust;
                     Game1.playSound(job.UseFairyDust ? "yoba" : "smallSelect");
@@ -465,6 +471,17 @@ namespace StardewLogistics.Menus
             }
 
             Utility.drawTextWithShadow(b, text, Game1.smallFont, position, colour);
+        }
+
+        /// <summary>Whether a job row offers the Fairy Dust toggle.</summary>
+        /// <remarks>
+        /// Only while there's dust to use: a switch that can do nothing is clutter. A job already using dust keeps
+        /// it, so it can still be switched off once storage runs dry.
+        /// </remarks>
+        private bool ShowsDustButton(CraftJob job)
+        {
+            return job.Status is not (JobStatus.Complete or JobStatus.Cancelled)
+                && (job.UseFairyDust || this.DustInStorage > 0);
         }
 
         /// <summary>The bounds of a job row's Fairy Dust toggle, just left of Cancel.</summary>

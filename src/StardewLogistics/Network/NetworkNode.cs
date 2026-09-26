@@ -25,7 +25,10 @@ namespace StardewLogistics.Network
         WirelessTransmitter,
 
         /// <summary>Links its network to a channel that has a transmitter.</summary>
-        WirelessReceiver
+        WirelessReceiver,
+
+        /// <summary>Farms an area, using the network for seeds and to store the harvest.</summary>
+        Harvester
     }
 
     /// <summary>A device attached to a storage network.</summary>
@@ -141,6 +144,7 @@ namespace StardewLogistics.Network
                 ModIds.CraftingTerminal => NodeKind.CraftingTerminal,
                 ModIds.WirelessTransmitter => NodeKind.WirelessTransmitter,
                 ModIds.WirelessReceiver => NodeKind.WirelessReceiver,
+                ModIds.AutoHarvester => NodeKind.Harvester,
                 _ => null
             };
         }

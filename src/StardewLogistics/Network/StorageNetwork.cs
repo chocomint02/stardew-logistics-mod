@@ -172,6 +172,38 @@ namespace StardewLogistics.Network
             return totals.Values.ToList();
         }
 
+        /// <summary>Whether storage could take a number of an item without leaving any over.</summary>
+        /// <remarks>
+        /// Counts room in existing stacks it would merge with, plus free slots in chests that accept it. Chests
+        /// another player has open are skipped, as they are when inserting.
+        /// </remarks>
+        public bool HasRoomFor(Item sample, int count)
+        {
+            if (sample == null || count <= 0)
+                return true;
+
+            long room = 0;
+            int perStack = Math.Max(1, sample.maximumStackSize());
+
+            foreach (StorageEntry entry in this.Storages)
+            {
+                if (entry.IsBusy || !entry.Accepts(sample))
+                    continue;
+
+                foreach (Item item in entry.Chest.Items)
+                {
+                    if (item != null && item.canStackWith(sample))
+                        room += Math.Max(0, item.maximumStackSize() - item.Stack);
+                }
+
+                room += (long)entry.FreeSlots * perStack;
+                if (room >= count)
+                    return true;
+            }
+
+            return room >= count;
+        }
+
         /// <summary>Counts the items on the network satisfying a stock ID, optionally at one quality.</summary>
         /// <param name="qualifiedItemId">The stock ID. A plain ID counts every flavour.</param>
         /// <param name="quality">The quality to count, or <see cref="Quality.Any"/> for all.</param>

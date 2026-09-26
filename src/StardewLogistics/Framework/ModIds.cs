@@ -29,6 +29,9 @@ namespace StardewLogistics.Framework
         /// <summary>Joins its network to a live channel's.</summary>
         public const string WirelessReceiver = ModId + "_WirelessReceiver";
 
+        /// <summary>Tills, plants, waters and harvests an area, drawing seeds from and sending crops to the network.</summary>
+        public const string AutoHarvester = ModId + "_AutoHarvester";
+
         /*********
         ** Assets
         *********/
@@ -49,6 +52,9 @@ namespace StardewLogistics.Framework
 
         /// <summary>A serialised <see cref="ItemFilter"/> stored on a chest or bus.</summary>
         public const string FilterKey = ModId + "/filter";
+
+        /// <summary>An auto-harvester's area, crop plan and replant choices.</summary>
+        public const string HarvesterKey = ModId + "/harvester";
 
         /// <summary>The channel a wireless transmitter or receiver is tuned to.</summary>
         public const string ChannelKey = ModId + "/channel";

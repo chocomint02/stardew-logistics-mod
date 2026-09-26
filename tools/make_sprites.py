@@ -4,7 +4,7 @@
 The sheet is 128x32: six 16x32 sprites laid out left to right, indexed by the
 ``SpriteIndex`` values in ``Integrations/ContentInjector.cs``:
 
-    0 (unused)   1 (unused)   2 terminal   3 crafting terminal   4 wireless transmitter   5 wireless receiver
+    0 auto-harvester   1 (unused)   2 terminal   3 crafting terminal   4 wireless transmitter   5 wireless receiver
 
 Edit the drawing calls below and re-run. Uses only the standard library, so it
 needs no Pillow or other image dependency.
@@ -59,20 +59,35 @@ def box(ox, x0, y0, x1, y1, fill, light, dark):
     rect(ox, x0 + 1, y1 - 1, x1 - 1, y1 - 1, dark)
     rect(ox, x1 - 1, y0 + 1, x1 - 1, y1 - 1, dark)
 
-# ---- 0: Logistics Cable -------------------------------------------------
+# ---- 0: Auto-Harvester -------------------------------------------------
 o = 0
-# a vertical branch first, so the horizontal run draws over its join
-box(o, 6, 13, 10, 24, MID, LIGHT, DARK)
-rect(o, 8, 14, 8, 23, CYAN)
-# horizontal conduit spanning the whole tile
-box(o, 0, 20, 15, 28, MID, LIGHT, DARK)
-# glowing core running end to end
-rect(o, 1, 24, 14, 24, CYAN)
-rect(o, 1, 23, 14, 23, CYAND)
-# collars at the two ends only, so the run stays readable
-for cx in (1, 13):
-    rect(o, cx, 19, cx + 1, 29, OUT)
-    rect(o, cx, 20, cx + 1, 28, COPPER)
+LEAF  = (84, 176, 72, 255)
+LEAFD = (52, 120, 52, 255)
+# cabinet
+box(o, 1, 17, 14, 31, MID, LIGHT, DARK)
+rect(o, 3, 31, 12, 31, OUT)
+# window with a sprout growing in it
+rect(o, 3, 20, 12, 28, OUT)
+rect(o, 4, 21, 11, 27, SCREEN)
+rect(o, 4, 26, 11, 27, (96, 64, 40, 255))          # soil
+rect(o, 7, 22, 8, 25, LEAFD)                        # stem
+rect(o, 5, 22, 6, 23, LEAF)                         # left leaf
+rect(o, 9, 21, 10, 22, LEAF)                        # right leaf
+# seed hopper on top
+box(o, 3, 10, 11, 17, COPPER, LIGHT, DARK)
+rect(o, 5, 12, 9, 13, (60, 40, 24, 255))            # hopper mouth
+p(o, 6, 12, AMBER)
+p(o, 8, 13, AMBER)
+# scythe arm rising from the right shoulder
+rect(o, 12, 6, 13, 17, OUT)
+rect(o, 12, 7, 12, 16, LIGHT)
+# curved blade sweeping left over the hopper
+for (x, y) in ((13, 4), (12, 3), (11, 3), (10, 3), (9, 3), (8, 4), (7, 4), (6, 5), (5, 6)):
+    p(o, x, y, OUT)
+for (x, y) in ((12, 4), (11, 4), (10, 4), (9, 4), (8, 5), (7, 5), (6, 6)):
+    p(o, x, y, (214, 220, 232, 255))
+# status light
+p(o, 2, 29, GREEN)
 
 # ---- 1: Logistics Controller -------------------------------------------
 o = 16
