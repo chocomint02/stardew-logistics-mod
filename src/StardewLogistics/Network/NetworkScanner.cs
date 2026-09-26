@@ -133,20 +133,20 @@ namespace StardewLogistics.Network
             NodeKind? kind = NetworkNode.GetKind(obj.ItemId);
             if (kind != null)
             {
-                nodes.Add(new NetworkNode(kind.Value, tile, obj));
+                nodes.Add(new NetworkNode(kind.Value, location, tile, obj));
                 return;
             }
 
             if (IsNetworkStorage(obj, out Chest chest))
             {
-                storages.Add(new StorageEntry(chest, tile));
+                storages.Add(new StorageEntry(chest, location, tile));
                 return;
             }
 
             // Anything else with machine data is a keg, furnace, preserves jar and so on: wiring one to the
             // network is how it becomes available for processing jobs.
             if (MachineIO.IsMachine(obj))
-                nodes.Add(new NetworkNode(NodeKind.Machine, tile, obj));
+                nodes.Add(new NetworkNode(NodeKind.Machine, location, tile, obj));
         }
 
         /// <summary>Whether a placed object is a chest the network may use for storage.</summary>

@@ -83,6 +83,12 @@ namespace StardewLogistics.Framework
         /// <summary>The qualified item ID, or a category ID for an ingredient that names a group.</summary>
         public string ItemId { get; set; }
 
+        /// <summary>The quality this item must be, or <see cref="Quality.Any"/>.</summary>
+        public int RequiredQuality { get; set; } = Quality.Any;
+
+        /// <summary>How much was drawn from storage at each quality, lowest first.</summary>
+        public List<(int Quality, int Count)> StockParts { get; set; } = new();
+
         /// <summary>The item's display name.</summary>
         public string DisplayName { get; set; }
 

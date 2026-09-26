@@ -47,6 +47,20 @@ namespace StardewLogistics.Framework
         /// <summary>Every machine the index can resolve against.</summary>
         private readonly List<MachineContext> MachineList = new();
 
+        /// <summary>Each machine's any-quality recipe for an input, to compare quality-specific ones against.</summary>
+        private readonly Dictionary<string, MachineRecipe> General = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>A random source that never rolls lucky: only a 100% chance passes.</summary>
+        /// <remarks>
+        /// Output modifiers like "double for iridium wool" are conditions with a <c>RANDOM</c> chance. Evaluated
+        /// against this, a chance below 100% always fails and a certain one always passes, which leaves exactly
+        /// the yield that can be promised.
+        /// </remarks>
+        private static readonly Random WorstCase = new FixedRandom(1 - 1e-9);
+
+        /// <summary>A random source that always rolls lucky, for the most a run could yield.</summary>
+        private static readonly Random BestCase = new FixedRandom(0);
+
 
         /*********
         ** Accessors
@@ -75,6 +89,7 @@ namespace StardewLogistics.Framework
             this.FromStockByInput.Clear();
             this.TriedInputs.Clear();
             this.KnownKeys.Clear();
+            this.General.Clear();
             this.MachineList.Clear();
             this.SkippedRules = 0;
             this.ExternalRequirementSkips = 0;
@@ -132,6 +147,7 @@ namespace StardewLogistics.Framework
                     {
                         this.FixedRecipes.Add(recipe);
                         this.AddByOutput(recipe);
+                        this.General[GeneralKey(recipe.MachineId, recipe.InputId)] = recipe;
                     }
                 }
             }
@@ -162,33 +178,62 @@ namespace StardewLogistics.Framework
                     continue;
 
                 string inputId = StockId.Of(sample);
-                if (inputId == null || !this.TriedInputs.Add(inputId))
+                if (inputId == null)
                     continue;
 
-                timer ??= Stopwatch.StartNew();
-                tried++;
-
-                // So a flavoured input (a fish's roe, say) can be named and recreated later.
-                StockId.Remember(sample);
-
-                // Quality isn't part of a stock ID, so try the plain version: the recipe is for "Starfruit",
-                // not "gold Starfruit".
-                Item input = sample.getOne();
-                input.Quality = SObject.lowQuality;
-                input.Stack = input.maximumStackSize();
-
-                foreach (MachineContext context in this.MachineList)
+                // Each item is tried once as "any quality": the recipe is for Starfruit, not gold Starfruit.
+                if (this.TriedInputs.Add(inputId))
                 {
-                    MachineRecipe recipe = this.Resolve(context, input, fromStock: true);
-                    if (recipe == null || !this.KnownKeys.Add(recipe.Key))
-                        continue;
+                    timer ??= Stopwatch.StartNew();
+                    tried++;
 
-                    if (!this.FromStockByInput.TryGetValue(inputId, out List<MachineRecipe> list))
-                        this.FromStockByInput[inputId] = list = new List<MachineRecipe>();
+                    // So a flavoured input (a fish's roe, say) can be named and recreated later.
+                    StockId.Remember(sample);
 
-                    list.Add(recipe);
-                    this.AddByOutput(recipe);
-                    found++;
+                    Item input = sample.getOne();
+                    input.Quality = SObject.lowQuality;
+                    input.Stack = input.maximumStackSize();
+
+                    foreach (MachineContext context in this.MachineList)
+                    {
+                        MachineRecipe recipe = this.Resolve(context, input, fromStock: true);
+                        if (recipe == null || !this.KnownKeys.Add(recipe.Key))
+                            continue;
+
+                        this.AddFromStock(inputId, recipe);
+                        this.General[GeneralKey(recipe.MachineId, recipe.InputId)] = recipe;
+                        found++;
+                    }
+                }
+
+                // And once more at each better quality actually held, in case a machine does more with it. Only a
+                // difference in what a run takes, makes or how long it runs is worth a recipe of its own; a better
+                // quality that just makes a better-quality product is the same recipe as far as planning goes.
+                if (sample.Quality > SObject.lowQuality && this.TriedInputs.Add(inputId + "#" + sample.Quality))
+                {
+                    timer ??= Stopwatch.StartNew();
+                    tried++;
+
+                    Item input = sample.getOne();
+                    input.Stack = input.maximumStackSize();
+
+                    foreach (MachineContext context in this.MachineList)
+                    {
+                        MachineRecipe recipe = this.Resolve(context, input, fromStock: true, quality: sample.Quality);
+                        if (recipe == null)
+                            continue;
+
+                        if (this.General.TryGetValue(GeneralKey(context.MachineId, inputId), out MachineRecipe general) && !DiffersInWork(recipe, general))
+                            continue;
+
+                        if (!this.KnownKeys.Add(recipe.Key))
+                            continue;
+
+                        this.AddFromStock(inputId, recipe);
+                        found++;
+                        Log.Trace($"{recipe.MachineName} does more with {Quality.Name(sample.Quality)} {StockId.GetDisplayName(inputId)}: "
+                            + $"{recipe.InputCount} in, {recipe.OutputCount} out, {recipe.Minutes}m.");
+                    }
                 }
             }
 
@@ -235,7 +280,7 @@ namespace StardewLogistics.Framework
         *********/
         /// <summary>Asks the game what a machine would make from an input, and turns the answer into a recipe.</summary>
         /// <returns>The recipe, or <c>null</c> if the machine won't take the input or its output can't be predicted.</returns>
-        private MachineRecipe Resolve(MachineContext context, Item input, bool fromStock)
+        private MachineRecipe Resolve(MachineContext context, Item input, bool fromStock, int quality = Quality.Any)
         {
             Farmer who = Game1.player;
             GameLocation location = who?.currentLocation ?? Game1.getFarm();
@@ -285,7 +330,11 @@ namespace StardewLogistics.Framework
 
                 StockId.Remember(product);
 
-                int guaranteed = output.MinStack > 0 ? output.MinStack : 1;
+                // The yield that can be promised, after any output modifiers: evaluated against a random source
+                // that never rolls lucky, so "50% chance of double" adds nothing and "always double" counts in full.
+                int minimum = output.MinStack > 0 ? output.MinStack : 1;
+                int guaranteed = ApplyStackModifiers(minimum, output, location, who, product, input, WorstCase);
+                int best = ApplyStackModifiers(Math.Max(minimum, output.MaxStack), output, location, who, product, input, BestCase);
                 int minutes = overrideMinutes ?? rule.MinutesUntilReady;
 
                 return new MachineRecipe
@@ -295,12 +344,13 @@ namespace StardewLogistics.Framework
                     InputId = StockId.Of(input),
                     InputTags = trigger.RequiredTags?.Where(tag => !string.IsNullOrWhiteSpace(tag)).ToList() ?? new List<string>(),
                     InputCount = Math.Max(1, trigger.RequiredCount),
+                    InputQuality = quality,
                     ExtraInputs = context.Extras,
                     OutputId = StockId.Of(product),
                     OutputSample = product.getOne(),
                     FromStock = fromStock,
                     OutputCount = guaranteed,
-                    MaxOutputCount = Math.Max(guaranteed, output.MaxStack),
+                    MaxOutputCount = Math.Max(guaranteed, best),
                     Minutes = Math.Max(0, minutes),
                     Days = Math.Max(0, rule.DaysUntilReady)
                 };
@@ -310,6 +360,29 @@ namespace StardewLogistics.Framework
                 Log.Trace($"Couldn't resolve {context.MachineName} with {input.QualifiedItemId}: {ex.Message}");
                 return null;
             }
+        }
+
+        /// <summary>Records a recipe found from stock.</summary>
+        private void AddFromStock(string inputId, MachineRecipe recipe)
+        {
+            if (!this.FromStockByInput.TryGetValue(inputId, out List<MachineRecipe> list))
+                this.FromStockByInput[inputId] = list = new List<MachineRecipe>();
+
+            list.Add(recipe);
+            this.AddByOutput(recipe);
+        }
+
+        /// <summary>The key for a machine's any-quality recipe for an input.</summary>
+        private static string GeneralKey(string machineId, string inputId) => machineId + "|" + inputId;
+
+        /// <summary>Whether a quality-specific recipe changes the work compared with the any-quality one.</summary>
+        private static bool DiffersInWork(MachineRecipe specific, MachineRecipe general)
+        {
+            return !string.Equals(specific.OutputId, general.OutputId, StringComparison.OrdinalIgnoreCase)
+                || specific.OutputCount != general.OutputCount
+                || specific.InputCount != general.InputCount
+                || specific.Minutes != general.Minutes
+                || specific.Days != general.Days;
         }
 
         /// <summary>Adds a recipe to the by-output lookup the planner uses.</summary>
@@ -330,6 +403,23 @@ namespace StardewLogistics.Framework
         {
             return output?.CustomData != null
                 && output.CustomData.Keys.Any(key => key.StartsWith("selph.ExtraMachineConfig.Requirement", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>Applies an output's stack modifiers to a yield, rolling with a given random source.</summary>
+        private static int ApplyStackModifiers(int stack, MachineItemOutput output, GameLocation location, Farmer who, Item product, Item input, Random random)
+        {
+            if (output.StackModifiers is not { Count: > 0 })
+                return stack;
+
+            try
+            {
+                float modified = Utility.ApplyQuantityModifiers(stack, output.StackModifiers, output.StackModifierMode, location, who, product, input, random);
+                return Math.Max(1, (int)Math.Floor(modified));
+            }
+            catch
+            {
+                return stack;
+            }
         }
 
         /// <summary>Whether an output's identity and size can be known without running the machine.</summary>
@@ -416,6 +506,23 @@ namespace StardewLogistics.Framework
         /*********
         ** Nested types
         *********/
+        /// <summary>A random source that always produces the same value.</summary>
+        private sealed class FixedRandom : Random
+        {
+            private readonly double Value;
+
+            public FixedRandom(double value) : base(0)
+            {
+                this.Value = value;
+            }
+
+            protected override double Sample() => this.Value;
+            public override double NextDouble() => this.Value;
+            public override int Next() => (int)(this.Value * int.MaxValue);
+            public override int Next(int maxValue) => (int)(this.Value * maxValue);
+            public override int Next(int minValue, int maxValue) => minValue + (int)(this.Value * (maxValue - minValue));
+        }
+
         /// <summary>A machine as the index resolves against it.</summary>
         private class MachineContext
         {

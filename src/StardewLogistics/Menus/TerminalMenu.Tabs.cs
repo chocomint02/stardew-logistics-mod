@@ -209,7 +209,9 @@ namespace StardewLogistics.Menus
                         continue;
 
                     NetworkItemStack entry = this.VisibleStock[index];
-                    entry.Sample.drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: true);
+                    // The count is drawn separately on its own plate; the game still draws the quality star, which is
+                    // the only way to tell a gold stack from a normal one.
+                    entry.Sample.drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
 
                     // Vanilla stack numbers max out long before a network does, so draw the count ourselves.
                     DrawSlotCount(b, NumberFormat.Abbreviate(entry.Count), x, y);
@@ -263,7 +265,7 @@ namespace StardewLogistics.Menus
             {
                 this.ConfigRows.Add(new ConfigRow
                 {
-                    Title = this.Translations.Get("device.chest", new { x = (int)entry.Tile.X, y = (int)entry.Tile.Y }),
+                    Title = this.Translations.Get("device.chest", new { x = (int)entry.Tile.X, y = (int)entry.Tile.Y }) + this.DescribeElsewhere(entry.Location),
                     Subtitle = this.Translations.Get("device.chest-slots", new { used = entry.UsedSlots, total = entry.Capacity }),
                     Entry = entry,
                     Filter = entry.Filter
@@ -276,13 +278,22 @@ namespace StardewLogistics.Menus
             {
                 this.ConfigRows.Add(new ConfigRow
                 {
-                    Title = this.Translations.Get("device.machine", new { name = node.Object.DisplayName, x = (int)node.Tile.X, y = (int)node.Tile.Y }),
+                    Title = this.Translations.Get("device.machine", new { name = node.Object.DisplayName, x = (int)node.Tile.X, y = (int)node.Tile.Y }) + this.DescribeElsewhere(node.Location),
                     Subtitle = DescribeMachine(node),
                     Node = node,
                     Filter = node.GetFilter(),
                     ReadOnly = true
                 });
             }
+        }
+
+        /// <summary>Names a location other than the terminal's, so a cellar chest isn't mistaken for one here.</summary>
+        private string DescribeElsewhere(GameLocation location)
+        {
+            if (location == null || location == this.TerminalLocation)
+                return "";
+
+            return this.Translations.Get("device.elsewhere", new { location = location.GetDisplayName() ?? location.Name });
         }
 
         /// <summary>Describes what a wired machine is currently doing.</summary>
@@ -471,7 +482,7 @@ namespace StardewLogistics.Menus
 
             List<string> lines = new()
             {
-                this.Translations.Get("network.cables", new { count = this.Network.CableTiles.Count }),
+                this.Translations.Get("network.cables", new { count = this.Network.TotalCableCount }),
                 this.Translations.Get("network.terminals", new { count = this.Network.Terminals.Count() }),
                 this.Translations.Get("network.machines", new { count = this.Network.Machines.Count() }),
                 "",
@@ -483,6 +494,16 @@ namespace StardewLogistics.Menus
                     items = NumberFormat.Full(this.AllStock.Sum(entry => entry.Count))
                 })
             };
+
+            // A wirelessly linked network says where else it reaches.
+            if (this.Network.IsLinked)
+            {
+                lines.Add("");
+                lines.Add(this.Translations.Get("network.linked", new
+                {
+                    places = string.Join(", ", this.Network.Locations.Select(location => location.GetDisplayName() ?? location.Name))
+                }));
+            }
 
             int y = grid.Y + 8;
             foreach (string line in lines)

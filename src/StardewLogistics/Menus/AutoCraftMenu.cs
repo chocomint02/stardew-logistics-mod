@@ -543,7 +543,7 @@ namespace StardewLogistics.Menus
                     Utility.drawTextWithShadow(b, "└", Game1.smallFont, new Vector2(row.X + indent - 20, row.Y + 6), Game1.textColor * 0.5f);
 
                 // Item icon, so the tree can be read at a glance rather than by reading every name.
-                DrawIcon(b, GetIcon(node.ItemId), row.X + indent, row.Y + 4, node.Kind == PlanStepKind.Missing ? 0.4f : 1f);
+                DrawIcon(b, GetIcon(node.ItemId, node.RequiredQuality), row.X + indent, row.Y + 4, node.Kind == PlanStepKind.Missing ? 0.4f : 1f);
 
                 string detail = this.DescribeStep(node);
                 Vector2 detailSize = Game1.smallFont.MeasureString(detail);
@@ -615,15 +615,29 @@ namespace StardewLogistics.Menus
             // drawInMenu centres on position + (32,32) in a 64px cell, so offset back to land a 32px icon here.
             bool tall = icon is StardewValley.Object obj && obj.bigCraftable.Value;
             icon.drawInMenu(b, new Vector2(x - 16, y - 16), tall ? 0.25f : 0.5f, alpha, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+
+            // The quality star is how rows of one item differ, so it's drawn here rather than by the game: the
+            // game places it at a fixed offset meant for a full-size icon, which lands below a half-size one.
+            Rectangle? star = icon.Quality switch
+            {
+                StardewValley.Object.medQuality => new Rectangle(338, 400, 8, 8),
+                StardewValley.Object.highQuality => new Rectangle(346, 400, 8, 8),
+                StardewValley.Object.bestQuality => new Rectangle(346, 392, 8, 8),
+                _ => null
+            };
+            if (star != null)
+                b.Draw(Game1.mouseCursors, new Rectangle(x - 2, y + 18, 16, 16), star.Value, Color.White * alpha, 0f, Vector2.Zero, SpriteEffects.None, 1f);
         }
 
         /// <summary>Builds a drawable icon for an item ID, cached for the life of the menu.</summary>
-        private static Item GetIcon(string qualifiedId)
+        private static Item GetIcon(string qualifiedId, int quality = Quality.Any)
         {
             if (string.IsNullOrEmpty(qualifiedId))
                 return null;
 
-            if (IconCache.TryGetValue(qualifiedId, out Item cached))
+            // Cached per quality, so a normal and an iridium Starfruit row each get their own star.
+            string key = quality > 0 ? $"{qualifiedId}#{quality}" : qualifiedId;
+            if (IconCache.TryGetValue(key, out Item cached))
                 return cached;
 
             Item icon = null;
@@ -636,7 +650,10 @@ namespace StardewLogistics.Menus
                 // A category ID or a removed mod's item; the row still reads fine without a picture.
             }
 
-            IconCache[qualifiedId] = icon;
+            if (icon != null && quality > 0)
+                icon.Quality = quality;
+
+            IconCache[key] = icon;
             return icon;
         }
 

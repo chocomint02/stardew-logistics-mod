@@ -268,16 +268,19 @@ namespace StardewLogistics.Devices
 
             // The planner has already decided which node draws what from stock; summing those gives exactly the
             // materials it counted on, coal and intermediates already on the shelf included.
-            Dictionary<string, int> wanted = plan.Root
+            // Grouped by quality as well, so iridium wool the plan set aside for its own recipe is taken as
+            // iridium, and everything else takes the lowest quality first.
+            var wanted = plan.Root
                 .Walk()
                 .Where(node => node.FromStock > 0 && !string.IsNullOrEmpty(node.ItemId))
-                .GroupBy(node => node.ItemId, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.Sum(node => node.FromStock), StringComparer.OrdinalIgnoreCase);
+                .GroupBy(node => (Id: node.ItemId.ToLowerInvariant(), node.RequiredQuality))
+                .Select(group => (ItemId: group.First().ItemId, Quality: group.Key.RequiredQuality, Count: group.Sum(node => node.FromStock)))
+                .ToList();
 
-            foreach ((string itemId, int count) in wanted)
+            foreach ((string itemId, int quality, int count) in wanted)
             {
                 int got = 0;
-                foreach (Item item in network.ExtractById(itemId, count))
+                foreach (Item item in network.ExtractById(itemId, count, quality))
                 {
                     got += item.Stack;
                     job.Buffer.Add(item);
@@ -590,7 +593,8 @@ namespace StardewLogistics.Devices
                 machine.modData[ModIds.JobKey] = job.Token;
                 step.InFlight.Add(new RunningBatch
                 {
-                    LocationName = network.Location?.NameOrUniqueName,
+                    // The machine's own location: on a wirelessly linked network it may be the cellar, not here.
+                    LocationName = (node.Location ?? network.Location)?.NameOrUniqueName,
                     Tile = node.Tile,
                     ExpectedMinutes = minutes,
                     MinutesLeft = minutes,
@@ -660,7 +664,7 @@ namespace StardewLogistics.Devices
             // went astray since.
             foreach (ItemCost input in inputs)
             {
-                if (!buffer.EnsureHas(input.ItemId, input.Count, network))
+                if (!buffer.EnsureHas(input.ItemId, input.Count, network, input.RequiredQuality))
                 {
                     missing = input;
                     return false;
@@ -684,7 +688,7 @@ namespace StardewLogistics.Devices
 
             // Kept with the run, so cancelling can hand back exactly these.
             foreach (ItemCost input in inputs)
-                consumed.AddRange(buffer.Take(input.ItemId, input.Count));
+                consumed.AddRange(buffer.Take(input.ItemId, input.Count, input.RequiredQuality));
 
             // Set the machine to the outcome the recipe index already worked out. The game's clock counts
             // minutesUntilReady down and raises readyForHarvest on its own from here.

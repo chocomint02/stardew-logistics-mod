@@ -13,6 +13,8 @@ using StardewValley;
 using StardewValley.GameData.BigCraftables;
 using StardewValley.GameData.FloorsAndPaths;
 using StardewValley.GameData.Objects;
+using StardewValley.TerrainFeatures;
+using System.Linq;
 using SObject = StardewValley.Object;
 
 namespace StardewLogistics
@@ -64,6 +66,8 @@ namespace StardewLogistics
             helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
             helper.Events.Input.ButtonPressed += this.OnButtonPressed;
             helper.Events.World.ObjectListChanged += this.OnObjectListChanged;
+            helper.Events.World.TerrainFeatureListChanged += this.OnTerrainFeatureListChanged;
+            helper.Events.Display.RenderedWorld += this.OnRenderedWorld;
         }
 
 
@@ -158,6 +162,54 @@ namespace StardewLogistics
         private void OnObjectListChanged(object sender, ObjectListChangedEventArgs e)
         {
             this.Networks.Invalidate(e.Location);
+
+            // Where the wireless devices are is worked out across the whole world, so only placing or removing
+            // one of them makes that search run again.
+            if (e.Added.Any(pair => NetworkManager.IsWirelessDevice(pair.Value)) || e.Removed.Any(pair => NetworkManager.IsWirelessDevice(pair.Value)))
+                this.Networks.InvalidateWireless();
+        }
+
+        /// <summary>Rescans a location when cable is laid or lifted there.</summary>
+        /// <remarks>
+        /// Cable is floor, so laying it doesn't change the object list. Without this, a run of new cable only
+        /// joined the network once something else in the location happened to trigger a rescan.
+        /// </remarks>
+        private void OnTerrainFeatureListChanged(object sender, TerrainFeatureListChangedEventArgs e)
+        {
+            static bool IsCable(TerrainFeature feature) => feature is Flooring floor && floor.whichFloor.Value == ModIds.CableFloorId;
+
+            if (e.Added.Any(pair => IsCable(pair.Value)) || e.Removed.Any(pair => IsCable(pair.Value)))
+                this.Networks.Invalidate(e.Location);
+        }
+
+        /// <summary>Shows each nearby wireless device's channel above it.</summary>
+        /// <remarks>
+        /// Two receivers look identical, so without this the only way to tell what one is tuned to is to open it.
+        /// Only devices near the player are labelled, to keep a busy farm readable.
+        /// </remarks>
+        private void OnRenderedWorld(object sender, RenderedWorldEventArgs e)
+        {
+            if (!Context.IsWorldReady || Game1.currentLocation == null || Game1.eventUp)
+                return;
+
+            const int radius = 6;
+            Vector2 player = Game1.player.Tile;
+
+            foreach ((Vector2 tile, SObject obj) in Game1.currentLocation.Objects.Pairs)
+            {
+                if (!NetworkManager.IsWirelessDevice(obj) || Vector2.Distance(tile, player) > radius)
+                    continue;
+
+                string label = NetworkNode.GetChannel(obj).ToString();
+                Vector2 size = Game1.smallFont.MeasureString(label) * 0.6f;
+
+                // A big craftable stands two tiles tall from its tile; the label sits just above its top.
+                Vector2 top = Game1.GlobalToLocal(Game1.viewport, new Vector2((tile.X * Game1.tileSize) + (Game1.tileSize / 2f), (tile.Y - 1) * Game1.tileSize));
+                Rectangle plate = new((int)(top.X - (size.X / 2) - 6), (int)(top.Y - size.Y - 10), (int)size.X + 12, (int)size.Y + 4);
+
+                e.SpriteBatch.Draw(Game1.staminaRect, plate, new Color(26, 22, 32) * 0.8f);
+                e.SpriteBatch.DrawString(Game1.smallFont, label, new Vector2(plate.X + 6, plate.Y + 2), Color.White, 0f, Vector2.Zero, 0.6f, SpriteEffects.None, 1f);
+            }
         }
 
         /// <summary>Services wired machines on the host.</summary>
@@ -203,12 +255,24 @@ namespace StardewLogistics
                 return;
 
             NodeKind? kind = NetworkNode.GetKind(obj.ItemId);
-            if (kind is not (NodeKind.Terminal or NodeKind.CraftingTerminal))
+            if (kind is not (NodeKind.Terminal or NodeKind.CraftingTerminal or NodeKind.WirelessTransmitter or NodeKind.WirelessReceiver))
                 return;
 
-            // Don't let the player operate a terminal from across the farm.
+            // Don't let the player operate a device from across the farm.
             if (!Utility.tileWithinRadiusOfPlayer((int)tile.X, (int)tile.Y, 1, Game1.player))
                 return;
+
+            if (kind is NodeKind.WirelessTransmitter or NodeKind.WirelessReceiver)
+            {
+                // Only the action button tunes a device; the terminal hotkey is for terminals.
+                if (!isAction)
+                    return;
+
+                this.Helper.Input.Suppress(e.Button);
+                Game1.playSound("bigSelect");
+                Game1.activeClickableMenu = new WirelessMenu(this.Networks, this.Helper.Translation, location, tile, obj);
+                return;
+            }
 
             this.Helper.Input.Suppress(e.Button);
 

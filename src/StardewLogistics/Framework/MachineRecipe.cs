@@ -36,6 +36,14 @@ namespace StardewLogistics.Framework
         /// <summary>How many of the input one run consumes.</summary>
         public int InputCount { get; init; }
 
+        /// <summary>The quality the input must be, or <see cref="Quality.Any"/> for a recipe that takes any.</summary>
+        /// <remarks>
+        /// Almost every recipe takes any quality, and planning spends the lowest first. A few machines do more
+        /// with a better input -- iridium wool always weaves two cloth -- and those are indexed as a separate recipe
+        /// tied to that quality, so the planner can choose it when it genuinely saves ingredients and time.
+        /// </remarks>
+        public int InputQuality { get; init; } = Quality.Any;
+
         /// <summary>Anything else a run consumes, such as a furnace's coal.</summary>
         public IReadOnlyList<ItemCost> ExtraInputs { get; init; } = new List<ItemCost>();
 
@@ -80,7 +88,7 @@ namespace StardewLogistics.Framework
         public bool HasVariableYield => this.MaxOutputCount > this.OutputCount;
 
         /// <summary>A stable key for this recipe, used to remember the player's machine preferences.</summary>
-        public string Key => $"{this.MachineId}|{this.InputId}|{this.OutputId}";
+        public string Key => $"{this.MachineId}|{this.InputId}|{this.OutputId}" + (this.InputQuality >= 0 ? $"|q{this.InputQuality}" : "");
 
         /// <summary>The output's display name.</summary>
         public string OutputName => this.OutputSample?.DisplayName ?? StockId.GetDisplayName(this.OutputId);
@@ -92,7 +100,7 @@ namespace StardewLogistics.Framework
         /// <summary>Returns everything one run consumes, including the primary input.</summary>
         public IEnumerable<ItemCost> GetAllInputs()
         {
-            yield return new ItemCost(this.InputId, this.InputCount);
+            yield return new ItemCost(this.InputId, this.InputCount, this.InputQuality);
 
             foreach (ItemCost extra in this.ExtraInputs)
                 yield return extra;
@@ -110,7 +118,7 @@ namespace StardewLogistics.Framework
         /// <summary>Describes the input side for logs and the console.</summary>
         public string DescribeInputs(Func<string, string> getName)
         {
-            string primary = $"{this.InputCount}x {getName(this.InputId)}";
+            string primary = $"{this.InputCount}x {getName(this.InputId)}" + (this.InputQuality >= 0 ? $" ({Quality.Name(this.InputQuality)})" : "");
             if (this.InputTags.Count > 0)
                 primary += $" [{string.Join(" ", this.InputTags)}]";
 
@@ -131,10 +139,14 @@ namespace StardewLogistics.Framework
         /// <summary>How many are needed.</summary>
         public int Count { get; }
 
-        public ItemCost(string itemId, int count)
+        /// <summary>The quality required, or <see cref="Quality.Any"/>.</summary>
+        public int RequiredQuality { get; }
+
+        public ItemCost(string itemId, int count, int requiredQuality = Quality.Any)
         {
             this.ItemId = itemId;
             this.Count = count;
+            this.RequiredQuality = requiredQuality;
         }
 
         public override string ToString() => $"{this.Count}x {this.ItemId}";

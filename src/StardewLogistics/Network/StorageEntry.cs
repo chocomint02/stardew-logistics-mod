@@ -22,6 +22,9 @@ namespace StardewLogistics.Network
         /// <summary>The chest holding the items.</summary>
         public Chest Chest { get; }
 
+        /// <summary>The location the chest is in.</summary>
+        public GameLocation Location { get; }
+
         /// <summary>The tile the chest occupies.</summary>
         public Vector2 Tile { get; }
 
@@ -71,9 +74,10 @@ namespace StardewLogistics.Network
         /*********
         ** Public methods
         *********/
-        public StorageEntry(Chest chest, Vector2 tile)
+        public StorageEntry(Chest chest, GameLocation location, Vector2 tile)
         {
             this.Chest = chest;
+            this.Location = location;
             this.Tile = tile;
 
             this.PriorityField = chest.modData.TryGetValue(ModIds.PriorityKey, out string rawPriority)

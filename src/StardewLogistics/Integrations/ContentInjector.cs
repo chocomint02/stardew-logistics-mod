@@ -26,7 +26,9 @@ namespace StardewLogistics.Integrations
         {
             ["Logistics Cable"] = 2,
             ["Storage Terminal"] = 4,
-            ["Crafting Terminal"] = 8
+            ["Crafting Terminal"] = 8,
+            ["Wireless Transmitter"] = 7,
+            ["Wireless Receiver"] = 7
         };
 
 
@@ -39,12 +41,14 @@ namespace StardewLogistics.Integrations
         }
 
         /// <summary>Adds the mod's terminals to <c>Data/BigCraftables</c>.</summary>
-        /// <remarks>Sprite indexes 0, 1, 4 and 5 in the craftables sheet are unused: they held the cable before it
-        /// became a floor, and the controller and buses before those were removed.</remarks>
+        /// <remarks>Sprite indexes 0 and 1 in the craftables sheet are unused: they held the cable before it became
+        /// a floor, and the controller before it was removed. 4 and 5, once the buses, are now the wireless pair.</remarks>
         public void EditBigCraftables(IDictionary<string, BigCraftableData> data)
         {
             this.AddCraftable(data, ModIds.Terminal, "terminal", spriteIndex: 2, price: 500);
             this.AddCraftable(data, ModIds.CraftingTerminal, "crafting-terminal", spriteIndex: 3, price: 900);
+            this.AddCraftable(data, ModIds.WirelessTransmitter, "wireless-transmitter", spriteIndex: 4, price: 1200);
+            this.AddCraftable(data, ModIds.WirelessReceiver, "wireless-receiver", spriteIndex: 5, price: 700);
         }
 
         /// <summary>Adds the cable item to <c>Data/Objects</c>.</summary>
@@ -116,6 +120,10 @@ namespace StardewLogistics.Integrations
             data["Logistics Cable"] = $"334 1 390 5/Home/{ModIds.Cable} 8/false/null/{this.Name("cable")}";
             data["Storage Terminal"] = $"335 2 338 5 709 10/Home/{ModIds.Terminal} 1/true/null/{this.Name("terminal")}";
             data["Crafting Terminal"] = $"336 3 338 10 787 1/Home/{ModIds.CraftingTerminal} 1/true/null/{this.Name("crafting-terminal")}";
+
+            // The transmitter costs more: a channel needs only one, and it's what makes the link at all.
+            data["Wireless Transmitter"] = $"336 2 338 5 787 1/Home/{ModIds.WirelessTransmitter} 1/true/null/{this.Name("wireless-transmitter")}";
+            data["Wireless Receiver"] = $"336 1 338 2 787 1/Home/{ModIds.WirelessReceiver} 1/true/null/{this.Name("wireless-receiver")}";
         }
 
 

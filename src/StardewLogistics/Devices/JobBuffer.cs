@@ -90,13 +90,13 @@ namespace StardewLogistics.Devices
             return locationName.Length > 0;
         }
 
-        /// <summary>How many held items satisfy a stock ID.</summary>
-        public int Count(string stockId)
+        /// <summary>How many held items satisfy a stock ID, optionally at one quality.</summary>
+        public int Count(string stockId, int quality = Quality.Any)
         {
             if (!Game1.player.team.globalInventories.ContainsKey(this.Key))
                 return 0;
 
-            return this.Items.Where(item => StockId.Matches(item, stockId)).Sum(item => item.Stack);
+            return this.Items.Where(item => StockId.Matches(item, stockId) && (quality < 0 || item.Quality == quality)).Sum(item => item.Stack);
         }
 
         /// <summary>Puts an item in the buffer, merging it into existing stacks.</summary>
@@ -120,7 +120,10 @@ namespace StardewLogistics.Devices
         }
 
         /// <summary>Removes up to a number of items matching a stock ID, returning what was taken.</summary>
-        public List<Item> Take(string stockId, int count)
+        /// <param name="stockId">The stock ID.</param>
+        /// <param name="count">How many to take.</param>
+        /// <param name="quality">The quality to take, or <see cref="Quality.Any"/> to take the lowest first.</param>
+        public List<Item> Take(string stockId, int count, int quality = Quality.Any)
         {
             List<Item> taken = new();
             if (count <= 0 || !Game1.player.team.globalInventories.ContainsKey(this.Key))
@@ -129,10 +132,13 @@ namespace StardewLogistics.Devices
             Inventory items = this.Items;
             int remaining = count;
 
-            for (int i = 0; i < items.Count && remaining > 0; i++)
+            foreach (int i in LowestQualityFirst(items))
             {
+                if (remaining <= 0)
+                    break;
+
                 Item item = items[i];
-                if (!StockId.Matches(item, stockId))
+                if (!StockId.Matches(item, stockId) || (quality >= 0 && item.Quality != quality))
                     continue;
 
                 int take = Math.Min(remaining, item.Stack);
@@ -163,9 +169,9 @@ namespace StardewLogistics.Devices
         /// emptied by another mod -- so the job can still finish from what the network has.
         /// </remarks>
         /// <returns>Whether the buffer now holds enough.</returns>
-        public bool EnsureHas(string stockId, int count, StorageNetwork network)
+        public bool EnsureHas(string stockId, int count, StorageNetwork network, int quality = Quality.Any)
         {
-            int shortfall = count - this.Count(stockId);
+            int shortfall = count - this.Count(stockId, quality);
             if (shortfall <= 0)
                 return true;
 
@@ -173,13 +179,13 @@ namespace StardewLogistics.Devices
             if (network == null || stockId.StartsWith("-"))
                 return false;
 
-            if (network.CountById(stockId) < shortfall)
+            if (network.CountById(stockId, quality) < shortfall)
                 return false;
 
-            foreach (Item item in network.ExtractById(stockId, shortfall))
+            foreach (Item item in network.ExtractById(stockId, shortfall, quality))
                 this.Add(item);
 
-            return this.Count(stockId) >= count;
+            return this.Count(stockId, quality) >= count;
         }
 
         /// <summary>Whether the buffer holds everything one craft of a recipe needs.</summary>
@@ -212,8 +218,11 @@ namespace StardewLogistics.Devices
             foreach ((string ingredient, int required) in recipe.recipeList)
             {
                 int remaining = required;
-                for (int i = 0; i < items.Count && remaining > 0; i++)
+                foreach (int i in LowestQualityFirst(items))
                 {
+                    if (remaining <= 0)
+                        break;
+
                     Item item = items[i];
                     if (item == null || !CraftingRecipe.ItemMatchesForCrafting(item, ingredient))
                         continue;
@@ -227,6 +236,16 @@ namespace StardewLogistics.Devices
             }
 
             items.RemoveEmptySlots();
+        }
+
+        /// <summary>The indexes of held items, lowest quality first, so better items are spent last.</summary>
+        private static List<int> LowestQualityFirst(Inventory items)
+        {
+            return Enumerable.Range(0, items.Count)
+                .Where(i => items[i] != null)
+                .OrderBy(i => items[i].Quality)
+                .ThenBy(i => i)
+                .ToList();
         }
 
         /// <summary>Moves everything held back into storage.</summary>

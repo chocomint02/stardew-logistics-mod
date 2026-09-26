@@ -4,7 +4,7 @@
 The sheet is 128x32: six 16x32 sprites laid out left to right, indexed by the
 ``SpriteIndex`` values in ``Integrations/ContentInjector.cs``:
 
-    0 cable   1 controller   2 terminal   3 crafting terminal   4 import bus   5 export bus
+    0 (unused)   1 (unused)   2 terminal   3 crafting terminal   4 wireless transmitter   5 wireless receiver
 
 Edit the drawing calls below and re-run. Uses only the standard library, so it
 needs no Pillow or other image dependency.
@@ -119,30 +119,65 @@ for ry in (11, 14, 17):
 rect(o, 5, 20, 10, 20, AMBRD)
 p(o, 13, 23, AMBER)
 
-# ---- 4: Import Bus ------------------------------------------------------
+# ---- 4: Wireless Transmitter -----------------------------------------
 o = 64
-box(o, 1, 12, 14, 31, MID, LIGHT, DARK)
-rect(o, 3, 15, 12, 27, OUT)
-rect(o, 4, 16, 11, 26, SCREEN)
-# arrow pointing in (downward)
-rect(o, 7, 17, 8, 22, GREEN)
-rect(o, 5, 21, 10, 22, GREEN)
-rect(o, 6, 23, 9, 23, GREEN)
-rect(o, 7, 24, 8, 24, GREEN)
-# intake collar on top
-box(o, 5, 8, 10, 13, COPPER, LIGHT, DARK)
+# cabinet
+box(o, 2, 20, 13, 31, MID, LIGHT, DARK)
+rect(o, 4, 23, 11, 27, OUT)
+rect(o, 5, 24, 10, 26, SCREEN)
+rect(o, 6, 25, 9, 25, CYAN)
+rect(o, 4, 31, 11, 31, OUT)
+# mast
+rect(o, 7, 7, 8, 20, OUT)
+rect(o, 7, 8, 7, 19, LIGHT)
+rect(o, 8, 8, 8, 19, DARK)
+# cross braces
+for by in (12, 16):
+    rect(o, 6, by, 9, by, OUT)
+# beacon
+rect(o, 6, 3, 9, 6, OUT)
+rect(o, 7, 4, 8, 5, AMBER)
+p(o, 7, 4, (255, 236, 170, 255))
+# broadcast arcs either side of the beacon
+for (x, y) in ((4, 3), (3, 4), (3, 5), (4, 6)):
+    p(o, x, y, CYAN)
+for (x, y) in ((11, 3), (12, 4), (12, 5), (11, 6)):
+    p(o, x, y, CYAN)
+for (x, y) in ((2, 2), (1, 3), (1, 4), (1, 5), (1, 6), (2, 7)):
+    p(o, x, y, CYAND)
+for (x, y) in ((13, 2), (14, 3), (14, 4), (14, 5), (14, 6), (13, 7)):
+    p(o, x, y, CYAND)
 
-# ---- 5: Export Bus ------------------------------------------------------
+# ---- 5: Wireless Receiver -----------------------------------------------
 o = 80
-box(o, 1, 12, 14, 31, MID, LIGHT, DARK)
-rect(o, 3, 15, 12, 27, OUT)
-rect(o, 4, 16, 11, 26, SCREEN)
-# arrow pointing out (upward)
-rect(o, 7, 19, 8, 24, ORANGE)
-rect(o, 5, 19, 10, 20, ORANGE)
-rect(o, 6, 18, 9, 18, ORANGE)
-rect(o, 7, 17, 8, 17, ORANGE)
-box(o, 5, 8, 10, 13, COPPER, LIGHT, DARK)
+# cabinet
+box(o, 2, 20, 13, 31, MID, LIGHT, DARK)
+rect(o, 4, 23, 11, 27, OUT)
+rect(o, 5, 24, 10, 26, SCREEN)
+rect(o, 6, 25, 9, 25, GREEN)
+rect(o, 4, 31, 11, 31, OUT)
+# post
+rect(o, 7, 13, 8, 20, OUT)
+rect(o, 7, 14, 7, 19, LIGHT)
+# dish: a bowl opening upward, the region between two ellipses below the rim line
+def in_ellipse(x, y, cx, cy, rx, ry):
+    return ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1.0
+bowl = set()
+for y in range(4, 14):
+    for x in range(0, 16):
+        if y >= 6 and in_ellipse(x, y, 8, 5, 7.3, 8.0) and not in_ellipse(x, y, 8, 3.0, 5.0, 6.0):
+            bowl.add((x, y))
+for (x, y) in bowl:
+    edge = any((x + dx, y + dy) not in bowl for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+    p(o, x, y, OUT if edge else (LIGHT if y < 10 else MID))
+# rim glints
+p(o, 1, 6, (214, 220, 232, 255))
+p(o, 14, 6, (214, 220, 232, 255))
+# feed arm rising from the bowl to the focal point, with a receiving light
+rect(o, 7, 5, 8, 10, DARK)
+rect(o, 6, 2, 9, 4, OUT)
+rect(o, 7, 3, 8, 3, GREEN)
+p(o, 7, 3, (190, 255, 196, 255))
 
 # ---- encode -------------------------------------------------------------
 raw = b"".join(

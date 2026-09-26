@@ -23,6 +23,12 @@ namespace StardewLogistics.Framework
         public const string Terminal = ModId + "_Terminal";
         public const string CraftingTerminal = ModId + "_CraftingTerminal";
 
+        /// <summary>Makes a channel live and joins its network to everything else on that channel.</summary>
+        public const string WirelessTransmitter = ModId + "_WirelessTransmitter";
+
+        /// <summary>Joins its network to a live channel's.</summary>
+        public const string WirelessReceiver = ModId + "_WirelessReceiver";
+
         /*********
         ** Assets
         *********/
@@ -43,6 +49,9 @@ namespace StardewLogistics.Framework
 
         /// <summary>A serialised <see cref="ItemFilter"/> stored on a chest or bus.</summary>
         public const string FilterKey = ModId + "/filter";
+
+        /// <summary>The channel a wireless transmitter or receiver is tuned to.</summary>
+        public const string ChannelKey = ModId + "/channel";
 
         /// <summary>The autocrafting job that has claimed a machine.</summary>
         /// <remarks>Stops two jobs fighting over one furnace, and keeps the network ticker from collecting

@@ -743,7 +743,7 @@ namespace StardewLogistics.Menus
             }
 
             Log.Trace(
-                $"Terminal opened at {where}: {this.Network.CableTiles.Count} cable tiles, "
+                $"Terminal opened at {where}: {this.Network.TotalCableCount} cable tiles in {this.Network.Segments.Count} segment(s), "
                 + $"{this.Network.Machines.Count()} machines, "
                 + $"{this.Network.Storages.Count} chests, "
                 + $"{this.AllStock.Count} item kinds, "

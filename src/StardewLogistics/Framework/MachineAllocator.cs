@@ -31,7 +31,13 @@ namespace StardewLogistics.Framework
             if (node?.Assignments == null || node.Assignments.Count == 0)
                 return 1;
 
-            return Math.Max(MinimumBudget(node), node.Assignments.Sum(assignment => Ceiling(assignment, countMachines)));
+            // Two shares on the same kind of machine -- duck eggs and golden duck eggs in Mayonnaise Machines --
+            // compete for the same machines, so a machine type contributes no more than it has.
+            int total = node.Assignments
+                .GroupBy(assignment => assignment.Recipe.MachineId, StringComparer.OrdinalIgnoreCase)
+                .Sum(type => Math.Min(TypeCapacity(type, countMachines), type.Sum(assignment => Ceiling(assignment, countMachines))));
+
+            return Math.Max(MinimumBudget(node), total);
         }
 
         /// <summary>Divides a budget between a step's shares.</summary>
@@ -68,6 +74,10 @@ namespace StardewLogistics.Framework
                 foreach (MachineAssignment assignment in node.Assignments)
                 {
                     if (allocation[assignment] >= Ceiling(assignment, countMachines))
+                        continue;
+
+                    // Its machine type is fully booked by this step's other shares.
+                    if (TypeAllocated(node, assignment, allocation) >= TypeCapacity(node, assignment, countMachines))
                         continue;
 
                     int time = TimeFor(assignment, allocation[assignment]);
@@ -114,6 +124,30 @@ namespace StardewLogistics.Framework
         {
             int usable = Math.Max(1, countMachines?.Invoke(assignment.Recipe) ?? 1);
             return Math.Max(1, Math.Min(usable, Math.Max(1, assignment.Runs)));
+        }
+
+        /// <summary>How many machines of one type the network has for a step, across the shares using that type.</summary>
+        private static int TypeCapacity(IEnumerable<MachineAssignment> sharesOfType, Func<MachineRecipe, int> countMachines)
+        {
+            return Math.Max(1, sharesOfType.Max(assignment => Math.Max(1, countMachines?.Invoke(assignment.Recipe) ?? 1)));
+        }
+
+        /// <summary>How many machines of an assignment's type the step's shares may use together.</summary>
+        private static int TypeCapacity(PlanNode node, MachineAssignment assignment, Func<MachineRecipe, int> countMachines)
+        {
+            return TypeCapacity(SameType(node, assignment), countMachines);
+        }
+
+        /// <summary>How many machines of an assignment's type are already allocated to the step.</summary>
+        private static int TypeAllocated(PlanNode node, MachineAssignment assignment, IReadOnlyDictionary<MachineAssignment, int> allocation)
+        {
+            return SameType(node, assignment).Sum(other => allocation.TryGetValue(other, out int got) ? got : 0);
+        }
+
+        /// <summary>The step's shares running on the same kind of machine as an assignment.</summary>
+        private static IEnumerable<MachineAssignment> SameType(PlanNode node, MachineAssignment assignment)
+        {
+            return node.Assignments.Where(other => string.Equals(other.Recipe.MachineId, assignment.Recipe.MachineId, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>How long a share takes on a number of machines.</summary>

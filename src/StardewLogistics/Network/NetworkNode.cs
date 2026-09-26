@@ -1,5 +1,6 @@
 using Microsoft.Xna.Framework;
 using StardewLogistics.Framework;
+using StardewValley;
 using SObject = StardewValley.Object;
 
 namespace StardewLogistics.Network
@@ -18,7 +19,13 @@ namespace StardewLogistics.Network
         CraftingTerminal,
 
         /// <summary>A vanilla machine the network can collect from and load into.</summary>
-        Machine
+        Machine,
+
+        /// <summary>Makes its channel live, linking every network on that channel into one.</summary>
+        WirelessTransmitter,
+
+        /// <summary>Links its network to a channel that has a transmitter.</summary>
+        WirelessReceiver
     }
 
     /// <summary>A device attached to a storage network.</summary>
@@ -30,6 +37,10 @@ namespace StardewLogistics.Network
         /// <summary>The device's role on the network.</summary>
         public NodeKind Kind { get; }
 
+        /// <summary>The location the device is in.</summary>
+        /// <remarks>A network linked wirelessly spans locations, so a tile alone no longer says where a device is.</remarks>
+        public GameLocation Location { get; }
+
         /// <summary>The tile the device occupies.</summary>
         public Vector2 Tile { get; }
 
@@ -39,15 +50,53 @@ namespace StardewLogistics.Network
         /// <summary>Whether this node is one of the mod's terminals.</summary>
         public bool IsTerminal => this.Kind is NodeKind.Terminal or NodeKind.CraftingTerminal;
 
+        /// <summary>Whether this node is a wireless transmitter or receiver.</summary>
+        public bool IsWireless => this.Kind is NodeKind.WirelessTransmitter or NodeKind.WirelessReceiver;
+
+        /// <summary>The channel a wireless node is tuned to.</summary>
+        public int Channel => GetChannel(this.Object);
+
 
         /*********
         ** Public methods
         *********/
-        public NetworkNode(NodeKind kind, Vector2 tile, SObject obj)
+        public NetworkNode(NodeKind kind, GameLocation location, Vector2 tile, SObject obj)
         {
             this.Kind = kind;
+            this.Location = location;
             this.Tile = tile;
             this.Object = obj;
+        }
+
+        /// <summary>The lowest and highest channel a device can be tuned to.</summary>
+        public const int MinChannel = 1;
+        public const int MaxChannel = 999;
+
+        /// <summary>Reads the channel a wireless device is tuned to.</summary>
+        /// <remarks>
+        /// A new device starts on channel 1, so a transmitter and a receiver work together straight out of the
+        /// box. Separating networks is a matter of retuning, not of setting up the first link.
+        /// </remarks>
+        public static int GetChannel(SObject obj)
+        {
+            return obj != null
+                && obj.modData.TryGetValue(ModIds.ChannelKey, out string raw)
+                && int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int channel)
+                ? System.Math.Clamp(channel, MinChannel, MaxChannel)
+                : MinChannel;
+        }
+
+        /// <summary>Tunes a wireless device, storing the channel on the object so it saves and syncs.</summary>
+        public static void SetChannel(SObject obj, int channel)
+        {
+            if (obj == null)
+                return;
+
+            channel = System.Math.Clamp(channel, MinChannel, MaxChannel);
+            if (channel == MinChannel)
+                obj.modData.Remove(ModIds.ChannelKey);
+            else
+                obj.modData[ModIds.ChannelKey] = channel.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         /// <summary>Reads the filter configured on this device, or an empty filter if it has none.</summary>
@@ -90,6 +139,8 @@ namespace StardewLogistics.Network
             {
                 ModIds.Terminal => NodeKind.Terminal,
                 ModIds.CraftingTerminal => NodeKind.CraftingTerminal,
+                ModIds.WirelessTransmitter => NodeKind.WirelessTransmitter,
+                ModIds.WirelessReceiver => NodeKind.WirelessReceiver,
                 _ => null
             };
         }
