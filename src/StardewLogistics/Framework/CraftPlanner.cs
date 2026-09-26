@@ -90,6 +90,12 @@ namespace StardewLogistics.Framework
             if (stock != null)
                 this.Machines?.ExpandFor(stock.Select(entry => entry.Sample).Where(sample => sample != null));
 
+            // The ordered item's own ingredient, when it's a flavour: Parsnip Juice has no recipe until a Parsnip
+            // has been tried in a keg, and without one the plan couldn't say it's the Parsnip that's missing.
+            string flavour = StockId.FlavourOf(targetId);
+            if (flavour != null && ItemRegistry.Create(flavour, allowNull: true) is Item ingredient)
+                this.Machines?.ExpandFor(new[] { ingredient });
+
             // Crops still growing count too: Starfruit ready in five days makes Starfruit Wine something to plan.
             this.Machines?.ExpandFor(this.Incoming.Select(crop => crop.ItemId).Distinct().Select(id => ItemRegistry.Create(id, allowNull: true)).Where(item => item != null));
 
@@ -281,7 +287,14 @@ namespace StardewLogistics.Framework
                     {
                         node.Kind = PlanStepKind.Missing;
                         node.Missing = remaining;
-                        node.Reason = grown > 0 ? MissingReason.NoFreeTiles : reason;
+
+                        // A crop is short for want of somewhere to grow it, not just for want of stock.
+                        bool growable = quality < 0 && CropMath.SeedsFor(itemId).Count > 0;
+                        node.Reason = grown > 0 || (growable && this.FreeTiles.Count == 0)
+                            ? MissingReason.NoFreeTiles
+                            : growable
+                                ? MissingReason.CantGrowInTime
+                                : reason;
                     }
                 }
             }

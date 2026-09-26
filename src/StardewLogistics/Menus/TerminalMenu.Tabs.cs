@@ -126,6 +126,7 @@ namespace StardewLogistics.Menus
 
             this.DrawFilterButton(b, this.TypeFilterButton, this.GetFilterButtonLabel("type"), this.Filter.Category != null);
             this.DrawFilterButton(b, this.ModFilterButton, this.GetFilterButtonLabel("mod"), this.Filter.Mod != null);
+
         }
 
         /// <summary>Draws one of the header's dropdown filter buttons.</summary>

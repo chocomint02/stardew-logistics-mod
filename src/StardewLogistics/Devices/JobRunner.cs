@@ -48,6 +48,9 @@ namespace StardewLogistics.Devices
         /// <summary>The minimum-stock rules, for the terminal's Stock tab.</summary>
         public StockKeeper Stock { get; set; }
 
+        /// <summary>The history of what the farm earned, for the terminal's Income tab.</summary>
+        public ShippingLedger Ledger { get; set; }
+
         /// <summary>Lists the auto-harvesters on a network.</summary>
         public Func<StorageNetwork, IEnumerable<(GameLocation Location, Microsoft.Xna.Framework.Vector2 Tile)>> HarvestersOn { get; set; }
 
@@ -222,10 +225,7 @@ namespace StardewLogistics.Devices
         /// <summary>Names what a plan is short of.</summary>
         private static string DescribeShortfall(CraftPlan plan)
         {
-            List<string> parts = plan.Shortfalls.Select(cost => $"{cost.Count}x {GetName(cost.ItemId)}").ToList();
-            if (plan.Root?.Walk().Any(node => node.Reason == MissingReason.NoFreeTiles) == true)
-                parts.Add("free automation tiles");
-            return "short of " + string.Join(", ", parts);
+            return "short of " + plan.DescribeShortfalls(GetName);
         }
 
         /// <summary>Stops a job and releases any machines it holds.</summary>
@@ -348,6 +348,12 @@ namespace StardewLogistics.Devices
                 }
 
                 this.RefreshCropReservations(job);
+
+                // How long the job looks like taking on its first pass, with its machines loaded and its crops
+                // counted: what its gold a day is worked out over.
+                if (job.PlannedMinutes < 0)
+                    job.PlannedMinutes = job.EstimatedMinutesRemaining;
+
                 this.CollectFinished(job, network);
                 this.StartWork(job, network);
                 this.ApplyFairyDust(job, network);

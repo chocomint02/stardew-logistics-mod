@@ -182,6 +182,9 @@ namespace StardewLogistics.Framework
         /// <summary>Whether the job is waiting on crops: growing, or still to be planted.</summary>
         public bool WaitingOnFields => this.CropReservations.Count > 0 || this.Plantings.Count > 0;
 
+        /// <summary>In-game minutes the job was expected to take when it started, for its gold a day; -1 until known.</summary>
+        public int PlannedMinutes { get; set; } = -1;
+
         /// <summary>How many of the ordered item have gone to storage so far.</summary>
         public int Delivered { get; set; }
 

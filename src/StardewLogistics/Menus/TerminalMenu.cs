@@ -31,7 +31,9 @@ namespace StardewLogistics.Menus
         Storage,
         Network,
         Farm,
-        Stock
+        Stock,
+        Shipping,
+        Income
     }
 
     /// <summary>The storage terminal: one searchable, sortable view of everything on the network.</summary>
@@ -47,12 +49,16 @@ namespace StardewLogistics.Menus
         *********/
         private const int SlotSize = 64;
         private const int Columns = 13;
-        /// <summary>Vertical space above the grid: the tab row, the control row, and the search row.</summary>
+        /// <summary>Vertical space above the grid: two rows of tabs, the control row, and the search row.</summary>
         /// <remarks>
         /// The search box has a row to itself so it can span the window. Sharing the control row meant it took
-        /// whatever was left over, which was never much and cut off longer queries.
+        /// whatever was left over, which was never much and cut off longer queries. The tabs have two rows since
+        /// one ran out of room.
         /// </remarks>
-        private const int HeaderHeight = 168;
+        private const int HeaderHeight = 216;
+
+        /// <summary>The height of one row of tabs, gap included.</summary>
+        private const int TabRowHeight = 48;
         /// <summary>Vertical space reserved for the player inventory.</summary>
         /// <remarks>
         /// InventoryMenu spaces its rows by more than the slot size and draws hotbar key labels above the first
@@ -163,7 +169,7 @@ namespace StardewLogistics.Menus
             this.SearchBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
             {
                 X = this.SearchBoxLeft,
-                Y = this.yPositionOnScreen + 116,
+                Y = this.yPositionOnScreen + 16 + (2 * TabRowHeight) + 52,
                 Width = this.SearchBoxWidth,
                 Height = 40
             };
@@ -242,6 +248,8 @@ namespace StardewLogistics.Menus
                     continue;
 
                 this.Tab = Enum.Parse<TerminalTab>(tab.name);
+                if (this.Tab == TerminalTab.Income)
+                    this.RestartGraphAnimation();
 
                 // Don't leave the search box holding the keyboard on a tab that has no search box.
                 if (!this.TabHasSearch)
@@ -289,6 +297,18 @@ namespace StardewLogistics.Menus
             if (this.Tab == TerminalTab.Stock)
             {
                 this.ReceiveClickOnStock(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Shipping)
+            {
+                this.ReceiveClickOnShipping(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Income)
+            {
+                this.ReceiveClickOnIncome(x, y);
                 return;
             }
 
@@ -378,7 +398,7 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.Tab == TerminalTab.Stock)
+            if (this.Tab is TerminalTab.Stock or TerminalTab.Shipping or TerminalTab.Income)
                 return;
 
             if (this.Tab != TerminalTab.Items)
@@ -405,7 +425,7 @@ namespace StardewLogistics.Menus
             if (this.Dropdown.ReceiveScroll(direction))
                 return;
 
-            int rows = this.Tab is TerminalTab.Items or TerminalTab.Craft or TerminalTab.Auto ? this.Rows : 1;
+            int rows = this.Tab is TerminalTab.Items or TerminalTab.Craft or TerminalTab.Auto or TerminalTab.Shipping ? this.Rows : 1;
             int step = direction > 0 ? -1 : 1;
             this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset + step, Math.Max(0, this.GetMaxScroll(rows))));
             Game1.playSound("shiny4");
@@ -490,6 +510,21 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            if (this.Tab == TerminalTab.Shipping)
+            {
+                if (this.TabHasSearch && this.SearchBoxBounds.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.search-help");
+                else
+                    this.PerformHoverOnShipping(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Income)
+            {
+                this.PerformHoverOnIncome(x, y);
+                return;
+            }
+
             if (this.Tab != TerminalTab.Items)
             {
                 this.PerformHoverOnTab(x, y);
@@ -565,6 +600,12 @@ namespace StardewLogistics.Menus
                 case TerminalTab.Stock:
                     this.DrawStockTab(b);
                     break;
+                case TerminalTab.Shipping:
+                    this.DrawShippingTab(b);
+                    break;
+                case TerminalTab.Income:
+                    this.DrawIncomeTab(b);
+                    break;
             }
 
             this.PlayerInventory.draw(b);
@@ -588,16 +629,20 @@ namespace StardewLogistics.Menus
         /// <summary>Builds the clickable components whose positions never change.</summary>
         private void SetUpComponents()
         {
-            int tabX = this.xPositionOnScreen + 32;
             int tabY = this.yPositionOnScreen + 16;
-            foreach (string name in this.GetTabNames())
+            foreach (string[] row in this.GetTabRows())
             {
-                int tabWidth = (int)Game1.smallFont.MeasureString(this.GetTabLabel(name)).X + 32;
-                this.TabButtons.Add(new ClickableComponent(new Rectangle(tabX, tabY, tabWidth, 44), name));
-                tabX += tabWidth + 8;
+                int tabX = this.xPositionOnScreen + 32;
+                foreach (string name in row)
+                {
+                    int tabWidth = (int)Game1.smallFont.MeasureString(this.GetTabLabel(name)).X + 32;
+                    this.TabButtons.Add(new ClickableComponent(new Rectangle(tabX, tabY, tabWidth, 44), name));
+                    tabX += tabWidth + 8;
+                }
+                tabY += TabRowHeight;
             }
 
-            int buttonY = this.yPositionOnScreen + 64;
+            int buttonY = this.yPositionOnScreen + 16 + (2 * TabRowHeight);
 
             // Icons come from the mod's own sheet: picking rectangles out of the game's shared cursor texture is
             // guesswork, and a wrong guess renders as a meaningless crop rather than failing visibly.
@@ -627,6 +672,7 @@ namespace StardewLogistics.Menus
             this.ModFilterButton = new ClickableComponent(new Rectangle(x, buttonY, modWidth, 44), "mod");
             x += modWidth + 10;
 
+
             // The search box sits on its own row and spans the full content width.
             this.SearchBoxLeft = this.xPositionOnScreen + 32;
             this.SearchBoxWidth = Columns * SlotSize;
@@ -643,7 +689,7 @@ namespace StardewLogistics.Menus
         private IEnumerable<string> GetNames<T>() where T : struct, Enum => Enum.GetNames<T>();
 
         /// <summary>Whether the current tab uses the search box and filter dropdowns.</summary>
-        private bool TabHasSearch => this.Tab is TerminalTab.Items or TerminalTab.Craft or TerminalTab.Auto;
+        private bool TabHasSearch => this.Tab is TerminalTab.Items or TerminalTab.Craft or TerminalTab.Auto or TerminalTab.Shipping;
 
         /// <summary>Handles a click on the controls shared by the Items and Craft tabs.</summary>
         /// <returns>Whether the click was consumed.</returns>
@@ -676,7 +722,14 @@ namespace StardewLogistics.Menus
             return false;
         }
 
-        /// <summary>The tabs this terminal shows, which depends on whether it can craft.</summary>
+        /// <summary>The tabs this terminal shows, a row at a time.</summary>
+        private IEnumerable<string[]> GetTabRows()
+        {
+            yield return this.GetTabNames().ToArray();
+            yield return new[] { nameof(TerminalTab.Shipping), nameof(TerminalTab.Income) };
+        }
+
+        /// <summary>The first row of tabs, which depends on whether the terminal can craft.</summary>
         private IEnumerable<string> GetTabNames()
         {
             yield return nameof(TerminalTab.Items);
@@ -744,7 +797,7 @@ namespace StardewLogistics.Menus
                     return this.GetMaxTargetScroll();
 
                 case TerminalTab.Jobs:
-                    return Math.Max(0, (this.Jobs?.Jobs.Count ?? 0) - (this.GetGridBounds().Height / 96));
+                    return Math.Max(0, (this.Jobs?.Jobs.Count ?? 0) - (this.GetGridBounds().Height / JobRowHeight));
 
                 case TerminalTab.Storage:
                     return this.GetMaxScrollForTab();
@@ -757,6 +810,12 @@ namespace StardewLogistics.Menus
 
                 case TerminalTab.Stock:
                     return Math.Max(0, this.GetStockRows().Count - (this.GetGridBounds().Height / StockRowHeight));
+
+                case TerminalTab.Shipping:
+                    return this.GetMaxShippingScroll();
+
+                case TerminalTab.Income:
+                    return this.GetMaxIncomeScroll();
 
                 default:
                     int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
@@ -819,6 +878,7 @@ namespace StardewLogistics.Menus
             this.VisibleStock = query.ToList();
             this.ApplyRecipeFilter();
             this.ApplyTargetFilter();
+            this.ApplyShippingFilter();
 
             int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
             this.ClampScroll(TerminalTab.Items, totalRows - this.Rows);

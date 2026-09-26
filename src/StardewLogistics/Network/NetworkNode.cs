@@ -28,7 +28,15 @@ namespace StardewLogistics.Network
         WirelessReceiver,
 
         /// <summary>Farms an area, using the network for seeds and to store the harvest.</summary>
-        Harvester
+        Harvester,
+
+        /// <summary>A shipping bin -- the farm's building, or a Mini-Shipping Bin -- the network can sell through.</summary>
+        /// <remarks>For the building there's no placed object: <see cref="NetworkNode.Object"/> is <c>null</c>.</remarks>
+        ShippingBin,
+
+        /// <summary>A tapper on a tree, counted in the income forecast.</summary>
+        /// <remarks>Not a <see cref="Machine"/>: the network doesn't collect from it or load it.</remarks>
+        Tapper
     }
 
     /// <summary>A device attached to a storage network.</summary>

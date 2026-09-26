@@ -718,10 +718,11 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>The area the tree is drawn in.</summary>
+        /// <remarks>Above the buttons, it leaves two lines: the time and what the job is worth, then any shortfall.</remarks>
         private Rectangle GetTreeBounds()
         {
             int top = this.ShowQuality ? 256 : 204;
-            return new(this.xPositionOnScreen + 28, this.yPositionOnScreen + top, this.width - 56, this.height - top - 108);
+            return new(this.xPositionOnScreen + 28, this.yPositionOnScreen + top, this.width - 56, this.height - top - 172);
         }
 
         /// <summary>How many tree rows fit.</summary>
@@ -898,16 +899,19 @@ namespace StardewLogistics.Menus
         private void DrawFooter(SpriteBatch b)
         {
             Rectangle tree = this.GetTreeBounds();
-            string summary = this.Plan == null ? "" : FormatTotal(this.GetTotalMinutes());
-            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 20), Game1.textColor);
+
+            // How long it takes, and what the result sells for: in all, and a day over that time.
+            if (this.Plan != null)
+            {
+                int minutes = this.GetTotalMinutes();
+                string summary = this.Translations.Get("auto.time", new { time = FormatTotal(minutes) }) + "   ·   " + this.DescribeValue(minutes);
+                Marquee.Draw(b, summary, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 18), tree.Width - 8, Game1.textColor);
+            }
 
             if (this.Plan?.IsSatisfied == false)
             {
-                string shortfall = this.Translations.Get("auto.shortfall", new
-                {
-                    items = string.Join(", ", this.Plan.Shortfalls.Take(3).Select(cost => $"{cost.Count}x {GetName(cost.ItemId)}"))
-                });
-                Utility.drawTextWithShadow(b, shortfall, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 52), Color.Firebrick);
+                string shortfall = this.Translations.Get("auto.shortfall", new { items = this.Plan.DescribeShortfalls(GetName, max: 3) });
+                Marquee.Draw(b, shortfall, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 50), tree.Width - 8, Color.Firebrick);
             }
 
             if (this.StartButton != null)
@@ -931,6 +935,25 @@ namespace StardewLogistics.Menus
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
             }
+        }
+
+        /// <summary>What one of the target sells for, by quality; worked out once rather than every frame.</summary>
+        private readonly Dictionary<int, int?> UnitPrices = new();
+
+        /// <summary>What the finished order sells for, and that over the time it takes.</summary>
+        private string DescribeValue(int minutes)
+        {
+            int quality = this.TargetQuality > 0 ? this.TargetQuality : StardewValley.Object.lowQuality;
+            if (!this.UnitPrices.TryGetValue(quality, out int? unit))
+                this.UnitPrices[quality] = unit = Selling.UnitPrice(this.TargetId, quality);
+            if (unit == null)
+                return this.Translations.Get("auto.value-none");
+
+            double value = unit.Value * (double)this.Quantity;
+            double days = Selling.Days(minutes);
+            return days > 0
+                ? this.Translations.Get("auto.value", new { gold = Selling.Gold(value), rate = Selling.Gold(value / days) })
+                : this.Translations.Get("auto.value-instant", new { gold = Selling.Gold(value) });
         }
 
         /// <summary>Describes how a plan step will be supplied.</summary>

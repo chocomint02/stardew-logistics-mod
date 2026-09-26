@@ -127,8 +127,25 @@ namespace StardewLogistics.Network
         {
             if (!inspected.Add(tile))
                 return;
+
+            // The farm's Shipping Bin is a building, not an object; cable beside it connects it.
+            if (location.getBuildingAt(tile) is StardewValley.Buildings.ShippingBin bin)
+            {
+                Vector2 origin = new(bin.tileX.Value, bin.tileY.Value);
+                if (!nodes.Exists(node => node.Kind == NodeKind.ShippingBin && node.Object == null && node.Tile == origin))
+                    nodes.Add(new NetworkNode(NodeKind.ShippingBin, location, origin, null));
+                return;
+            }
+
             if (!location.Objects.TryGetValue(tile, out SObject obj) || obj == null)
                 return;
+
+            // A Mini-Shipping Bin sells what's in it overnight: somewhere to sell through, never to store.
+            if (obj is Chest { SpecialChestType: Chest.SpecialChestTypes.MiniShippingBin })
+            {
+                nodes.Add(new NetworkNode(NodeKind.ShippingBin, location, tile, obj));
+                return;
+            }
 
             NodeKind? kind = NetworkNode.GetKind(obj.ItemId);
             if (kind != null)
@@ -147,6 +164,8 @@ namespace StardewLogistics.Network
             // network is how it becomes available for processing jobs.
             if (MachineIO.IsMachine(obj))
                 nodes.Add(new NetworkNode(NodeKind.Machine, location, tile, obj));
+            else if (obj.IsTapper())
+                nodes.Add(new NetworkNode(NodeKind.Tapper, location, tile, obj));
         }
 
         /// <summary>Whether a placed object is a chest the network may use for storage.</summary>

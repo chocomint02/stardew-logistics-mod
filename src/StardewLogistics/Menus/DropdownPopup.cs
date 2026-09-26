@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
@@ -42,9 +43,17 @@ namespace StardewLogistics.Menus
         /// <param name="anchor">The button the list hangs from.</param>
         public void Open(IEnumerable<(string Label, object Value)> options, Rectangle anchor)
         {
+            this.Open(options.Select(option => (option.Label, option.Value, (Item)null)), anchor);
+        }
+
+        /// <summary>Opens the list below an anchor rectangle, with an icon beside each choice.</summary>
+        /// <param name="options">The choices, in display order, each with an item to draw beside it.</param>
+        /// <param name="anchor">The button the list hangs from.</param>
+        public void Open(IEnumerable<(string Label, object Value, Item Icon)> options, Rectangle anchor)
+        {
             this.Options.Clear();
-            foreach ((string label, object value) in options)
-                this.Options.Add(new Option(label, value));
+            foreach ((string label, object value, Item icon) in options)
+                this.Options.Add(new Option(label, value, icon));
 
             this.Scroll = 0;
             this.HoverIndex = -1;
@@ -149,7 +158,14 @@ namespace StardewLogistics.Menus
                 if (index == this.HoverIndex)
                     b.Draw(Game1.staminaRect, row, Color.Wheat * 0.55f);
 
-                Marquee.Draw(b, this.Options[index].Label, Game1.smallFont, new Vector2(row.X + 12, row.Y + 8), row.Width - 24, Game1.textColor);
+                Option option = this.Options[index];
+                int textX = row.X + 12;
+                if (option.Icon != null)
+                {
+                    ItemIcon.Draw(b, option.Icon, new Rectangle(row.X + 8, row.Y + 4, 32, 32), 1f, showQuality: false);
+                    textX += 38;
+                }
+                Marquee.Draw(b, option.Label, Game1.smallFont, new Vector2(textX, row.Y + 8), row.Right - 12 - textX, Game1.textColor);
             }
 
             if (this.Options.Count > MaxVisibleRows)
@@ -194,9 +210,9 @@ namespace StardewLogistics.Menus
         {
             float widest = 0;
             foreach (Option option in this.Options)
-                widest = Math.Max(widest, Game1.smallFont.MeasureString(option.Label).X);
+                widest = Math.Max(widest, Game1.smallFont.MeasureString(option.Label).X + (option.Icon != null ? 38 : 0));
 
-            return Math.Clamp((int)widest + 48, 160, 420);
+            return Math.Clamp((int)widest + 48, 160, 460);
         }
 
 
@@ -208,11 +224,13 @@ namespace StardewLogistics.Menus
         {
             public readonly string Label;
             public readonly object Value;
+            public readonly Item Icon;
 
-            public Option(string label, object value)
+            public Option(string label, object value, Item icon)
             {
                 this.Label = label;
                 this.Value = value;
+                this.Icon = icon;
             }
         }
     }

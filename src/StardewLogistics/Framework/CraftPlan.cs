@@ -50,7 +50,10 @@ namespace StardewLogistics.Framework
         NotAnItem,
 
         /// <summary>A crop that could be grown, but there aren't enough free automation tiles for it.</summary>
-        NoFreeTiles
+        NoFreeTiles,
+
+        /// <summary>A crop with free automation tiles, but none where it would be ready before its season ends.</summary>
+        CantGrowInTime
     }
 
     /// <summary>A share of a processing step handed to one kind of machine.</summary>
@@ -207,6 +210,35 @@ namespace StardewLogistics.Framework
                 .GroupBy(node => node.ItemId)
                 .Select(group => new ItemCost(group.Key, group.Sum(node => node.Missing)))
                 .ToList();
+
+        /// <summary>What the plan is short of, each with why where there's more to say than "not in storage".</summary>
+        /// <param name="getName">Names an item.</param>
+        public string DescribeShortfalls(Func<string, string> getName, int max = int.MaxValue)
+        {
+            if (this.Root == null)
+                return "";
+
+            IEnumerable<string> parts = this.Root.Walk()
+                .Where(node => node.Missing > 0)
+                .GroupBy(node => (Id: node.ItemId?.ToLowerInvariant(), node.Reason))
+                .Select(group =>
+                {
+                    PlanNode first = group.First();
+                    string text = $"{group.Sum(node => node.Missing)}x {getName(first.ItemId)}";
+                    string why = first.Reason switch
+                    {
+                        MissingReason.NoFreeTiles => "no free automation tiles",
+                        MissingReason.CantGrowInTime => "can't grow in time on automation tiles",
+                        MissingReason.NoMachineAvailable => first.Alternatives.Count > 0 ? $"no {first.Alternatives[0].MachineName} on the network" : "no machine on the network",
+                        MissingReason.RecipeLoop => "recipe loops back on itself",
+                        MissingReason.DepthLimit => "too many steps",
+                        _ => null
+                    };
+                    return why == null ? text : $"{text} ({why})";
+                });
+
+            return string.Join(", ", parts.Take(max));
+        }
 
         /// <summary>Every step that needs a machine, in the order they'd have to run.</summary>
         public IReadOnlyList<PlanNode> ProcessingSteps => this.Root == null

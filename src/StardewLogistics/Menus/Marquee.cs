@@ -1,14 +1,17 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
 
 namespace StardewLogistics.Menus
 {
-    /// <summary>Draws text that scrolls sideways when it's too long for its space, like a music player's title.</summary>
+    /// <summary>Draws text that scrolls sideways when it's too long for its space, like a news ticker.</summary>
     /// <remarks>
-    /// Text that fits is drawn as-is. Text that doesn't pauses at its start, glides left until its end is showing,
-    /// pauses again, and glides back -- so every word is readable in turn, rather than being cut short with "...".
+    /// Text that fits is drawn as-is. Text that doesn't rests at its start, then scrolls left continuously and
+    /// comes round again after a gap -- always reading left to right, never reversing -- so every word is
+    /// readable in turn, rather than being cut short with "...".
     ///
     /// Smooth movement needs the text clipped to its space, which a <see cref="SpriteBatch"/> can only do by
     /// being restarted with a scissor rectangle. The batch is restarted with the settings the game draws menus
@@ -22,8 +25,11 @@ namespace StardewLogistics.Menus
         /// <summary>How fast the text moves.</summary>
         private const float PixelsPerSecond = 45f;
 
-        /// <summary>How long the text rests at each end before moving again.</summary>
+        /// <summary>How long the text rests at its start before scrolling.</summary>
         private const double PauseMilliseconds = 1500;
+
+        /// <summary>The gap between the end of the text and its start coming round again.</summary>
+        private const float Gap = 60f;
 
         /// <summary>Extra room above and below the text so its shadow and descenders aren't clipped.</summary>
         private const int VerticalSlack = 6;
@@ -54,7 +60,8 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            float offset = GetOffset(size.X - maxWidth);
+            float loop = size.X + Gap;
+            float offset = GetOffset(loop);
 
             Rectangle clip = new((int)position.X, (int)position.Y - VerticalSlack, maxWidth, (int)size.Y + (VerticalSlack * 2));
             clip = Rectangle.Intersect(clip, b.GraphicsDevice.Viewport.Bounds);
@@ -69,6 +76,8 @@ namespace StardewLogistics.Menus
             try
             {
                 Utility.drawTextWithShadow(b, text, font, new Vector2(position.X - offset, position.Y), colour);
+                if (offset > loop - maxWidth)
+                    Utility.drawTextWithShadow(b, text, font, new Vector2(position.X - offset + loop, position.Y), colour);
             }
             finally
             {
@@ -82,39 +91,65 @@ namespace StardewLogistics.Menus
         /*********
         ** Private methods
         *********/
-        /// <summary>How far the text is scrolled right now, for a given overflow.</summary>
+        /// <summary>How far the text is scrolled right now: resting at the start, then moving steadily through one loop.</summary>
         /// <remarks>
         /// Driven by real time rather than a per-menu counter, so it keeps moving while the game is paused and
         /// needs no state per piece of text.
         /// </remarks>
-        private static float GetOffset(float overflow)
+        private static float GetOffset(float loop)
         {
-            double travel = overflow / PixelsPerSecond * 1000;
-            double cycle = (PauseMilliseconds + travel) * 2;
+            double travel = loop / PixelsPerSecond * 1000;
             double now = Game1.currentGameTime?.TotalGameTime.TotalMilliseconds ?? 0;
-            double t = now % cycle;
+            double t = now % (PauseMilliseconds + travel);
 
-            // Rest at the start, glide to the end, rest there, glide back.
-            if (t < PauseMilliseconds)
-                return 0;
-            t -= PauseMilliseconds;
-
-            if (t < travel)
-                return (float)(overflow * Ease(t / travel));
-            t -= travel;
-
-            if (t < PauseMilliseconds)
-                return overflow;
-            t -= PauseMilliseconds;
-
-            return (float)(overflow * (1 - Ease(t / travel)));
+            return t < PauseMilliseconds ? 0 : (float)((t - PauseMilliseconds) / travel * loop);
         }
 
-        /// <summary>Softens the start and end of each glide, so the text doesn't lurch into motion.</summary>
-        private static double Ease(double x)
+        /// <summary>Draws text wrapped onto as many lines as it needs, up to a limit; only a last line that still doesn't fit scrolls.</summary>
+        /// <returns>The height drawn.</returns>
+        public static int DrawWrapped(SpriteBatch b, string text, SpriteFont font, Vector2 position, int maxWidth, Color colour, int maxLines = 2)
         {
-            x = Math.Clamp(x, 0, 1);
-            return x * x * (3 - (2 * x));
+            if (string.IsNullOrEmpty(text) || maxWidth <= 0)
+                return 0;
+
+            int lineHeight = (int)font.MeasureString("Ay").Y;
+            List<string> lines = Wrap(text, font, maxWidth);
+            int shown = Math.Min(lines.Count, Math.Max(1, maxLines));
+
+            for (int i = 0; i < shown; i++)
+            {
+                // Only text that still doesn't fit in the lines allowed runs on, and scrolls, along the last one.
+                string line = i == shown - 1 ? string.Join(" ", lines.Skip(i)) : lines[i];
+                Draw(b, line, font, new Vector2(position.X, position.Y + (i * lineHeight)), maxWidth, colour);
+            }
+
+            return shown * lineHeight;
+        }
+
+        /// <summary>Breaks text into lines no wider than a width, measured in the font it's drawn in.</summary>
+        /// <remarks>
+        /// Done here rather than with the game's own wrapping, whose lines can come out slightly wider than asked
+        /// for -- and a line even a pixel too wide would scroll.
+        /// </remarks>
+        private static List<string> Wrap(string text, SpriteFont font, int maxWidth)
+        {
+            List<string> lines = new();
+            string current = "";
+            foreach (string word in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                string candidate = current.Length == 0 ? word : current + " " + word;
+                if (current.Length > 0 && font.MeasureString(candidate).X > maxWidth)
+                {
+                    lines.Add(current);
+                    current = word;
+                }
+                else
+                    current = candidate;
+            }
+
+            if (current.Length > 0)
+                lines.Add(current);
+            return lines;
         }
     }
 }

@@ -164,6 +164,11 @@ namespace StardewLogistics.Devices
                     if (plan?.SeedId != null)
                     {
                         soil ??= this.Till(location, tile);
+
+                        // A seed not yet sprouted can still take the planned fertilizer, as it could by hand.
+                        if (soil?.crop != null && soil.crop.currentPhase.Value == 0 && !soil.crop.dead.Value)
+                            this.Fertilize(soil, plan, network);
+
                         if (soil != null && soil.crop == null)
                         {
                             this.Fertilize(soil, plan, network);
@@ -493,17 +498,31 @@ namespace StardewLogistics.Devices
         }
 
         /// <summary>Lays the planned fertilizer on empty soil, from storage.</summary>
+        /// <remarks>
+        /// Soil holds one fertilizer, so a different one already there -- Speed-Gro an autocrafting job laid, say --
+        /// is replaced: otherwise the tile quietly keeps the wrong one and grows at the wrong speed.
+        /// </remarks>
         private void Fertilize(HoeDirt soil, TilePlan plan, StorageNetwork network)
         {
-            if (plan.FertilizerId == null || soil.HasFertilizer() || !soil.CanApplyFertilizer(plan.FertilizerId))
+            if (plan.FertilizerId == null)
+                return;
+
+            string existing = CropMath.FertilizerOf(soil);
+            if (CropMath.SameFertilizer(existing, plan.FertilizerId))
                 return;
 
             Item fertilizer = network.ExtractById(plan.FertilizerId, 1).FirstOrDefault();
             if (fertilizer == null)
                 return;
 
-            if (!soil.plant(plan.FertilizerId, Game1.player, isFertilizer: true))
+            if (existing != null)
+                soil.fertilizer.Value = null;
+
+            if (!soil.CanApplyFertilizer(plan.FertilizerId) || !soil.plant(plan.FertilizerId, Game1.player, isFertilizer: true))
+            {
+                soil.fertilizer.Value = existing;
                 network.Insert(fertilizer);
+            }
         }
 
         /// <summary>Plants the planned seed on empty soil, if it should be and there's time for it to grow.</summary>

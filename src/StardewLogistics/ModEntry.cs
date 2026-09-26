@@ -34,6 +34,7 @@ namespace StardewLogistics
         private JobRunner Jobs;
         private HarvesterRunner Harvesters;
         private StockKeeper Stock;
+        private ShippingLedger Ledger;
 
 
         /*********
@@ -79,6 +80,11 @@ namespace StardewLogistics
             // Minimum-stock rules, which queue jobs of their own.
             this.Stock = new StockKeeper(this.Networks, this.Jobs, helper.Translation);
             this.Jobs.Stock = this.Stock;
+
+            // The history of what each day earned.
+            this.Ledger = new ShippingLedger(helper.Data);
+            this.Jobs.Ledger = this.Ledger;
+            helper.Events.GameLoop.Saving += (_, _) => this.Ledger.CloseDay();
 
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
@@ -168,6 +174,7 @@ namespace StardewLogistics
             // Machine data is only readable once content is loaded, so the processing recipes are derived here
             // rather than at startup.
             this.MachineRecipes.Rebuild();
+            this.Ledger.Load();
         }
 
         /// <summary>Rescans the world each morning and teaches the player any recipes they've earned.</summary>
@@ -180,6 +187,9 @@ namespace StardewLogistics
             // stock, with whatever the harvest brought in.
             this.Harvesters.Invalidate();
             this.Stock.OnDayStarted();
+            // Normally closed as the game saved overnight; this catches a night that didn't save.
+            this.Ledger.CloseDay();
+
             if (Context.IsMainPlayer)
             {
                 this.Harvesters.RestoreSoil();
@@ -193,6 +203,9 @@ namespace StardewLogistics
         {
             if (Context.IsMainPlayer)
                 this.Harvesters.BeforeNight();
+
+            // What's in the shipping bins, before the night sells it.
+            this.Ledger.BeforeNight();
         }
 
         /// <summary>Drops world state when returning to the title screen.</summary>
@@ -203,6 +216,7 @@ namespace StardewLogistics
             // Jobs belong to the save that queued them; carried into the next save they'd drive its machines.
             this.Jobs.Reset();
             this.Stock.Reset();
+            this.Ledger.Reset();
         }
 
         /// <summary>Lets auto-harvesters work through the day, so a new plan starts within ten minutes, and tops up stock.</summary>

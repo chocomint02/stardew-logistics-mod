@@ -22,6 +22,9 @@ namespace StardewLogistics.Menus
         /// <summary>How much Fairy Dust storage held when the Jobs tab was last drawn.</summary>
         private long DustInStorage;
 
+        /// <summary>The height of a row on the Jobs tab: name, status, and what it's worth.</summary>
+        private const int JobRowHeight = 120;
+
         /// <summary>Icons for job targets, built once rather than every frame.</summary>
         private readonly Dictionary<string, Item> JobIcons = new(StringComparer.OrdinalIgnoreCase);
         private List<AutoTarget> VisibleTargets = new();
@@ -391,7 +394,7 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            const int rowHeight = 96;
+            const int rowHeight = JobRowHeight;
             int visible = grid.Height / rowHeight;
 
             // Counted once per frame, not per row: it walks every chest.
@@ -424,24 +427,27 @@ namespace StardewLogistics.Menus
                 if ((job.Status is JobStatus.Blocked or JobStatus.Waiting) && job.BlockedReason != null)
                     status += $": {job.BlockedReason}";
 
-                Marquee.Draw(b, status, Game1.smallFont, new Vector2(textX, y + 48), textWidth,
+                Marquee.Draw(b, status, Game1.smallFont, new Vector2(textX, y + 44), textWidth,
                     job.Status == JobStatus.Blocked ? Color.Firebrick : Game1.textColor * 0.65f);
+
+                // What the job's product sells for, and what that comes to a day over the job's run.
+                Marquee.Draw(b, this.DescribeJobValue(job), Game1.smallFont, new Vector2(textX, y + 74), textWidth, new Color(150, 110, 20));
 
                 // Progress bar
                 int barX = grid.X + 420;
                 // Leaves room for "100%" between the bar and the Cancel/Clear button; at the old width the
                 // percentage ran under the button.
                 int barWidth = grid.Width - 700;
-                b.Draw(Game1.staminaRect, new Rectangle(barX, y + 22, barWidth, 22), new Color(60, 44, 32) * 0.55f);
-                b.Draw(Game1.staminaRect, new Rectangle(barX, y + 22, (int)(barWidth * job.Progress), 22), new Color(104, 196, 112));
+                b.Draw(Game1.staminaRect, new Rectangle(barX, y + 34, barWidth, 22), new Color(60, 44, 32) * 0.55f);
+                b.Draw(Game1.staminaRect, new Rectangle(barX, y + 34, (int)(barWidth * job.Progress), 22), new Color(104, 196, 112));
 
                 string percent = $"{job.Progress * 100:0}%";
-                Utility.drawTextWithShadow(b, percent, Game1.smallFont, new Vector2(barX + barWidth + 14, y + 20), Game1.textColor);
+                Utility.drawTextWithShadow(b, percent, Game1.smallFont, new Vector2(barX + barWidth + 14, y + 32), Game1.textColor);
 
                 if (job.Status is JobStatus.Running or JobStatus.Pending or JobStatus.Waiting)
                 {
                     string eta = this.Translations.Get("jobs.eta", new { time = FormatGameTime(job.EstimatedMinutesRemaining) });
-                    Utility.drawTextWithShadow(b, eta, Game1.smallFont, new Vector2(barX, y + 52), Game1.textColor * 0.7f);
+                    Utility.drawTextWithShadow(b, eta, Game1.smallFont, new Vector2(barX, y + 64), Game1.textColor * 0.7f);
                 }
 
                 // Fairy Dust for a job still running: lit when on. Switching it on draws dust from storage.
@@ -473,7 +479,7 @@ namespace StardewLogistics.Menus
             Rectangle grid = this.GetGridBounds();
             IReadOnlyList<CraftJob> jobs = this.Jobs?.Jobs ?? Array.Empty<CraftJob>();
 
-            const int rowHeight = 96;
+            const int rowHeight = JobRowHeight;
             int visible = grid.Height / rowHeight;
 
             for (int i = 0; i < visible; i++)
@@ -535,10 +541,24 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>The bounds of a job row's Fairy Dust toggle, just left of Cancel.</summary>
-        private static Rectangle GetDustBounds(Rectangle grid, int rowY) => new(grid.Right - 206, rowY + 22, 48, 44);
+        private static Rectangle GetDustBounds(Rectangle grid, int rowY) => new(grid.Right - 206, rowY + 34, 48, 44);
 
         /// <summary>The bounds of a job row's cancel button.</summary>
-        private static Rectangle GetCancelBounds(Rectangle grid, int rowY) => new(grid.Right - 150, rowY + 22, 130, 44);
+        private static Rectangle GetCancelBounds(Rectangle grid, int rowY) => new(grid.Right - 150, rowY + 34, 130, 44);
+
+        /// <summary>What a job's product is worth, and that over the days the job takes.</summary>
+        private string DescribeJobValue(CraftJob job)
+        {
+            int? unit = Selling.UnitPrice(this.GetJobIcon(job.TargetId, job.TargetQuality));
+            if (unit == null)
+                return this.Translations.Get("auto.value-none");
+
+            double value = unit.Value * (double)job.TargetCount;
+            double days = Selling.Days(job.PlannedMinutes);
+            return days > 0
+                ? this.Translations.Get("auto.value", new { gold = Selling.Gold(value), rate = Selling.Gold(value / days) })
+                : this.Translations.Get("auto.value-instant", new { gold = Selling.Gold(value) });
+        }
 
         /// <summary>Formats an in-game duration for the jobs list.</summary>
         private static string FormatGameTime(int minutes)

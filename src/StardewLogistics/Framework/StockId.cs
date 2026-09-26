@@ -104,12 +104,21 @@ namespace StardewLogistics.Framework
                     return copy;
                 }
 
+                // Not seen from a machine yet: the game's own factory makes a flavoured item from its ingredient,
+                // with its proper name, colour and price -- Parsnip Juice, not Juice.
+                if (IsFlavoured(id) && CreateFlavoured(id) is Item flavoured)
+                {
+                    Remember(flavoured);
+                    flavoured.Stack = Math.Max(1, stack);
+                    return flavoured;
+                }
+
                 Item item = ItemRegistry.Create(BaseId(id), Math.Max(1, stack), 0, allowNull: true);
 
-                // Not seen from a machine yet. The ingredient can still be recorded, which is enough to stack and
-                // match correctly even if the name is the generic one.
+                // Something the factory doesn't know. The ingredient can still be recorded, which is enough to stack
+                // and match correctly even if the name is the generic one.
                 if (IsFlavoured(id) && item is SObject obj)
-                    obj.preservedParentSheetIndex.Value = id.Substring(id.IndexOf(Separator) + 1);
+                    obj.preservedParentSheetIndex.Value = FlavourOf(id);
 
                 return item;
             }
@@ -117,6 +126,36 @@ namespace StardewLogistics.Framework
             {
                 return null;
             }
+        }
+
+        /// <summary>The ingredient part of a flavoured stock ID, or <c>null</c> for a plain one.</summary>
+        public static string FlavourOf(string id)
+        {
+            int index = id?.IndexOf(Separator) ?? -1;
+            return index < 0 ? null : id.Substring(index + 1);
+        }
+
+        /// <summary>Makes a flavoured item with the game's own factory, if it's one of the game's preserve types.</summary>
+        private static Item CreateFlavoured(string id)
+        {
+            try
+            {
+                if (ItemRegistry.Create(FlavourOf(id), allowNull: true) is not SObject ingredient)
+                    return null;
+
+                StardewValley.ItemTypeDefinitions.ObjectDataDefinition objects = ItemRegistry.GetObjectTypeDefinition();
+                foreach (SObject.PreserveType type in Enum.GetValues<SObject.PreserveType>())
+                {
+                    if (string.Equals(objects.GetBaseItemIdForFlavoredItem(type, ingredient.ItemId), BaseId(id), StringComparison.OrdinalIgnoreCase))
+                        return objects.CreateFlavoredItem(type, ingredient);
+                }
+            }
+            catch
+            {
+                // Fall back on the generic item.
+            }
+
+            return null;
         }
 
         /// <summary>The display name for a stock ID, falling back to the ID itself.</summary>

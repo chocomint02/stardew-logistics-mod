@@ -210,6 +210,14 @@ namespace StardewLogistics.Framework
             return SeedsByHarvest.TryGetValue(itemId, out List<string> found) ? found : Array.Empty<string>();
         }
 
+        /// <summary>Whether two fertilizer IDs are the same fertilizer, however each is written.</summary>
+        public static bool SameFertilizer(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+                return string.IsNullOrEmpty(a) && string.IsNullOrEmpty(b);
+            return string.Equals(ItemRegistry.QualifyItemId(a), ItemRegistry.QualifyItemId(b), StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>Whether a fertilizer is one of the Speed-Gros.</summary>
         public static bool IsSpeedGro(string fertilizerId)
         {
