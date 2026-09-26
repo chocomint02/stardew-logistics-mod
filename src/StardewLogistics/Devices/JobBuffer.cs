@@ -18,8 +18,9 @@ namespace StardewLogistics.Devices
     /// a job made for itself can't be taken out halfway through; only the finished item goes back to storage.
     ///
     /// The items live in one of the game's global inventories rather than in memory, so they're written into the
-    /// save with everything else. Jobs themselves don't survive a reload, so a buffer can outlive its job; the
-    /// key records which network it came from, and <see cref="JobRunner"/> returns such orphans to it.
+    /// save with everything else. <see cref="JobStore"/> saves the jobs too, but a buffer can still outlive its
+    /// job -- one that couldn't be restored, or a cancel with storage full -- so the key records which network it
+    /// came from, and <see cref="JobRunner"/> returns such orphans to it.
     /// </remarks>
     internal class JobBuffer
     {
@@ -205,8 +206,8 @@ namespace StardewLogistics.Devices
             if (shortfall <= 0)
                 return true;
 
-            // A category ("any egg") only appears in crafting ingredient lists, and can't be withdrawn by ID.
-            if (network == null || stockId.StartsWith("-"))
+            // A category or tag spec ("any egg") is withdrawn like an ID: storage matches items to it the same way.
+            if (network == null)
                 return false;
 
             if (network.CountById(stockId, quality) < shortfall)

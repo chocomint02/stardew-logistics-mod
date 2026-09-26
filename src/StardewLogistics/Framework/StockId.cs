@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using StardewValley;
 using SObject = StardewValley.Object;
 
@@ -58,12 +59,27 @@ namespace StardewLogistics.Framework
             return index < 0 ? id : id.Substring(0, index);
         }
 
+        /// <summary>Whether an ID is a spec for a group of items rather than one: a category ("-2", any gem), or
+        /// context tags ("#tag1,tag2", any item with all of them).</summary>
+        /// <remarks>Recipes ask for these -- a crafting recipe's "any egg", a machine's extra ingredient -- and
+        /// matching them the same way everywhere is what lets storage, jobs and machines all use them.</remarks>
+        public static bool IsSpec(string id) => id != null && (id.StartsWith("-") || id.StartsWith("#"));
+
+        /// <summary>The spec for items with all of some context tags.</summary>
+        public static string ForTags(IEnumerable<string> tags) => "#" + string.Join(",", tags);
+
         /// <summary>Whether an item satisfies a request for a stock ID.</summary>
-        /// <remarks>A plain ID accepts any flavour; a flavoured one accepts only that flavour.</remarks>
+        /// <remarks>A plain ID accepts any flavour; a flavoured one accepts only that flavour; a spec accepts any
+        /// item in its category, or with all its tags.</remarks>
         public static bool Matches(Item item, string id)
         {
             if (item == null || string.IsNullOrEmpty(id))
                 return false;
+
+            if (id.StartsWith("-"))
+                return int.TryParse(id, out int category) && item.Category == category;
+            if (id.StartsWith("#"))
+                return id.Substring(1).Split(',').Select(tag => tag.Trim()).Where(tag => tag.Length > 0).All(item.HasContextTag);
 
             return IsFlavoured(id)
                 ? string.Equals(Of(item), id, StringComparison.OrdinalIgnoreCase)
@@ -164,9 +180,13 @@ namespace StardewLogistics.Framework
             if (string.IsNullOrWhiteSpace(id))
                 return "?";
 
-            // A category ingredient has no item to name, so the raw ID stands in until the UI can label it.
+            // A spec names a group: "Any Gem", "Any honey_item".
             if (id.StartsWith("-"))
-                return id;
+                return int.TryParse(id, out int category) && !string.IsNullOrWhiteSpace(SObject.GetCategoryDisplayName(category))
+                    ? "Any " + SObject.GetCategoryDisplayName(category)
+                    : id;
+            if (id.StartsWith("#"))
+                return "Any " + id.Substring(1).Replace(",", " + ");
 
             if (Names.TryGetValue(id, out string cached))
                 return cached;

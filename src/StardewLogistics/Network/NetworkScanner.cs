@@ -160,12 +160,18 @@ namespace StardewLogistics.Network
                 return;
             }
 
+            // Tappers and crab pots produce by the game's own code, not machine rules. Tappers have machine data
+            // with no rules at all, so they're checked first, or they'd be treated -- and emptied -- as machines.
+            if (obj.IsTapper() || obj is CrabPot)
+            {
+                nodes.Add(new NetworkNode(NodeKind.Producer, location, tile, obj));
+                return;
+            }
+
             // Anything else with machine data is a keg, furnace, preserves jar and so on: wiring one to the
             // network is how it becomes available for processing jobs.
             if (MachineIO.IsMachine(obj))
                 nodes.Add(new NetworkNode(NodeKind.Machine, location, tile, obj));
-            else if (obj.IsTapper())
-                nodes.Add(new NetworkNode(NodeKind.Tapper, location, tile, obj));
         }
 
         /// <summary>Whether a placed object is a chest the network may use for storage.</summary>

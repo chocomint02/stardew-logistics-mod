@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using StardewValley;
+using StardewValley.Inventories;
 using StardewValley.GameData.Machines;
 using StardewValley.ItemTypeDefinitions;
 using StardewValley.Objects;
@@ -57,6 +58,15 @@ namespace StardewLogistics.Framework
         /// <summary>Each machine's any-quality recipe for an input, to compare quality-specific ones against.</summary>
         private readonly Dictionary<string, MachineRecipe> General = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>One of every item seen in storage, by stock ID: the candidates for a recipe's extra ingredient.</summary>
+        private readonly Dictionary<string, Item> IngredientPool = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Inputs whose recipe needs an extra ingredient not seen yet, tried again when new stock appears.</summary>
+        private readonly Dictionary<string, (MachineContext Context, Item Input, bool FromStock, int Quality)> AwaitingIngredients = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Extra Machine Config's custom data keys.</summary>
+        private const string EmcPrefix = "selph.ExtraMachineConfig.";
+
         /// <summary>A random source that never rolls lucky: only a 100% chance passes.</summary>
         /// <remarks>
         /// Output modifiers like "double for iridium wool" are conditions with a <c>RANDOM</c> chance. Evaluated
@@ -102,6 +112,10 @@ namespace StardewLogistics.Framework
             this.AgingCache.Clear();
             this.SkippedRules = 0;
             this.ExternalRequirementSkips = 0;
+            this.IngredientPool.Clear();
+            this.AwaitingIngredients.Clear();
+            IdTagCache.Clear();
+            SampleCache.Clear();
             StockId.Reset();
 
             Dictionary<string, MachineData> machines;
@@ -156,18 +170,26 @@ namespace StardewLogistics.Framework
                     if (input == null)
                         continue;
 
-                    MachineRecipe recipe = this.Resolve(context, input, fromStock: false);
-                    if (recipe != null && this.KnownKeys.Add(recipe.Key))
-                    {
-                        this.FixedRecipes.Add(recipe);
-                        this.AddByOutput(recipe);
-                        this.General[GeneralKey(recipe.MachineId, recipe.InputId)] = recipe;
-                    }
+                    foreach (MachineRecipe recipe in this.Resolve(context, input, fromStock: false))
+                        this.AddFixed(recipe);
+                }
+
+                // Inputs a rule accepts by tag: known to the planner from the start, so a short ingredient can say
+                // what else would do, but offered on the Auto tab only once one is stored -- a Crystalarium would
+                // otherwise list every gem in the game.
+                foreach (string inputId in context.TaggedInputs().Except(context.NamedInputs(), StringComparer.OrdinalIgnoreCase))
+                {
+                    Item input = CreateInput(inputId);
+                    if (input == null)
+                        continue;
+
+                    foreach (MachineRecipe recipe in this.Resolve(context, input, fromStock: false).Where(recipe => this.KnownKeys.Add(recipe.Key)))
+                        this.AddFromStock(recipe.InputId, recipe);
                 }
             }
 
             Log.Trace($"Indexed {this.FixedRecipes.Count} processing recipes across {this.MachineList.Count} machines in {timer.ElapsedMilliseconds}ms "
-                + $"({this.SkippedRules} inputs skipped as unpredictable, {this.ExternalRequirementSkips} outputs needing another mod's extra ingredients). "
+                + $"({this.SkippedRules} inputs skipped as unpredictable, {this.ExternalRequirementSkips} waiting for an extra ingredient to appear in storage). "
                 + "Recipes taking a category are found from stock as it appears.");
         }
 
@@ -186,7 +208,25 @@ namespace StardewLogistics.Framework
             int tried = 0;
             int found = 0;
 
-            foreach (Item sample in stock)
+            // New candidates for extra ingredients first, so an input tried just now can use them -- and recipes
+            // that were waiting on one get another try.
+            List<Item> items = stock.Where(item => item is SObject).ToList();
+            bool newIngredients = false;
+            foreach (Item sample in items)
+            {
+                string id = StockId.Of(sample);
+                if (id != null && !this.IngredientPool.ContainsKey(id))
+                {
+                    Item copy = sample.getOne();
+                    copy.Quality = SObject.lowQuality;
+                    this.IngredientPool[id] = copy;
+                    newIngredients = true;
+                }
+            }
+            if (newIngredients && this.AwaitingIngredients.Count > 0)
+                found += this.RetryAwaiting();
+
+            foreach (Item sample in items)
             {
                 if (sample is not SObject)
                     continue;
@@ -210,13 +250,16 @@ namespace StardewLogistics.Framework
 
                     foreach (MachineContext context in this.MachineList)
                     {
-                        MachineRecipe recipe = this.Resolve(context, input, fromStock: true);
-                        if (recipe == null || !this.KnownKeys.Add(recipe.Key))
-                            continue;
+                        foreach (MachineRecipe recipe in this.Resolve(context, input, fromStock: true))
+                        {
+                            if (!this.KnownKeys.Add(recipe.Key))
+                                continue;
 
-                        this.AddFromStock(inputId, recipe);
-                        this.General[GeneralKey(recipe.MachineId, recipe.InputId)] = recipe;
-                        found++;
+                            this.AddFromStock(inputId, recipe);
+                            if (recipe.RecipeExtras == 0)
+                                this.General[GeneralKey(recipe.MachineId, recipe.InputId)] = recipe;
+                            found++;
+                        }
                     }
                 }
 
@@ -233,20 +276,19 @@ namespace StardewLogistics.Framework
 
                     foreach (MachineContext context in this.MachineList)
                     {
-                        MachineRecipe recipe = this.Resolve(context, input, fromStock: true, quality: sample.Quality);
-                        if (recipe == null)
-                            continue;
+                        foreach (MachineRecipe recipe in this.Resolve(context, input, fromStock: true, quality: sample.Quality))
+                        {
+                            if (this.General.TryGetValue(GeneralKey(context.MachineId, inputId), out MachineRecipe general) && !DiffersInWork(recipe, general))
+                                continue;
 
-                        if (this.General.TryGetValue(GeneralKey(context.MachineId, inputId), out MachineRecipe general) && !DiffersInWork(recipe, general))
-                            continue;
+                            if (!this.KnownKeys.Add(recipe.Key))
+                                continue;
 
-                        if (!this.KnownKeys.Add(recipe.Key))
-                            continue;
-
-                        this.AddFromStock(inputId, recipe);
-                        found++;
-                        Log.Trace($"{recipe.MachineName} does more with {Quality.Name(sample.Quality)} {StockId.GetDisplayName(inputId)}: "
-                            + $"{recipe.InputCount} in, {recipe.OutputCount} out, {recipe.Minutes}m.");
+                            this.AddFromStock(inputId, recipe);
+                            found++;
+                            Log.Trace($"{recipe.MachineName} does more with {Quality.Name(sample.Quality)} {StockId.GetDisplayName(inputId)}: "
+                                + $"{recipe.InputCount} in, {recipe.OutputCount} out, {recipe.Minutes}m.");
+                        }
                     }
                 }
             }
@@ -470,35 +512,149 @@ namespace StardewLogistics.Framework
         /*********
         ** Private methods
         *********/
-        /// <summary>Asks the game what a machine would make from an input, and turns the answer into a recipe.</summary>
-        /// <returns>The recipe, or <c>null</c> if the machine won't take the input or its output can't be predicted.</returns>
-        private MachineRecipe Resolve(MachineContext context, Item input, bool fromStock, int quality = Quality.Any)
+        /// <summary>Asks the game what a machine would make from an input, and turns the answers into recipes.</summary>
+        /// <returns>
+        /// Every recipe the input makes on this machine: its plain one, and one for each output that takes an extra
+        /// ingredient through Extra Machine Config. Empty if the machine won't take the input.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// Extra Machine Config (EMC) lets an output ask for more ingredients -- fruit plus Plain Yogurt, a fish plus
+        /// rice -- and checks for them in the player's bag, or in the "auto-load" inventory the game sets while a
+        /// hopper fills a machine. The index sets that inventory itself, to a throwaway one holding the ingredients
+        /// it wants EMC to see. So EMC resolves the real output -- including any flavour or price the extra
+        /// ingredient gives it -- without showing "Requires..." or depending on what the player is carrying. It's
+        /// only ever a probe: nothing is consumed.
+        /// </para>
+        /// <para>
+        /// The rule is looked for twice: with nothing extra, which finds the plain rule, and with every candidate
+        /// ingredient, which finds a rule that only applies when its extra ingredients are there.
+        /// </para>
+        /// </remarks>
+        private List<MachineRecipe> Resolve(MachineContext context, Item input, bool fromStock, int quality = Quality.Any)
         {
+            List<MachineRecipe> recipes = new();
             Farmer who = Game1.player;
             GameLocation location = who?.currentLocation ?? Game1.getFarm();
 
             try
             {
-                // The rule the machine would pick, honouring rule order and every condition. This is what makes a
-                // keg turn barley into stout and not into barley juice, when both rules would accept it.
-                if (!MachineDataUtility.TryGetMachineOutputRule(context.Machine, context.Data, MachineOutputTrigger.ItemPlacedInMachine, input, who, location,
-                        out MachineOutputRule rule, out MachineOutputTriggerRule trigger, out _, out _)
-                    || rule == null || trigger == null)
-                    return null;
-
-                // Outputs that need a second ingredient added by Extra Machine Config (fruit plus Plain Yogurt)
-                // are set aside before the game sees them. EMC checks those against the player's own inventory
-                // and shows "Requires..." when it's missing, so leaving them in made the index both noisy and
-                // dependent on what the player happened to be carrying -- and a recipe indexed while they held
-                // the yogurt would then make yogurt without ever taking any from storage.
-                List<MachineItemOutput> candidates = rule.OutputItem?.Where(item => !HasExternalRequirement(item)).ToList();
-                if (candidates == null || candidates.Count == 0)
+                List<(MachineOutputRule Rule, MachineOutputTriggerRule Trigger)> rules = new();
+                foreach (Inventory offered in new[] { new Inventory(), this.EveryIngredient(context) })
                 {
-                    if (rule.OutputItem is { Count: > 0 })
-                        this.ExternalRequirementSkips++;
-                    return null;
+                    using (OfferIngredients(offered))
+                    {
+                        // The rule the machine would pick, honouring rule order and every condition. This is what
+                        // makes a keg turn barley into stout and not into barley juice, when both rules would accept it.
+                        if (MachineDataUtility.TryGetMachineOutputRule(context.Machine, context.Data, MachineOutputTrigger.ItemPlacedInMachine, input, who, location,
+                                out MachineOutputRule rule, out MachineOutputTriggerRule trigger, out _, out _)
+                            && rule != null && trigger != null && !rules.Any(existing => existing.Rule == rule))
+                            rules.Add((rule, trigger));
+                    }
                 }
 
+                foreach ((MachineOutputRule rule, MachineOutputTriggerRule trigger) in rules)
+                {
+                    List<MachineItemOutput> outputs = rule.OutputItem?.Where(item => item != null).ToList() ?? new List<MachineItemOutput>();
+
+                    // The plain outputs, as before: whichever one the game would pick.
+                    List<MachineItemOutput> plain = outputs.Where(item => !HasExternalRequirement(item)).ToList();
+                    if (plain.Count > 0)
+                    {
+                        MachineRecipe recipe = this.BuildRecipe(context, rule, trigger, plain, input, fromStock, quality, new List<Item>(), new List<ItemCost>());
+                        if (recipe != null)
+                            recipes.Add(recipe);
+                    }
+
+                    // Each output with extra ingredients, with the ingredients storage could supply.
+                    foreach (MachineItemOutput output in outputs.Where(HasExternalRequirement))
+                        recipes.AddRange(this.ResolveWithIngredients(context, rule, trigger, output, input, fromStock, quality));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Trace($"Couldn't resolve {context.MachineName} with {input.QualifiedItemId}: {ex.Message}");
+            }
+
+            return recipes;
+        }
+
+        /// <summary>The recipes for an output that takes extra ingredients.</summary>
+        /// <remarks>
+        /// An output whose product depends on the extra ingredient -- its flavour, colour or price comes from it --
+        /// gets a recipe per ingredient storage holds, each asking for exactly that one. Any other output gets one
+        /// recipe, asking for any item that meets the requirement: that ID, that category, or those tags.
+        /// </remarks>
+        private IEnumerable<MachineRecipe> ResolveWithIngredients(MachineContext context, MachineOutputRule rule, MachineOutputTriggerRule trigger, MachineItemOutput output, Item input, bool fromStock, int quality)
+        {
+            List<Requirement> requirements = ReadRequirements(output);
+            if (requirements.Count == 0)
+                yield break;
+
+            // What storage (or the item registry, for a named ingredient) could supply for each requirement.
+            string inputId = StockId.Of(input);
+            bool dependsOnIngredient = DependsOnIngredient(output);
+            List<List<Item>> candidates = requirements
+                .Select(requirement => this.CandidatesFor(requirement, inputId))
+                .ToList();
+
+            // A requirement nothing in storage meets yet. If the product doesn't depend on which item meets it, any
+            // item from the game's data will do to work the recipe out: the recipe then shows as soon as its main
+            // ingredient is stored, and the plan says what's short. If the product does depend on it -- takes its
+            // flavour -- there's no knowing what it makes until a real one turns up, so try again when one does.
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                if (candidates[i].Count == 0 && !dependsOnIngredient && SampleFor(requirements[i].Spec) is Item sample)
+                    candidates[i].Add(sample);
+            }
+
+            if (candidates.Any(list => list.Count == 0))
+            {
+                string key = $"{context.MachineId}|{inputId}|{quality}";
+                if (this.AwaitingIngredients.TryAdd(key, (context, input.getOne(), fromStock, quality)))
+                    this.ExternalRequirementSkips++;
+                yield break;
+            }
+
+            IEnumerable<Item> firstChoices = dependsOnIngredient ? candidates[0].Take(24) : candidates[0].Take(1);
+
+            foreach (Item first in firstChoices)
+            {
+                // One item per requirement: the one being tried for the first, the first unused one for the rest.
+                List<Item> chosen = new() { first };
+                for (int i = 1; i < requirements.Count; i++)
+                {
+                    Item next = candidates[i].FirstOrDefault(item => !requirements[i].NoDuplicate || chosen.All(other => StockId.Of(other) != StockId.Of(item)));
+                    if (next == null)
+                        yield break;
+                    chosen.Add(next);
+                }
+
+                // Where the product depends on the ingredient, the recipe asks for exactly that one; otherwise for
+                // anything meeting the requirement.
+                List<ItemCost> costs = requirements
+                    .Select((requirement, index) => new ItemCost(dependsOnIngredient ? StockId.Of(chosen[index]) : requirement.Spec, requirement.Count))
+                    .ToList();
+
+                MachineRecipe recipe = this.BuildRecipe(context, rule, trigger, new List<MachineItemOutput> { output }, input, fromStock, quality,
+                    chosen.Select((item, index) => WithStack(item, requirements[index].Count)).ToList(), costs);
+                if (recipe != null)
+                    yield return recipe;
+            }
+        }
+
+        /// <summary>Turns a rule's chosen output into a recipe, with any extra ingredients offered to Extra Machine Config.</summary>
+        private MachineRecipe BuildRecipe(MachineContext context, MachineOutputRule rule, MachineOutputTriggerRule trigger, List<MachineItemOutput> candidates, Item input, bool fromStock, int quality, List<Item> ingredients, List<ItemCost> ingredientCosts)
+        {
+            Farmer who = Game1.player;
+            GameLocation location = who?.currentLocation ?? Game1.getFarm();
+
+            Inventory offered = new();
+            foreach (Item ingredient in ingredients)
+                offered.Add(ingredient);
+
+            using (OfferIngredients(offered))
+            {
                 // Which of the rule's outputs applies, honouring per-output conditions. A rule can list a special
                 // case before its fallback, like red cabbage making two sauerkraut where other cabbage makes one.
                 MachineItemOutput output = MachineDataUtility.GetOutputData(candidates, rule.UseFirstValidOutput, input, who, location);
@@ -520,6 +676,7 @@ namespace StardewLogistics.Framework
                 if (product == null || ItemRegistry.GetData(product.QualifiedItemId) == null)
                     return null;
 
+
                 StockId.Remember(product);
 
                 // The yield that can be promised, after any output modifiers: evaluated against a random source
@@ -537,7 +694,8 @@ namespace StardewLogistics.Framework
                     InputTags = trigger.RequiredTags?.Where(tag => !string.IsNullOrWhiteSpace(tag)).ToList() ?? new List<string>(),
                     InputCount = Math.Max(1, trigger.RequiredCount),
                     InputQuality = quality,
-                    ExtraInputs = context.Extras,
+                    ExtraInputs = context.Extras.Concat(ingredientCosts).ToList(),
+                    RecipeExtras = ingredientCosts.Count,
                     OutputId = StockId.Of(product),
                     OutputSample = product.getOne(),
                     FromStock = fromStock,
@@ -547,11 +705,223 @@ namespace StardewLogistics.Framework
                     Days = Math.Max(0, rule.DaysUntilReady)
                 };
             }
-            catch (Exception ex)
+        }
+
+        /// <summary>One extra ingredient an Extra Machine Config output asks for.</summary>
+        private record Requirement(string Spec, int Count, bool NoDuplicate);
+
+        /// <summary>Reads an output's extra ingredients: <c>RequirementId.N</c> or <c>RequirementTags.N</c>, with <c>RequirementCount.N</c>.</summary>
+        private static List<Requirement> ReadRequirements(MachineItemOutput output)
+        {
+            List<Requirement> requirements = new();
+            if (output?.CustomData == null)
+                return requirements;
+
+            for (int n = 1; n <= 20; n++)
             {
-                Log.Trace($"Couldn't resolve {context.MachineName} with {input.QualifiedItemId}: {ex.Message}");
-                return null;
+                string spec = null;
+                if (output.CustomData.TryGetValue($"{EmcPrefix}RequirementId.{n}", out string id) && !string.IsNullOrWhiteSpace(id))
+                    spec = id.Trim().StartsWith("-") ? id.Trim() : Qualify(id.Trim());
+                else if (output.CustomData.TryGetValue($"{EmcPrefix}RequirementTags.{n}", out string tags) && !string.IsNullOrWhiteSpace(tags))
+                {
+                    // A single "id_o_..." tag names one item; asking for that item says what it is and shows its icon.
+                    List<string> list = tags.Split(',').Select(tag => tag.Trim()).Where(tag => tag.Length > 0).ToList();
+                    spec = list.Count == 1 && list[0].StartsWith("id_", StringComparison.OrdinalIgnoreCase)
+                        ? ItemForIdTag(list[0]) ?? StockId.ForTags(list)
+                        : StockId.ForTags(list);
+                }
+
+                if (spec == null)
+                {
+                    if (n > 1)
+                        break;
+                    continue;
+                }
+
+                int count = output.CustomData.TryGetValue($"{EmcPrefix}RequirementCount.{n}", out string rawCount)
+                    && int.TryParse(rawCount, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int parsed)
+                        ? Math.Max(1, parsed)
+                        : 1;
+                bool noDuplicate = output.CustomData.ContainsKey($"{EmcPrefix}RequirementNoDuplicate.{n}");
+                requirements.Add(new Requirement(spec, count, noDuplicate));
             }
+
+            return requirements;
+        }
+
+        /// <summary>The items that could meet a requirement: a named one always; a category or tags, from what storage has held.</summary>
+        private List<Item> CandidatesFor(Requirement requirement, string inputId)
+        {
+            if (!StockId.IsSpec(requirement.Spec))
+            {
+                Item named = CreateInput(requirement.Spec);
+                return named == null ? new List<Item>() : new List<Item> { named };
+            }
+
+            return this.IngredientPool
+                .Where(pair => StockId.Matches(pair.Value, requirement.Spec) && (!requirement.NoDuplicate || !string.Equals(pair.Key, inputId, StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(pair => pair.Value.salePrice())
+                .Select(pair => pair.Value)
+                .ToList();
+        }
+
+        /// <summary>The item an "id_" context tag names, if there is one.</summary>
+        /// <remarks>Every item has a tag of its qualified ID -- "id_o_cornucopia_plainyogurt" -- which content packs use to ask for one item.</remarks>
+        private static string ItemForIdTag(string tag)
+        {
+            if (IdTagCache.TryGetValue(tag, out string cached))
+                return cached;
+
+            string found = null;
+            try
+            {
+                found = (Game1.objectData?.Keys.Select(key => "(O)" + key) ?? Enumerable.Empty<string>())
+                    .Concat(Game1.bigCraftableData?.Keys.Select(key => "(BC)" + key) ?? Enumerable.Empty<string>())
+                    .FirstOrDefault(id => StardewValley.ItemContextTagManager.HasBaseTag(id, tag));
+            }
+            catch
+            {
+                found = null;
+            }
+
+            return IdTagCache[tag] = found;
+        }
+
+        /// <summary>An item from the game's data that meets a category or tag spec, for working out a recipe before storage has one.</summary>
+        /// <remarks>Checked against each object's base tags, without creating it, and remembered per spec.</remarks>
+        private static Item SampleFor(string spec)
+        {
+            if (!StockId.IsSpec(spec))
+                return CreateInput(spec);
+
+            if (!SampleCache.TryGetValue(spec, out string id))
+            {
+                id = null;
+                try
+                {
+                    if (spec.StartsWith("-") && int.TryParse(spec, out int category))
+                        id = Game1.objectData?.FirstOrDefault(pair => pair.Value?.Category == category).Key is string key ? "(O)" + key : null;
+                    else if (spec.StartsWith("#"))
+                    {
+                        string[] tags = spec.Substring(1).Split(',').Select(tag => tag.Trim()).Where(tag => tag.Length > 0).ToArray();
+                        id = Game1.objectData?.Keys.Select(key => "(O)" + key).FirstOrDefault(candidate => tags.All(tag => StardewValley.ItemContextTagManager.HasBaseTag(candidate, tag)));
+                    }
+                }
+                catch
+                {
+                    id = null;
+                }
+
+                SampleCache[spec] = id;
+            }
+
+            return id == null ? null : CreateInput(id);
+        }
+
+        private static readonly Dictionary<string, string> IdTagCache = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, string> SampleCache = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Every ingredient a machine's outputs could ask for, for finding a rule that needs them.</summary>
+        private Inventory EveryIngredient(MachineContext context)
+        {
+            Inventory inventory = new();
+            foreach (Item item in this.IngredientPool.Values)
+                inventory.Add(WithStack(item, item.maximumStackSize()));
+
+            foreach (MachineItemOutput output in context.Data.OutputRules.Where(rule => rule?.OutputItem != null).SelectMany(rule => rule.OutputItem).Where(HasExternalRequirement))
+            {
+                foreach (Requirement requirement in ReadRequirements(output))
+                {
+                    Item sample = SampleFor(requirement.Spec);
+                    if (sample != null)
+                        inventory.Add(sample);
+                }
+            }
+
+            return inventory;
+        }
+
+        /// <summary>Whether an output's product takes anything from its extra ingredient: its ID, flavour, colour or price.</summary>
+        private static bool DependsOnIngredient(MachineItemOutput output)
+        {
+            static bool Mentions(string text) => text != null && (text.Contains("DROP_IN_ID_", StringComparison.OrdinalIgnoreCase) || text.Contains("DROP_IN_PRESERVE_", StringComparison.OrdinalIgnoreCase));
+
+            return Mentions(output.ItemId)
+                || Mentions(output.PreserveId)
+                || Mentions(output.ObjectInternalName)
+                || Mentions(output.ObjectDisplayName)
+                || output.CustomData?.Keys.Any(key => key.StartsWith(EmcPrefix + "RequirementAddPriceMultiplier", StringComparison.OrdinalIgnoreCase)) == true;
+        }
+
+        /// <summary>A copy of an item with a given stack.</summary>
+        private static Item WithStack(Item item, int stack)
+        {
+            Item copy = item.getOne();
+            copy.Stack = Math.Max(1, stack);
+            return copy;
+        }
+
+        /// <summary>Sets the game's auto-load inventory while the index asks about a machine, and restores it after.</summary>
+        /// <remarks>Extra Machine Config looks for extra ingredients there before the player's bag, and stays quiet when they're missing.</remarks>
+        private static IDisposable OfferIngredients(StardewValley.Inventories.IInventory inventory)
+        {
+            StardewValley.Inventories.IInventory previous = SObject.autoLoadFrom;
+            SObject.autoLoadFrom = inventory;
+            return new Restore(() => SObject.autoLoadFrom = previous);
+        }
+
+        /// <summary>Runs an action when disposed.</summary>
+        private sealed class Restore : IDisposable
+        {
+            private Action Action;
+            public Restore(Action action) => this.Action = action;
+            public void Dispose()
+            {
+                this.Action?.Invoke();
+                this.Action = null;
+            }
+        }
+
+        /// <summary>Tries again the inputs whose recipes were waiting for an extra ingredient to appear.</summary>
+        /// <returns>How many recipes were found.</returns>
+        private int RetryAwaiting()
+        {
+            int found = 0;
+            foreach ((string key, var entry) in this.AwaitingIngredients.ToList())
+            {
+                List<MachineRecipe> recipes = this.Resolve(entry.Context, WithStack(entry.Input, entry.Input.maximumStackSize()), entry.FromStock, entry.Quality)
+                    .Where(recipe => recipe.RecipeExtras > 0)
+                    .ToList();
+                if (recipes.Count == 0)
+                    continue;
+
+                this.AwaitingIngredients.Remove(key);
+                foreach (MachineRecipe recipe in recipes.Where(recipe => this.KnownKeys.Add(recipe.Key)))
+                {
+                    if (entry.FromStock)
+                        this.AddFromStock(recipe.InputId, recipe);
+                    else
+                    {
+                        this.FixedRecipes.Add(recipe);
+                        this.AddByOutput(recipe);
+                    }
+                    found++;
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>Records a recipe found from what a rule names outright.</summary>
+        private void AddFixed(MachineRecipe recipe)
+        {
+            if (!this.KnownKeys.Add(recipe.Key))
+                return;
+
+            this.FixedRecipes.Add(recipe);
+            this.AddByOutput(recipe);
+            if (recipe.RecipeExtras == 0)
+                this.General[GeneralKey(recipe.MachineId, recipe.InputId)] = recipe;
         }
 
         /// <summary>Records a recipe found from stock.</summary>
@@ -587,9 +957,8 @@ namespace StardewLogistics.Framework
 
         /// <summary>Whether an output needs an extra ingredient declared through Extra Machine Config.</summary>
         /// <remarks>
-        /// EMC reads these from the output's custom data and enforces them in its own patches. The scheduler
-        /// loads machines directly, so it would never take the extra ingredient; until that's supported, such
-        /// outputs are left out rather than produced for free.
+        /// EMC enforces these in its own patches, but the scheduler loads machines directly, so the index reads them
+        /// and makes each one an ingredient of the recipe: reserved, and taken, like any other.
         /// </remarks>
         private static bool HasExternalRequirement(MachineItemOutput output)
         {
@@ -748,6 +1117,51 @@ namespace StardewLogistics.Framework
                     .Select(trigger => Qualify(trigger.RequiredItemId))
                     .Where(id => id != null)
                     .Distinct(StringComparer.OrdinalIgnoreCase);
+            }
+
+            /// <summary>Every item a rule accepts by tag rather than by name, found from the game's own item data.</summary>
+            /// <remarks>
+            /// A Yogurt Jar takes "any milk": naming only the milk a rule mentions outright would leave cow's milk
+            /// unknown until some was stored, and a plan short of milk could only ever ask for goat's. Checked against
+            /// each object's base tags, without creating it. Capped per rule, so a rule taking "any object" doesn't
+            /// try every item in the game.
+            /// </remarks>
+            public IEnumerable<string> TaggedInputs()
+            {
+                const int maxPerTrigger = 300;
+                HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+                IEnumerable<MachineOutputTriggerRule> triggers = this.Data.OutputRules
+                    .Where(rule => rule?.Triggers != null)
+                    .SelectMany(rule => rule.Triggers)
+                    .Where(trigger => trigger != null
+                        && trigger.Trigger.HasFlag(MachineOutputTrigger.ItemPlacedInMachine)
+                        && string.IsNullOrWhiteSpace(trigger.RequiredItemId)
+                        && trigger.RequiredTags is { Count: > 0 });
+
+                foreach (MachineOutputTriggerRule trigger in triggers)
+                {
+                    int found = 0;
+                    foreach (string key in Game1.objectData?.Keys ?? Enumerable.Empty<string>())
+                    {
+                        string id = "(O)" + key;
+                        bool matches;
+                        try
+                        {
+                            matches = ItemContextTagManager.DoAllTagsMatch(trigger.RequiredTags, ItemContextTagManager.GetBaseContextTags(id));
+                        }
+                        catch
+                        {
+                            matches = false;
+                        }
+
+                        if (!matches)
+                            continue;
+                        if (seen.Add(id))
+                            yield return id;
+                        if (++found >= maxPerTrigger)
+                            break;
+                    }
+                }
             }
         }
     }

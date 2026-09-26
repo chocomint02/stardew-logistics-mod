@@ -133,8 +133,15 @@ Settings are stored on the chest, so they survive moving cable or rebuilding the
 ### Machines
 
 Any machine on or beside a cable is part of the network. Finished output is collected into storage
-automatically (`EnableMachineAutomation`). When a machine holding items is removed, its inputs or finished
-output return to storage instead of being lost.
+automatically (`EnableMachineAutomation`), and anything that starts again on its own is restarted the way the
+game does it:
+
+- Machines whose rules restart on collection (Crystalariums, Worm Bins, Bee Houses) start their next batch.
+- Tappers set their tree producing again.
+- Crab Pots are rebaited from storage (cheapest bait first), unless their owner needs no bait.
+
+Machines are only emptied when storage has room for the whole output. When a machine holding items is
+removed, its inputs or finished output return to storage instead of being lost.
 
 ---
 
@@ -166,6 +173,15 @@ Selecting an item opens the planner, which shows the complete production tree be
 - **Max machines.** Limits how many machines each step may occupy. Defaults to every available machine.
 - **Ingredient alternatives.** Recipes that accept more than one input (Duck Mayonnaise from a Duck Egg or a
   Golden Duck Egg) consider every option.
+- **Multiple inputs per step.** Machines that consume extra items, whether machine-wide (a Furnace's coal) or
+  per recipe through Extra Machine Config (used by Cornucopia and similar packs), plan, reserve and load every
+  ingredient. Extra ingredients given as an item, a category ("any gem") or context tags are drawn from
+  storage. Where the product takes its flavour, color or price from the extra ingredient, each ingredient in
+  storage is its own recipe. A recipe shows as soon as its main ingredient is stored, even if an extra ingredient
+  is short; the plan names what's missing. The exception is a product that takes its identity from the extra
+  ingredient, which appears once a matching ingredient has been stored.
+- **Category ingredients.** Crafting recipes that ask for a category ("any egg") draw matching items from
+  storage, cheapest first.
 - **Quality.** Lowest-quality ingredients are used first, unless a higher quality needs fewer inputs *and*
   fewer machine-hours. Ingredients drawn from storage are listed per quality.
 - **Flavoured goods.** Wine, juice, jelly, pickles, roe, honey and dried or smoked goods are planned by
@@ -194,6 +210,9 @@ Queued jobs appear on the **Jobs** tab with progress, time remaining, value and 
   progress kept. Casks placed after queuing are used as they appear.
 - **Broken machines.** The job recovers the machine's inputs and reruns the batch elsewhere. If no suitable
   machine remains, the job cancels and refunds everything.
+- **Saved with the game.** Jobs, running batches, machine claims, crop reservations and pending plantings are
+  written to the save and resume on load. Batches that finished overnight are collected on the first pass.
+  A job that can't be restored (e.g. its recipe's mod was removed) returns its reserved items to storage.
 
 ---
 
@@ -299,8 +318,18 @@ Projected income from everything on the network that's producing:
 
 - **Machines:** output value ÷ processing time. A Keg making 3,150g Starfruit Wine every 7 days earns 450g/day.
 - **Autocrafting machines:** count the batches their job has left.
-- **Bee Houses, Crystalariums, Tappers:** repeat indefinitely.
+- **Recurring machines:** any machine whose rules restart it each morning or on collection repeats
+  indefinitely, including while empty between batches, and including modded machines. Cycle times use the
+  game's per-item timing (a Crystalarium's rate depends on its gem); machines that restart each morning count
+  at most one batch a day; machines the game times itself, such as Solar Panels, use their observed countdown.
+  Tappers repeat at their tree's rate. Crab Pots repeat daily while baited, valued at their current or last
+  catch. Incubators hatch animals and aren't counted.
 - **Casks:** count only the value aging adds.
+- **Animals:** every adult animal living in a coop or barn with network cable inside (linked by a Wireless
+  Receiver, or a network of its own) counts its produce at its current produce quality, every *days to
+  produce*. Golden Animal Crackers double it; deluxe produce is a chance and isn't counted; Pigs don't
+  count in winter. Baby animals are listed as *(young)* and counted from the day they grow up: they add
+  to the projection, but not to income per day until they're producing.
 - **Crops under Auto-Harvesters:** guaranteed yield ÷ growth time. Regrowing and replanted crops repeat until
   their season ends; crops reserved by jobs are excluded.
 
@@ -380,6 +409,8 @@ For troubleshooting, in the SMAPI console:
 - **Standalone.** No other mods are required.
 - **Generic Mod Config Menu** (optional) adds an in-game settings page.
 - **Even Better Artisan Good Icons** (optional) icons are used where installed.
+- **Extra Machine Config** (optional) recipes with extra ingredients, including those from content packs such as
+  Cornucopia, are supported by autocrafting.
 - **Automate** is not supported. Both mods drive the same machines, which produces unexpected behavior; a
   warning is logged if both are installed.
 - Modded machines and crops defined through the game's 1.6 data formats are supported.
@@ -388,13 +419,9 @@ For troubleshooting, in the SMAPI console:
 
 ## Known limitations
 
-- **Jobs don't survive quitting.** Reserved items are returned to storage on the next load. Crops planted for
-  a job keep growing and are harvested into storage; stock rules queue new jobs.
+- **Jobs are saved when the game saves** (at the end of the day). Quitting mid-day restores jobs as they were
+  that morning, like the rest of the save.
 - **Machine products come out at normal quality.** Input quality isn't carried through to machine output.
-- **Recipes needing extra inputs** beyond their main ingredient (other than fuel) aren't offered for
-  autocrafting.
-- **Tappers** are counted in the income forecast but not collected by the network. Crystalariums and other
-  machines that restart when collected are also left alone.
 - **Harvesting** grants Farming experience to the host.
 - **Farmhands** see stored items from their own copy of the world, which updates less often for locations
   outside the farm and its buildings. All item changes still go through the host. Crafts made by farmhands
@@ -430,6 +457,7 @@ src/StardewLogistics/
     MachineIO.cs               machine collection, loading and refunds
     JobRunner.cs               autocrafting scheduler
     JobBuffer.cs               reserved job ingredients
+    JobStore.cs                job save and restore
     StockKeeper.cs             minimum-stock rules
     HarvesterRunner.cs         Auto-Harvester farming loop
     ShippingService.cs         shipping bin transfers

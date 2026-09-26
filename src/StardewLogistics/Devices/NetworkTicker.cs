@@ -91,6 +91,10 @@ namespace StardewLogistics.Devices
                     collected += moved;
             }
 
+            // Tappers and crab pots too: collecting sets them going again, as it does for the player.
+            foreach (NetworkNode node in network.GetNodes(NodeKind.Producer))
+                collected += MachineIO.TryCollectProducer(node.Object, network);
+
             if (collected > 0)
                 Log.Trace($"Collected {collected} items from machines on the {network.Location?.NameOrUniqueName} network.");
         }

@@ -391,5 +391,6 @@
   "mp.queued": "Queued {{count}}x {{name}} on the host.",
   "mp.request-failed": "The host couldn't do that: {{reason}}",
   "mp.inventory-full": "Your bag is full. {{count}} items were dropped at your feet.",
-  "error.network-empty": "The network no longer has that item."
+  "error.network-empty": "The network no longer has that item.",
+  "auto.substitutes": "Also accepted: {{items}}."
 }

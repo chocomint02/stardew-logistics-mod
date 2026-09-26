@@ -5,6 +5,8 @@ using Microsoft.Xna.Framework;
 using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewValley;
+using StardewValley.Objects;
+using StardewValley.TerrainFeatures;
 using StardewValley.GameData.Machines;
 using SObject = StardewValley.Object;
 
@@ -100,11 +102,10 @@ namespace StardewLogistics.Devices
             if (machine?.heldObject.Value == null || !machine.readyForHarvest.Value)
                 return 0;
 
-            // Some machines (tappers, crystalariums) restart themselves when the player collects their output, and
-            // the game drives that from the "OutputCollected" trigger during a real collection. Emptying them from
-            // here would silently switch them off, so leave those to the player.
+            // Some machines (crystalariums) restart themselves when their output is collected. The game drives that
+            // from the "OutputCollected" trigger, so it's run here too, just as when the player collects.
             if (RestartsOnCollection(machine))
-                return 0;
+                return CollectAndRestart(machine, network);
 
             SObject held = machine.heldObject.Value;
             int collected = network.Insert(held);
@@ -171,9 +172,117 @@ namespace StardewLogistics.Devices
         }
 
 
+        /// <summary>Collects a producer the game runs with its own code, and sets it going again as the game does.</summary>
+        /// <returns>The number of items collected.</returns>
+        public static int TryCollectProducer(SObject producer, StorageNetwork network)
+        {
+            return producer switch
+            {
+                CrabPot pot => TryCollectCrabPot(pot, network),
+                _ => TryCollectTapper(producer, network)
+            };
+        }
+
+        /// <summary>Collects a crab pot's catch and baits it again from storage, as the player would.</summary>
+        /// <remarks>
+        /// Collecting uses up the bait, as it does by hand; the pot catches again overnight only with fresh bait,
+        /// unless its owner doesn't need any. The bait is whatever bait storage holds, cheapest first.
+        /// </remarks>
+        private static int TryCollectCrabPot(CrabPot pot, StorageNetwork network)
+        {
+            SObject held = pot.heldObject.Value;
+            if (held == null || !pot.readyForHarvest.Value || !network.HasRoomFor(held, held.Stack))
+                return 0;
+
+            IncomeForecast.RememberCatch(pot, Framework.Selling.Value(held, held.Stack));
+
+            int collected = network.Insert(held);
+            if (held.Stack > 0)
+                return collected;
+
+            pot.heldObject.Value = null;
+            pot.readyForHarvest.Value = false;
+            pot.bait.Value = null;
+            pot.tileIndexToShow = 710;
+
+            if (pot.NeedsBait(Game1.MasterPlayer))
+            {
+                NetworkItemStack bait = network.Aggregate()
+                    .Where(entry => entry.Sample?.Category == SObject.baitCategory)
+                    .OrderBy(entry => entry.Sample.salePrice())
+                    .FirstOrDefault();
+                if (bait != null && network.ExtractMerged(bait.Key, bait.Sample, 1).FirstOrDefault() is SObject taken)
+                    pot.bait.Value = taken;
+            }
+
+            return collected;
+        }
+
+        /// <summary>Collects a tapper's product and sets the tree producing the next, as the game does for the player.</summary>
+        /// <returns>The number of items collected.</returns>
+        private static int TryCollectTapper(SObject tapper, StorageNetwork network)
+        {
+            if (tapper?.heldObject.Value == null || !tapper.readyForHarvest.Value || !tapper.IsTapper())
+                return 0;
+
+            SObject held = tapper.heldObject.Value;
+            if (!network.HasRoomFor(held, held.Stack))
+                return 0;
+
+            SObject previous = (SObject)held.getOne();
+            int collected = network.Insert(held);
+            if (held.Stack > 0)
+                return collected;
+
+            tapper.heldObject.Value = null;
+            tapper.readyForHarvest.Value = false;
+            if (tapper.Location?.terrainFeatures.TryGetValue(tapper.TileLocation, out TerrainFeature feature) == true && feature is Tree tree)
+                tree.UpdateTapperProduct(tapper, previous);
+
+            return collected;
+        }
+
+
         /*********
         ** Private methods
         *********/
+        /// <summary>Collects a machine that restarts when collected, and restarts it.</summary>
+        /// <remarks>
+        /// Only when storage has room for the whole output: a partial collection would leave the machine holding the
+        /// rest, and restarting it then would overwrite what's left.
+        /// </remarks>
+        private static int CollectAndRestart(SObject machine, StorageNetwork network)
+        {
+            SObject held = machine.heldObject.Value;
+            if (!network.HasRoomFor(held, held.Stack))
+                return 0;
+
+            Item collectedSample = held.getOne();
+            int collected = network.Insert(held);
+            if (held.Stack > 0)
+                return collected;
+
+            machine.heldObject.Value = null;
+            machine.readyForHarvest.Value = false;
+            machine.showNextIndex.Value = false;
+            machine.ResetParentSheetIndex();
+
+            try
+            {
+                MachineData data = machine.GetMachineData();
+                GameLocation location = machine.Location;
+                if (data != null && location != null
+                    && MachineDataUtility.TryGetMachineOutputRule(machine, data, MachineOutputTrigger.OutputCollected, collectedSample, Game1.player, location, out MachineOutputRule rule, out _, out _, out _))
+                    machine.OutputMachine(data, rule, machine.lastInputItem.Value, Game1.player, location, probe: false);
+            }
+            catch (System.Exception ex)
+            {
+                Log.Trace($"Couldn't restart the {machine.DisplayName} at {machine.TileLocation} after collecting it: {ex.Message}");
+            }
+
+            return collected;
+        }
+
         /// <summary>Whether the game restarts this machine as part of collecting its output.</summary>
         private static bool RestartsOnCollection(SObject machine)
         {

@@ -6,6 +6,7 @@ using Microsoft.Xna.Framework;
 using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewValley;
+using StardewValley.GameData.FarmAnimals;
 using StardewValley.GameData.Machines;
 using StardewValley.Objects;
 using StardewValley.TerrainFeatures;
@@ -41,8 +42,12 @@ namespace StardewLogistics.Devices
         /// <summary>What one completion uses up, for working out its cost: a keg's fruit, a crop's seed.</summary>
         public List<(string ItemId, int Count)> Inputs { get; init; } = new();
 
+        /// <summary>Whether it's earning already, rather than only from some day ahead: a baby animal isn't yet.</summary>
+        /// <remarks>Only what's earning now counts toward gold a day; the projection counts the rest from when it starts.</remarks>
+        public bool EarningNow { get; init; } = true;
+
         /// <summary>Gold a day: what one completion is worth, over the days it takes.</summary>
-        public double PerDay => this.CycleDays > 0 ? this.Value / this.CycleDays : 0;
+        public double PerDay => this.EarningNow && this.CycleDays > 0 ? this.Value / this.CycleDays : 0;
 
         /// <summary>What one completion's inputs cost, by the player's item costs.</summary>
         public double Cost(ExpensePlan plan) => plan == null ? 0 : this.Inputs.Sum(input => plan.CostOf(input.ItemId) * input.Count);
@@ -67,6 +72,9 @@ namespace StardewLogistics.Devices
         /// <summary>The time a machine was seen to have left when its output first appeared, as a last resort for how long a batch takes.</summary>
         private static readonly ConditionalWeakTable<Item, StrongBox<int>> FirstSeen = new();
 
+        /// <summary>What each crab pot's last catch sold for, to value it while it waits for the next.</summary>
+        private static readonly ConditionalWeakTable<CrabPot, StrongBox<double>> LastCatch = new();
+
         private const double MinutesPerDay = CraftPlan.MinutesPerDay;
 
 
@@ -80,15 +88,17 @@ namespace StardewLogistics.Devices
             if (network == null)
                 return sources;
 
-            foreach (NetworkNode node in network.Machines.Concat(network.GetNodes(NodeKind.Tapper)))
+            foreach (NetworkNode node in network.Machines.Concat(network.GetNodes(NodeKind.Producer)))
             {
                 try
                 {
-                    IncomeSource source = node.Object is Cask cask
-                        ? FromCask(cask, jobs)
-                        : node.Kind == NodeKind.Tapper
-                            ? FromTapper(node)
-                            : FromMachine(node, network, jobs);
+                    IncomeSource source = node.Object switch
+                    {
+                        Cask cask => FromCask(cask, jobs),
+                        CrabPot pot => FromCrabPot(pot),
+                        _ when node.Kind == NodeKind.Producer => FromTapper(node),
+                        _ => FromMachine(node, network, jobs)
+                    };
                     if (source != null)
                         sources.Add(source);
                 }
@@ -107,7 +117,23 @@ namespace StardewLogistics.Devices
                 Log.Trace($"Income forecast skipped the fields: {ex.Message}");
             }
 
+            try
+            {
+                sources.AddRange(FromAnimals(network));
+            }
+            catch (Exception ex)
+            {
+                Log.Trace($"Income forecast skipped the animals: {ex.Message}");
+            }
+
             return sources;
+        }
+
+        /// <summary>Records what a crab pot's catch sold for, when the network collects it.</summary>
+        public static void RememberCatch(CrabPot pot, double value)
+        {
+            if (pot != null && value > 0)
+                LastCatch.AddOrUpdate(pot, new StrongBox<double>(value));
         }
 
         /// <summary>The network's income a day: every producer's value over its batch time.</summary>
@@ -151,7 +177,16 @@ namespace StardewLogistics.Devices
         {
             SObject machine = node.Object;
             SObject held = machine?.heldObject.Value;
-            if (held == null || held is Chest)
+
+            // An incubator's "output" is the egg it's hatching: an animal comes out, not something to sell.
+            if (IsHatcher(machine))
+                return null;
+
+            // Empty between batches -- a bee house just collected, a worm bin waiting for morning -- but it starts
+            // again by itself: it's earning all the same.
+            if (held == null)
+                return FromIdleRepeater(node, network);
+            if (held is Chest)
                 return null;
 
             int? price = Selling.UnitPrice(held);
@@ -327,6 +362,67 @@ namespace StardewLogistics.Devices
         }
 
 
+        /// <summary>Animals living in coops and barns the network reaches: what each produces, and how often.</summary>
+        /// <remarks>
+        /// A building counts when the network has cable inside it -- linked to the rest by a wireless receiver, or a
+        /// network of its own. Each adult animal is valued at its next produce, at the quality it's producing at,
+        /// doubled if it has eaten a Golden Animal Cracker, every <c>DaysToProduce</c> days. Deluxe produce is a
+        /// chance, not a promise, so it isn't counted. Pigs dig their truffles outdoors, so they make none in winter.
+        ///
+        /// A baby animal is counted from the day it grows up: its first produce comes one production cycle after
+        /// that, at normal quality. It adds to the projection, but not to gold a day, which is what's earning now.
+        /// </remarks>
+        private static IEnumerable<IncomeSource> FromAnimals(StorageNetwork network)
+        {
+            foreach (AnimalHouse house in network.Locations.OfType<AnimalHouse>())
+            {
+                foreach (long id in house.animalsThatLiveHere)
+                {
+                    FarmAnimal animal = Utility.getAnimal(id);
+                    if (animal == null)
+                        continue;
+
+                    FarmAnimalData data = animal.GetAnimalData();
+                    if (data == null || data.DaysToProduce <= 0)
+                        continue;
+
+                    bool adult = animal.isAdult();
+                    int daysToGrow = adult ? 0 : Math.Max(1, data.DaysToMature - animal.age.Value);
+                    if (data.HarvestType == FarmAnimalHarvestType.DigUp && Game1.IsWinter)
+                        continue;
+
+                    // What it's producing now, or the first thing it produces at its friendship level.
+                    string produceId = adult ? animal.currentProduce.Value : null;
+                    if (string.IsNullOrEmpty(produceId) || produceId == "-1")
+                        produceId = data.ProduceItemIds?.FirstOrDefault(entry => entry != null && animal.friendshipTowardFarmer.Value >= entry.MinimumFriendship)?.ItemId;
+
+                    Item produce = string.IsNullOrEmpty(produceId) ? null : ItemRegistry.Create(produceId, allowNull: true);
+                    if (produce == null)
+                        continue;
+                    produce.Quality = adult ? Math.Max(0, animal.produceQuality.Value) : StardewValley.Object.lowQuality;
+
+                    int? price = Selling.UnitPrice(produce);
+                    if (price is not > 0)
+                        continue;
+
+                    int perHarvest = animal.hasEatenAnimalCracker.Value ? 2 : 1;
+                    yield return new IncomeSource
+                    {
+                        Name = adult ? $"{animal.displayType}: {produce.DisplayName}" : $"{animal.displayType} (young): {produce.DisplayName}",
+                        Icon = produce,
+                        Value = price.Value * (double)perHarvest,
+                        CycleDays = data.DaysToProduce,
+                        FirstDays = adult
+                            ? Math.Max(1, data.DaysToProduce - animal.daysSinceLastLay.Value)
+                            : daysToGrow + data.DaysToProduce,
+                        Completions = -1,
+                        EarningNow = adult
+                    };
+                }
+            }
+        }
+
+
         /*********
         ** Private methods: timing
         *********/
@@ -340,8 +436,13 @@ namespace StardewLogistics.Devices
 
             if (data?.OutputRules != null)
             {
+                // The rule that made what's in it, if the machine says; otherwise the one its last input matches.
+                string lastRule = machine.lastOutputRuleId.Value;
+                if (!string.IsNullOrEmpty(lastRule))
+                    rule = data.OutputRules.FirstOrDefault(candidate => candidate?.Id == lastRule);
+
                 Item input = machine.lastInputItem.Value;
-                if (input != null)
+                if (rule == null && input != null)
                 {
                     try
                     {
@@ -354,20 +455,144 @@ namespace StardewLogistics.Devices
                 }
 
                 // Nothing goes in: the rule is one the machine runs on its own.
-                const MachineOutputTrigger byItself = MachineOutputTrigger.DayUpdate | MachineOutputTrigger.MachinePutDown | MachineOutputTrigger.OutputCollected;
-                rule ??= data.OutputRules.FirstOrDefault(candidate => candidate.Triggers?.Any(trigger => (trigger.Trigger & byItself) != 0) == true);
-                repeats = rule?.Triggers?.Any(trigger => (trigger.Trigger & byItself) != 0) == true;
+                rule ??= data.OutputRules.FirstOrDefault(RunsByItself);
+                repeats = RunsByItself(rule);
             }
 
-            if (rule != null)
+            double cycle = rule != null ? RuleCycleDays(machine, data, rule, location) : 0;
+            return cycle > 0 ? cycle : ObservedDays(machine.heldObject.Value, machine.MinutesUntilReady);
+        }
+
+        /// <summary>Days one run of a rule takes, with the machine's ready-time modifiers.</summary>
+        /// <returns>The days, or zero where the game times the machine itself -- a solar panel counts down only on
+        /// sunny days -- and its countdown has to be watched instead.</returns>
+        /// <remarks>
+        /// A rule that runs each morning can't finish more than once a day, however short its time: a soda machine's
+        /// is zero minutes, which would otherwise read as a batch every minute.
+        /// </remarks>
+        private static double RuleCycleDays(SObject machine, MachineData data, MachineOutputRule rule, GameLocation location)
+        {
+            if (rule.DaysUntilReady <= 0 && rule.MinutesUntilReady < 0)
+                return 0;
+
+            double days = rule.DaysUntilReady > 0 || rule.MinutesUntilReady > 0 ? ToDays(ReadyMinutes(machine, data, rule, location)) : 0;
+            return RunsEachMorning(rule) ? Math.Max(1, days) : days;
+        }
+
+        /// <summary>Whether a rule runs at the start of each day.</summary>
+        private static bool RunsEachMorning(MachineOutputRule rule) => rule?.Triggers?.Any(trigger => trigger.Trigger.HasFlag(MachineOutputTrigger.DayUpdate)) == true;
+
+        /// <summary>Whether a machine hatches animals rather than making things to sell.</summary>
+        private static bool IsHatcher(SObject machine)
+        {
+            MachineData data = machine.GetMachineData();
+            return data?.IsIncubator == true || machine.QualifiedItemId == "(BC)156";
+        }
+
+        /// <summary>A crab pot: its catch each morning, for as long as it's baited or needs no bait.</summary>
+        /// <remarks>
+        /// A catch is random, so a pot holding one is valued at that catch; an empty pot at its last one, remembered
+        /// when the network collected it. The network rebaits pots it collects, so a pot with bait keeps going.
+        /// </remarks>
+        private static IncomeSource FromCrabPot(CrabPot pot)
+        {
+            SObject held = pot.heldObject.Value;
+            double value = held != null
+                ? Selling.Value(held, held.Stack)
+                : LastCatch.TryGetValue(pot, out StrongBox<double> last) ? last.Value : 0;
+            if (value <= 0)
+                return null;
+
+            bool keepsGoing = pot.bait.Value != null || !pot.NeedsBait(Game1.MasterPlayer) || held != null;
+            return new IncomeSource
             {
-                if (rule.DaysUntilReady > 0)
-                    return rule.DaysUntilReady;
-                if (rule.MinutesUntilReady > 0)
-                    return ToDays(rule.MinutesUntilReady);
+                Name = $"{pot.DisplayName}: {held?.DisplayName ?? pot.DisplayName}",
+                Icon = held ?? (Item)pot,
+                Value = value,
+                CycleDays = 1,
+                FirstDays = held != null && pot.readyForHarvest.Value ? 0 : 1,
+                Completions = keepsGoing ? -1 : 1
+            };
+        }
+
+        /// <summary>Whether a rule starts the machine again by itself: each morning, or when its output is collected.</summary>
+        private static bool RunsByItself(MachineOutputRule rule)
+        {
+            const MachineOutputTrigger byItself = MachineOutputTrigger.DayUpdate | MachineOutputTrigger.OutputCollected;
+            return rule?.Triggers?.Any(trigger => (trigger.Trigger & byItself) != 0) == true;
+        }
+
+        /// <summary>The minutes a rule takes, with the machine's ready-time modifiers applied, as the game applies them.</summary>
+        /// <remarks>A Crystalarium's time depends on the gem in it, and that's a modifier, not the rule's base time.</remarks>
+        private static int ReadyMinutes(SObject machine, MachineData data, MachineOutputRule rule, GameLocation location)
+        {
+            int minutes = rule.DaysUntilReady > 0 ? rule.DaysUntilReady * (int)MinutesPerDay : rule.MinutesUntilReady;
+            if (data?.ReadyTimeModifiers?.Count > 0)
+            {
+                try
+                {
+                    minutes = (int)Utility.ApplyQuantityModifiers(minutes, data.ReadyTimeModifiers, data.ReadyTimeModifierMode, location, Game1.player, machine.heldObject.Value, machine.lastInputItem.Value);
+                }
+                catch
+                {
+                    // Keep the base time.
+                }
             }
 
-            return ObservedDays(machine.heldObject.Value, machine.MinutesUntilReady);
+            return Math.Max(1, minutes);
+        }
+
+        /// <summary>A machine that's empty between batches but starts again by itself each morning.</summary>
+        /// <remarks>
+        /// Valued at what its morning rule would make, worked out with the game's own output code without changing
+        /// the machine. A machine that only restarts when its output is collected has nothing to restart from once
+        /// empty, so it isn't counted.
+        /// </remarks>
+        private static IncomeSource FromIdleRepeater(NetworkNode node, StorageNetwork network)
+        {
+            SObject machine = node.Object;
+            if (machine == null || machine.MinutesUntilReady > 0)
+                return null;
+
+            MachineData data = machine.GetMachineData();
+            GameLocation location = node.Location ?? network.Location;
+
+            // Only a morning rule whose condition holds now: a bee house makes nothing in winter.
+            MachineOutputRule rule = data?.OutputRules?.FirstOrDefault(candidate => candidate?.Triggers?.Any(trigger =>
+                trigger.Trigger.HasFlag(MachineOutputTrigger.DayUpdate)
+                && (string.IsNullOrEmpty(trigger.Condition) || GameStateQuery.CheckConditions(trigger.Condition, location, Game1.player))) == true);
+            if (rule == null)
+                return null;
+
+            Item product;
+            try
+            {
+                MachineItemOutput output = MachineDataUtility.GetOutputData(machine, data, rule, null, Game1.player, location);
+                product = output == null ? null : MachineDataUtility.GetOutputItem(machine, output, null, Game1.player, probe: true, out _);
+            }
+            catch
+            {
+                product = null;
+            }
+
+            int? price = Selling.UnitPrice(product);
+            if (price is not > 0)
+                return null;
+
+            // Timed by the game itself, and nothing in it yet to watch: nothing to say how often it'll finish.
+            double cycle = RuleCycleDays(machine, data, rule, location);
+            if (cycle <= 0)
+                return null;
+
+            return new IncomeSource
+            {
+                Name = $"{machine.DisplayName}: {product.DisplayName}",
+                Icon = product,
+                Value = price.Value * (double)Math.Max(1, product.Stack),
+                CycleDays = cycle,
+                FirstDays = 1 + cycle,
+                Completions = -1
+            };
         }
 
         /// <summary>Converts a machine's minutes to days.</summary>

@@ -43,6 +43,9 @@ namespace StardewLogistics.Menus
         private const int MenuWidth = 1000;
         private const int RowHeight = 40;
 
+        /// <summary>How long a split icon shows each substitute when there are several.</summary>
+        private const double SubstituteCycleMs = 1500;
+
         private readonly RecipeIndex Crafting;
         private readonly MachineRecipeIndex MachineRecipes;
         private readonly JobRunner Jobs;
@@ -376,7 +379,9 @@ namespace StardewLogistics.Menus
             }
 
             PlanNode row = this.GetRowAt(x, y);
-            if (row?.Plantings.Count > 0)
+            if (row?.Substitutes.Count > 0)
+                this.HoverText = this.Translations.Get("auto.substitutes", new { items = string.Join(", ", row.Substitutes.Select(GetName)) });
+            else if (row?.Plantings.Count > 0)
                 this.HoverText = this.Translations.Get("auto.grow-hint", new { count = row.Plantings.Count });
             else if (row?.Harvests.Count > 0)
                 this.HoverText = this.Translations.Get("auto.harvest-hint", new { count = row.Harvests.Count });
@@ -869,7 +874,15 @@ namespace StardewLogistics.Menus
                     Utility.drawTextWithShadow(b, "└", Game1.smallFont, new Vector2(row.X + indent - 20, row.Y + 6), Game1.textColor * 0.5f);
 
                 // Item icon, so the tree can be read at a glance rather than by reading every name.
-                DrawIcon(b, GetIcon(node.ItemId, node.RequiredQuality), row.X + indent, row.Y + 4, node.Kind == PlanStepKind.Missing ? 0.4f : 1f);
+                // An ingredient others would stand in for turns through them all, starting with the one asked for.
+                string iconId = node.ItemId;
+                if (node.Substitutes.Count > 0)
+                {
+                    int shown = (int)(Game1.currentGameTime.TotalGameTime.TotalMilliseconds / SubstituteCycleMs) % (node.Substitutes.Count + 1);
+                    if (shown > 0)
+                        iconId = node.Substitutes[shown - 1];
+                }
+                DrawIcon(b, GetIcon(iconId, node.RequiredQuality), row.X + indent, row.Y + 4, node.Kind == PlanStepKind.Missing ? 0.4f : 1f);
 
                 string detail = this.DescribeStep(node);
                 Vector2 detailSize = Game1.smallFont.MeasureString(detail);
@@ -885,7 +898,8 @@ namespace StardewLogistics.Menus
                 // The item name gets whatever the step details leave; a deep, long-named row scrolls in that space.
                 int labelX = row.X + indent + 38;
                 int labelRight = (int)detailX - (hasMachineIcon ? 40 : 0) - 12;
-                Marquee.Draw(b, $"{node.Requested}x {node.DisplayName}", Game1.smallFont, new Vector2(labelX, row.Y + 6), labelRight - labelX, colour);
+                string label = node.Substitutes.Count > 0 ? CraftPlan.DescribeWithSubstitutes(node, GetName) : node.DisplayName;
+                Marquee.Draw(b, $"{node.Requested}x {label}", Game1.smallFont, new Vector2(labelX, row.Y + 6), labelRight - labelX, colour);
             }
 
             if (this.Rows.Count > visible)

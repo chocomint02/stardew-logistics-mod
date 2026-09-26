@@ -104,7 +104,12 @@ namespace StardewLogistics.Framework
         /// <summary>A stable key for this recipe, used to remember the player's machine preferences.</summary>
         public string Key => $"{this.MachineId}|{this.InputId}|{this.OutputId}"
             + (this.InputQuality >= 0 ? $"|q{this.InputQuality}" : "")
-            + (this.IsAging ? $"|age{this.TargetQuality}" : "");
+            + (this.IsAging ? $"|age{this.TargetQuality}" : "")
+            + (this.RecipeExtras > 0 ? "|+" + string.Join("+", this.ExtraInputs.Skip(this.ExtraInputs.Count - this.RecipeExtras).Select(extra => extra.ItemId)) : "");
+
+        /// <summary>How many of <see cref="ExtraInputs"/> belong to this recipe, rather than to the machine.</summary>
+        /// <remarks>A recipe's own extras -- an Extra Machine Config ingredient -- are the last ones listed.</remarks>
+        public int RecipeExtras { get; init; }
 
         /// <summary>The output's display name.</summary>
         public string OutputName => this.OutputSample?.DisplayName ?? StockId.GetDisplayName(this.OutputId);

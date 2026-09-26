@@ -35,6 +35,9 @@ namespace StardewLogistics
         private HarvesterRunner Harvesters;
         private StockKeeper Stock;
         private ShippingLedger Ledger;
+
+        /// <summary>Saves autocrafting jobs with the game, and restores them on load.</summary>
+        private JobStore JobStore;
         private Multiplayer.MultiplayerSync Sync;
 
 
@@ -90,6 +93,10 @@ namespace StardewLogistics
             // Farmhands' terminals act through the host, and see what only the host knows.
             this.Sync = new Multiplayer.MultiplayerSync(helper, this.ModManifest.UniqueID, this.Networks, this.Jobs);
             helper.Events.GameLoop.Saving += (_, _) => this.Ledger.CloseDay();
+
+            // Jobs carry on across a reload: written as the game saves, read back when it loads.
+            this.JobStore = new JobStore(helper.Data, this.Jobs, this.MachineRecipes);
+            helper.Events.GameLoop.Saving += (_, _) => this.JobStore.Save();
 
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
@@ -183,6 +190,9 @@ namespace StardewLogistics
             // rather than at startup.
             this.MachineRecipes.Rebuild();
             this.Ledger.Load();
+
+            // Before the scheduler's first pass, or it would take the jobs' buffers for leftovers and empty them.
+            this.JobStore.Load();
         }
 
         /// <summary>Rescans the world each morning and teaches the player any recipes they've earned.</summary>

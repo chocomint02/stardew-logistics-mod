@@ -137,7 +137,7 @@ namespace StardewLogistics.Framework
         ** Accessors
         *********/
         /// <summary>A short identifier, used to mark the machines this job has claimed.</summary>
-        public string Id { get; init; }
+        public string Id { get; set; }
 
         /// <summary>The qualified item ID being made.</summary>
         public string TargetId { get; init; }

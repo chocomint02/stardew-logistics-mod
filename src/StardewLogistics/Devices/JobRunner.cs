@@ -362,12 +362,32 @@ namespace StardewLogistics.Devices
         }
 
         /// <summary>Forgets every job, for when the player leaves the save.</summary>
-        /// <remarks>Their buffers are in the save, and are returned to storage next time it's loaded.</remarks>
+        /// <remarks>They're in the save, with their buffers, and restored next time it's loaded.</remarks>
         public void Reset()
         {
             this.JobList.Clear();
             this.NextJobNumber = 1;
             this.TicksSinceOrphanCheck = 0;
+        }
+
+        /// <summary>The jobs this player runs, for saving: none on a farmhand, whose list is the host's.</summary>
+        public IReadOnlyList<CraftJob> LocalJobs => this.JobList;
+
+        /// <summary>Takes back the jobs a save was left with, numbering them afresh.</summary>
+        /// <remarks>
+        /// Their buffers and machine claims carried over in the save, so from here they carry on as if nothing
+        /// happened: runs finished overnight are collected on the next pass, and new ones start as machines free up.
+        /// </remarks>
+        public void Restore(IEnumerable<CraftJob> jobs)
+        {
+            foreach (CraftJob job in jobs)
+            {
+                job.Id = "J" + this.NextJobNumber++;
+                this.JobList.Add(job);
+            }
+
+            if (this.JobList.Count > 0)
+                Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
         }
 
         /// <summary>Whether a machine claim belongs to a job that's still running.</summary>
@@ -471,9 +491,8 @@ namespace StardewLogistics.Devices
 
         /// <summary>Returns buffers whose job no longer exists to the network they came from.</summary>
         /// <remarks>
-        /// Jobs live only as long as the session, but their buffers are in the save. Loading a save with reserved
-        /// items -- or cancelling a job while storage was full -- leaves a buffer with no job, and this is what
-        /// gives its contents back.
+        /// A job that couldn't be restored from the save, or one cancelled while storage was full, leaves a buffer
+        /// with no job, and this is what gives its contents back.
         /// </remarks>
         private void ReturnOrphanedBuffers()
         {

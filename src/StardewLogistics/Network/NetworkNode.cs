@@ -34,9 +34,12 @@ namespace StardewLogistics.Network
         /// <remarks>For the building there's no placed object: <see cref="NetworkNode.Object"/> is <c>null</c>.</remarks>
         ShippingBin,
 
-        /// <summary>A tapper on a tree, counted in the income forecast.</summary>
-        /// <remarks>Not a <see cref="Machine"/>: the network doesn't collect from it or load it.</remarks>
-        Tapper
+        /// <summary>A producer the game runs with its own code rather than machine rules: a tapper, a crab pot.</summary>
+        /// <remarks>
+        /// Not a <see cref="Machine"/>: collecting one means doing what the game does -- setting the tree producing
+        /// again, rebaiting the pot -- and jobs can't use them.
+        /// </remarks>
+        Producer
     }
 
     /// <summary>A device attached to a storage network.</summary>

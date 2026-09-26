@@ -98,6 +98,9 @@ namespace StardewLogistics.Framework
         /// <summary>Days until the last of those crops is ready.</summary>
         public int HarvestDays { get; set; }
 
+        /// <summary>Other items the step would accept instead of this one, for saying what else would do when it's short.</summary>
+        public List<string> Substitutes { get; set; } = new();
+
         /// <summary>The growing crops this row waits on, which a job reserves.</summary>
         public List<IncomingCrop> Harvests { get; set; } = new();
 
@@ -224,7 +227,7 @@ namespace StardewLogistics.Framework
                 .Select(group =>
                 {
                     PlanNode first = group.First();
-                    string text = $"{group.Sum(node => node.Missing)}x {getName(first.ItemId)}";
+                    string text = $"{group.Sum(node => node.Missing)}x {DescribeWithSubstitutes(first, getName)}";
                     string why = first.Reason switch
                     {
                         MissingReason.NoFreeTiles => "no free automation tiles",
@@ -238,6 +241,17 @@ namespace StardewLogistics.Framework
                 });
 
             return string.Join(", ", parts.Take(max));
+        }
+
+        /// <summary>An item's name with what else would do: "Goat Milk or Milk", "Goat Milk or Milk (+2)".</summary>
+        public static string DescribeWithSubstitutes(PlanNode node, Func<string, string> getName)
+        {
+            string name = getName(node.ItemId);
+            if (node.Substitutes.Count == 0)
+                return name;
+
+            string text = $"{name} or {getName(node.Substitutes[0])}";
+            return node.Substitutes.Count > 1 ? $"{text} (+{node.Substitutes.Count - 1})" : text;
         }
 
         /// <summary>Every step that needs a machine, in the order they'd have to run.</summary>

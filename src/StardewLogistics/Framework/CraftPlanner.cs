@@ -469,8 +469,23 @@ namespace StardewLogistics.Framework
                 }
             }
 
+            // The main inputs the step could have used instead, for a short one to name: Plain Yogurt short of
+            // Goat Milk would do just as well with cow's milk.
+            HashSet<string> chosenInputs = new(assignments.Select(assignment => assignment.Recipe.InputId), StringComparer.OrdinalIgnoreCase);
+            List<string> otherInputs = options
+                .Select(option => option.InputId)
+                .Where(id => id != null && !chosenInputs.Contains(id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(GetPrice)
+                .ToList();
+
             foreach (ItemCost total in totals)
-                AddChild(node, this.Resolve(total.ItemId, total.Count, ledger, inProgress, depth + 1, preferred, plan, total.RequiredQuality));
+            {
+                PlanNode child = this.Resolve(total.ItemId, total.Count, ledger, inProgress, depth + 1, preferred, plan, total.RequiredQuality);
+                if (child.Missing > 0 && chosenInputs.Contains(total.ItemId))
+                    child.Substitutes = otherInputs;
+                AddChild(node, child);
+            }
 
             ledger.Give(itemId, assignments.Sum(assignment => assignment.Output) - remaining);
             return true;
@@ -797,8 +812,8 @@ namespace StardewLogistics.Framework
         /// <summary>Whether an ID names a specific item the planner could go and make.</summary>
         private static bool IsMakeable(string itemId)
         {
-            // Category ingredients come through as bare negative numbers, which aren't items.
-            return !string.IsNullOrWhiteSpace(itemId) && !itemId.StartsWith("-");
+            // Category and tag specs name groups of items; they come from storage or not at all.
+            return !string.IsNullOrWhiteSpace(itemId) && !StockId.IsSpec(itemId);
         }
 
         /// <summary>Normalises a crafting ingredient ID to its qualified form where it names a real item.</summary>
@@ -838,6 +853,9 @@ namespace StardewLogistics.Framework
         {
             private readonly Dictionary<string, SortedDictionary<int, long>> Available = new(StringComparer.OrdinalIgnoreCase);
 
+            /// <summary>An item for each stock ID, to match category and tag specs against.</summary>
+            private readonly Dictionary<string, Item> Samples = new(StringComparer.OrdinalIgnoreCase);
+
             public Ledger(IReadOnlyList<IFilterableEntry> stock)
             {
                 if (stock == null)
@@ -848,6 +866,8 @@ namespace StardewLogistics.Framework
                     string id = StockId.Of(entry.Sample);
                     if (string.IsNullOrEmpty(id))
                         continue;
+
+                    this.Samples.TryAdd(id, entry.Sample);
 
                     SortedDictionary<int, long> bucket = this.Bucket(id);
                     int quality = entry.Sample.Quality;
@@ -959,6 +979,14 @@ namespace StardewLogistics.Framework
             {
                 if (itemId == null)
                     yield break;
+
+                // A spec draws on every item it matches, cheapest first so the valuable ones are kept.
+                if (StockId.IsSpec(itemId))
+                {
+                    foreach (string key in this.Samples.Where(pair => StockId.Matches(pair.Value, itemId)).OrderBy(pair => GetPrice(pair.Key)).Select(pair => pair.Key))
+                        yield return key;
+                    yield break;
+                }
 
                 if (this.Available.ContainsKey(itemId))
                     yield return itemId;

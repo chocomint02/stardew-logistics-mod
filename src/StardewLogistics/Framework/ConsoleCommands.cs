@@ -80,7 +80,7 @@ namespace StardewLogistics.Framework
 
             StringBuilder output = new();
             output.AppendLine($"{matches.Count} processing recipes match, of {this.Machines.Count} known ({this.Machines.SkippedRules} inputs skipped as unpredictable, "
-                + $"{this.Machines.ExternalRequirementSkips} outputs needing another mod's extra ingredients). "
+                + $"{this.Machines.ExternalRequirementSkips} waiting for an extra ingredient to appear in storage). "
                 + "Recipes marked [stock] are listed because their input is in storage here:");
 
             foreach (MachineRecipe recipe in matches.Take(60))
