@@ -36,6 +36,9 @@ namespace StardewLogistics.Framework
         /// <summary>A key that opens the terminal for the network under the cursor, as an alternative to clicking it.</summary>
         public KeybindList OpenTerminalKey { get; set; } = new KeybindList();
 
+        /// <summary>The key that opens the equipped Wireless Terminal, anywhere.</summary>
+        public KeybindList OpenWirelessTerminalKey { get; set; } = KeybindList.Parse("B");
+
         /// <summary>Clamps every setting to a usable range, so a hand-edited config can't break the mod.</summary>
         public void Normalise()
         {
@@ -44,6 +47,7 @@ namespace StardewLogistics.Framework
             this.BusIntervalTicks = Clamp(this.BusIntervalTicks, 6, 3600);
             this.BusItemsPerRun = Clamp(this.BusItemsPerRun, 1, 999);
             this.OpenTerminalKey ??= new KeybindList();
+            this.OpenWirelessTerminalKey ??= KeybindList.Parse("B");
         }
 
         private static int Clamp(int value, int min, int max)

@@ -73,7 +73,10 @@ namespace StardewLogistics.Devices
         ** Accessors
         *********/
         /// <summary>The recorded days, oldest first.</summary>
-        public IReadOnlyList<LedgerDay> Days => this.State.Days;
+        /// <remarks>On a farmhand, the host's ledger as last heard: only the host keeps it.</remarks>
+        public IReadOnlyList<LedgerDay> Days => Multiplayer.MultiplayerSync.IsRemote
+            ? Multiplayer.MultiplayerSync.Instance?.RemoteLedger?.Days ?? new List<LedgerDay>()
+            : this.State.Days;
 
 
         /*********
@@ -161,6 +164,7 @@ namespace StardewLogistics.Devices
                 try
                 {
                     this.Data.WriteSaveData(SaveKey, this.State);
+                    Multiplayer.MultiplayerSync.Instance?.SendLedger();
                 }
                 catch (Exception ex)
                 {

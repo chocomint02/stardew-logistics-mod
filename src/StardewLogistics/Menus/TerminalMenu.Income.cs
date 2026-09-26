@@ -418,7 +418,7 @@ namespace StardewLogistics.Menus
 
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 

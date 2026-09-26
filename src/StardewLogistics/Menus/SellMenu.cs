@@ -52,8 +52,12 @@ namespace StardewLogistics.Menus
         /*********
         ** Public methods
         *********/
-        public SellMenu(StorageNetwork network, NetworkItemStack entry, ITranslationHelper translations, Action onClose)
+        /// <summary>How other players' machines name the network, for a farmhand's request.</summary>
+        private readonly string NetworkReference;
+
+        public SellMenu(StorageNetwork network, NetworkItemStack entry, ITranslationHelper translations, string networkReference, Action onClose)
         {
+            this.NetworkReference = networkReference;
             this.Network = network;
             this.Entry = entry;
             this.Translations = translations;
@@ -298,7 +302,25 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            // A farmhand's shipment is made by the host, into the farmhand's own bin.
+            if (Multiplayer.MultiplayerSync.IsRemote)
+            {
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.ShipRequest
+                {
+                    Network = this.NetworkReference,
+                    ItemId = this.Entry.Key.QualifiedId,
+                    Quality = this.Entry.Key.Quality,
+                    Variant = this.Entry.Key.Variant,
+                    Unique = this.Entry.Key.Unique,
+                    Count = this.Quantity
+                }, Multiplayer.MessageTypes.Ship);
+                Game1.playSound("Ship");
+                this.exitThisMenu();
+                return;
+            }
+
             int shipped = ShippingService.Ship(this.Network, this.Entry, this.Quantity);
+            Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
             if (shipped <= 0)
             {
                 Game1.playSound("cancel");

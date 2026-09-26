@@ -294,7 +294,7 @@ namespace StardewLogistics.Menus
         {
             if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.not-connected"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 
@@ -329,7 +329,7 @@ namespace StardewLogistics.Menus
 
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 
@@ -492,7 +492,7 @@ namespace StardewLogistics.Menus
 
                 if (this.ShowsDustButton(job) && GetDustBounds(grid, grid.Y + (i * rowHeight)).Contains(x, y))
                 {
-                    job.UseFairyDust = !job.UseFairyDust;
+                    this.Jobs.SetFairyDust(job, !job.UseFairyDust);
                     Game1.playSound(job.UseFairyDust ? "yoba" : "smallSelect");
                     return;
                 }

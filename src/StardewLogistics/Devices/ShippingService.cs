@@ -34,8 +34,9 @@ namespace StardewLogistics.Devices
         ** Public methods
         *********/
         /// <summary>The shipping bins a network reaches, the farm's building first.</summary>
-        public static List<ShippingBinSink> GetBins(StorageNetwork network)
+        public static List<ShippingBinSink> GetBins(StorageNetwork network, Farmer who = null)
         {
+            who ??= Game1.player;
             List<ShippingBinSink> bins = new();
             if (network == null)
                 return bins;
@@ -43,9 +44,9 @@ namespace StardewLogistics.Devices
             foreach (NetworkNode node in network.GetNodes(NodeKind.ShippingBin))
             {
                 ShippingBinSink sink = node.Object is Chest mini
-                    ? new ShippingBinSink { Items = mini.GetItemsForPlayer(), Capacity = mini.GetActualCapacity(), IsBuilding = false }
+                    ? new ShippingBinSink { Items = mini.GetItemsForPlayer(who.UniqueMultiplayerID), Capacity = mini.GetActualCapacity(), IsBuilding = false }
                     : Game1.getFarm() is Farm farm
-                        ? new ShippingBinSink { Items = farm.getShippingBin(Game1.player), Capacity = int.MaxValue, IsBuilding = true }
+                        ? new ShippingBinSink { Items = farm.getShippingBin(who), Capacity = int.MaxValue, IsBuilding = true }
                         : null;
 
                 if (sink?.Items != null && !bins.Any(existing => ReferenceEquals(existing.Items, sink.Items)))
@@ -57,12 +58,12 @@ namespace StardewLogistics.Devices
 
         /// <summary>Ships a number of one stored item: takes it from storage and puts it in the bins.</summary>
         /// <returns>How many went into a bin. Anything the bins had no room for stays in storage.</returns>
-        public static int Ship(StorageNetwork network, NetworkItemStack entry, int count)
+        public static int Ship(StorageNetwork network, NetworkItemStack entry, int count, Farmer who = null)
         {
             if (network == null || entry == null || count <= 0 || !Selling.CanSell(entry.Sample))
                 return 0;
 
-            List<ShippingBinSink> bins = GetBins(network);
+            List<ShippingBinSink> bins = GetBins(network, who);
             if (bins.Count == 0)
                 return 0;
 
@@ -94,12 +95,12 @@ namespace StardewLogistics.Devices
 
         /// <summary>Takes an item back out of a bin into storage.</summary>
         /// <returns>How many went back; what storage has no room for stays in the bin.</returns>
-        public static int Return(StorageNetwork network, Item item)
+        public static int Return(StorageNetwork network, Item item, Farmer who = null)
         {
             if (network == null || item == null)
                 return 0;
 
-            foreach (ShippingBinSink bin in GetBins(network))
+            foreach (ShippingBinSink bin in GetBins(network, who))
             {
                 int index = bin.Items.IndexOf(item);
                 if (index < 0)
@@ -118,9 +119,9 @@ namespace StardewLogistics.Devices
         }
 
         /// <summary>Everything waiting in a network's bins.</summary>
-        public static List<Item> GetContents(StorageNetwork network)
+        public static List<Item> GetContents(StorageNetwork network, Farmer who = null)
         {
-            return GetBins(network).SelectMany(bin => bin.Items).Where(item => item != null).ToList();
+            return GetBins(network, who).SelectMany(bin => bin.Items).Where(item => item != null).ToList();
         }
 
 

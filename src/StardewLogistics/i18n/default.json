@@ -374,5 +374,22 @@
   "income.before-start": "Before Spring 1, Y1",
   "income.scale-linear": "Scale: Linear",
   "income.scale-log": "Scale: Log",
-  "income.scale-hint": "Switch the gold axis between linear and logarithmic. Log keeps small days visible beside large ones."
+  "income.scale-hint": "Switch the gold axis between linear and logarithmic. Log keeps small days visible beside large ones.",
+  "item.wireless-terminal.name": "Wireless Terminal",
+  "item.wireless-terminal.description": "A handheld crafting terminal. Equip it in its accessory slot, tune it to a transmitter's channel, and open it anywhere with its hotkey.",
+  "config.wireless-key.name": "Wireless terminal key",
+  "config.wireless-key.tooltip": "Opens the equipped Wireless Terminal from anywhere.",
+  "accessory.empty": "Wireless Terminal slot. Place a Wireless Terminal here to open it anywhere with {{key}}.",
+  "accessory.equipped": "Equipped. Press {{key}} to open. Channel {{channel}}.",
+  "accessory.wrong-item": "Only a Wireless Terminal fits this slot.",
+  "wireless-terminal.none": "No Wireless Terminal equipped. Place one in the Terminal slot of your inventory.",
+  "wireless-terminal.channel": "Channel",
+  "wireless-terminal.linked": "Linked through the transmitter at {{location}} ({{x}}, {{y}}).",
+  "wireless-terminal.unlinked": "No transmitter on channel {{channel}}.",
+  "wireless-terminal.channel-hint": "Tune to the channel of a Wireless Transmitter. Shift: 10 at a time.",
+  "error.no-wireless-link": "No network on channel {{channel}}. Tune this terminal on the Network tab.",
+  "mp.queued": "Queued {{count}}x {{name}} on the host.",
+  "mp.request-failed": "The host couldn't do that: {{reason}}",
+  "mp.inventory-full": "Your bag is full. {{count}} items were dropped at your feet.",
+  "error.network-empty": "The network no longer has that item."
 }

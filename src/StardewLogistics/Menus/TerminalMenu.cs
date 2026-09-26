@@ -88,6 +88,28 @@ namespace StardewLogistics.Menus
 
         private StorageNetwork Network;
         private List<NetworkItemStack> AllStock = new();
+
+        /// <summary>The Wireless Terminal this menu was opened from, or <c>null</c> for a placed terminal.</summary>
+        private readonly Item WirelessTerminal;
+
+        /// <summary>The network revision last shown, so a change anywhere refreshes the menu straight away.</summary>
+        private int LastRevision = -1;
+
+        /// <summary>Whether this is a Wireless Terminal, which reaches its network by channel rather than cable.</summary>
+        private bool IsWireless => this.WirelessTerminal != null;
+
+        /// <summary>The Wireless Terminal's channel.</summary>
+        private int WirelessChannel => NetworkNode.GetChannel(this.WirelessTerminal as StardewValley.Object);
+
+        /// <summary>How other players' machines name this menu's network: its tile, or its channel.</summary>
+        private string NetworkReference => this.IsWireless
+            ? Multiplayer.NetworkRef.ForChannel(this.WirelessChannel)
+            : Multiplayer.NetworkRef.ForTile(this.TerminalLocation, this.TerminalTile);
+
+        /// <summary>What to say when there's no network: no cable, or nothing on the channel.</summary>
+        private string NotConnectedText => this.IsWireless
+            ? this.Translations.Get("error.no-wireless-link", new { channel = this.WirelessChannel })
+            : this.Translations.Get("error.not-connected");
         private List<NetworkItemStack> VisibleStock = new();
 
         private readonly InventoryMenu PlayerInventory;
@@ -136,8 +158,10 @@ namespace StardewLogistics.Menus
         /// <param name="location">The location holding the terminal.</param>
         /// <param name="tile">The tile the terminal occupies.</param>
         /// <param name="canCraft">Whether this terminal offers the crafting page.</param>
-        public TerminalMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 tile, bool canCraft, MachineRecipeIndex machineRecipes, JobRunner jobs, ModConfig config)
+        /// <param name="wirelessTerminal">The Wireless Terminal the menu was opened from, if it wasn't a placed one.</param>
+        public TerminalMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 tile, bool canCraft, MachineRecipeIndex machineRecipes, JobRunner jobs, ModConfig config, Item wirelessTerminal = null)
         {
+            this.WirelessTerminal = wirelessTerminal;
             this.Networks = networks;
             this.MachineRecipes = machineRecipes;
             this.Jobs = jobs;
@@ -193,6 +217,16 @@ namespace StardewLogistics.Menus
                 this.Filter.SetSearch(this.SearchBox.Text);
                 this.ScrollOffset = 0;
                 this.ApplyFilterAndSort();
+            }
+
+            // Another player changed a network, or the host sent news: show it now rather than on the next poll.
+            if (Multiplayer.MultiplayerSync.Revision != this.LastRevision)
+            {
+                this.LastRevision = Multiplayer.MultiplayerSync.Revision;
+                this.StockRowsCache = null;
+                this.FarmRowsCache = null;
+                this.SummaryCache = null;
+                this.RefreshCounter = 30;
             }
 
             // The network is live: chests can be filled by buses, farmhands or other mods while the menu is open.
@@ -561,7 +595,7 @@ namespace StardewLogistics.Menus
         {
             base.gameWindowSizeChanged(oldBounds, newBounds);
             this.ReleaseKeyboard();
-            Game1.activeClickableMenu = new TerminalMenu(this.Networks, this.Translations, this.TerminalLocation, this.TerminalTile, this.CanCraft, this.MachineRecipes, this.Jobs, this.Config);
+            Game1.activeClickableMenu = new TerminalMenu(this.Networks, this.Translations, this.TerminalLocation, this.TerminalTile, this.CanCraft, this.MachineRecipes, this.Jobs, this.Config, this.WirelessTerminal);
         }
 
         /// <inheritdoc />
@@ -852,7 +886,14 @@ namespace StardewLogistics.Menus
         /// <summary>Re-resolves the network and rebuilds the item list.</summary>
         private void RefreshStock()
         {
-            this.Network = this.Networks.GetNetworkAt(this.TerminalLocation, this.TerminalTile);
+            this.Network = this.IsWireless
+                ? Multiplayer.NetworkRef.GetNetworkOnChannel(this.Networks, this.WirelessChannel, out _)
+                : this.Networks.GetNetworkAt(this.TerminalLocation, this.TerminalTile);
+
+            // A farmhand's requests name this network, and the host sends their deposits to it.
+            string reference = this.NetworkReference;
+            this.Jobs.RemoteRef = _ => reference;
+            Multiplayer.MultiplayerSync.SetActiveNetwork(reference);
             this.AllStock = this.Network?.Aggregate() ?? new List<NetworkItemStack>();
             this.RefreshConfigRows();
             this.RefreshRecipes();
@@ -954,7 +995,7 @@ namespace StardewLogistics.Menus
         {
             if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.not-connected"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 
@@ -968,6 +1009,21 @@ namespace StardewLogistics.Menus
             int count = (int)Math.Min(Math.Min((long)requested, entry.Count), space);
             if (count <= 0)
                 return;
+
+            // A farmhand's items come from the host, into their mailbox and then their bag.
+            if (Multiplayer.MultiplayerSync.IsRemote)
+            {
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.WithdrawRequest
+                {
+                    Network = this.NetworkReference,
+                    ItemId = entry.Key.QualifiedId,
+                    Quality = entry.Key.Quality,
+                    Variant = entry.Key.Variant,
+                    Unique = entry.Key.Unique,
+                    Count = count
+                }, Multiplayer.MessageTypes.Withdraw);
+                return;
+            }
 
             List<Item> withdrawn = this.Network.ExtractMerged(entry.Key, entry.Sample, count);
             int returned = 0;
@@ -985,6 +1041,7 @@ namespace StardewLogistics.Menus
             if (returned > 0)
                 this.ShowError(this.Translations.Get("error.inventory-full"));
 
+            Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
             this.RefreshStock();
         }
 
@@ -996,7 +1053,7 @@ namespace StardewLogistics.Menus
         {
             if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.not-connected"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 
@@ -1008,7 +1065,7 @@ namespace StardewLogistics.Menus
             if (singleItem)
             {
                 Item one = item.getOne();
-                moved = this.Network.Insert(one);
+                moved = this.Store(one);
                 if (moved > 0)
                 {
                     item.Stack -= moved;
@@ -1036,10 +1093,27 @@ namespace StardewLogistics.Menus
             if (moved > 0)
             {
                 Game1.playSound("Ship");
+                Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
                 this.RefreshStock();
             }
             else
                 this.ShowError(this.Translations.Get("error.network-full"));
+        }
+
+        /// <summary>Stores an item: into the network, or for a farmhand, sent to the host to store.</summary>
+        /// <returns>How many were stored or sent.</returns>
+        private int Store(Item item)
+        {
+            if (!Multiplayer.MultiplayerSync.IsRemote)
+                return this.Network.Insert(item);
+
+            // Sent whole: the host stores it, and returns anything the network has no room for.
+            Item sent = item.getOne();
+            sent.Stack = item.Stack;
+            int moved = item.Stack;
+            item.Stack = 0;
+            Multiplayer.MultiplayerSync.Instance?.Deposit(sent);
+            return moved;
         }
 
         /// <summary>Sends every item in one inventory slot to the network.</summary>
@@ -1050,7 +1124,7 @@ namespace StardewLogistics.Menus
             if (item == null)
                 return 0;
 
-            int moved = this.Network.Insert(item);
+            int moved = this.Store(item);
             if (item.Stack <= 0)
                 Game1.player.Items[slot] = null;
 
@@ -1062,7 +1136,7 @@ namespace StardewLogistics.Menus
         {
             if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.not-connected"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 
@@ -1082,6 +1156,7 @@ namespace StardewLogistics.Menus
             if (moved > 0)
             {
                 Game1.playSound("Ship");
+                Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
                 this.RefreshStock();
             }
         }

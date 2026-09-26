@@ -74,7 +74,7 @@ namespace StardewLogistics.Menus
             Rectangle grid = this.GetGridBounds();
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 

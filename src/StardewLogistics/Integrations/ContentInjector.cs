@@ -29,7 +29,8 @@ namespace StardewLogistics.Integrations
             ["Crafting Terminal"] = (StardewValley.Farmer.miningSkill, 8),
             ["Wireless Transmitter"] = (StardewValley.Farmer.miningSkill, 7),
             ["Wireless Receiver"] = (StardewValley.Farmer.miningSkill, 7),
-            ["Auto-Harvester"] = (StardewValley.Farmer.farmingSkill, 6)
+            ["Auto-Harvester"] = (StardewValley.Farmer.farmingSkill, 6),
+            ["Wireless Terminal"] = (StardewValley.Farmer.miningSkill, 9)
         };
 
 
@@ -76,6 +77,26 @@ namespace StardewLogistics.Integrations
                 CanBeTrashed = true,
                 ExcludeFromRandomSale = true,
                 ContextTags = new List<string> { "logistics_device", "floor_item" },
+                CustomFields = new Dictionary<string, string>()
+            };
+
+            // The handheld terminal: worn in its accessory slot, not placed.
+            data[ModIds.WirelessTerminal] = new ObjectData
+            {
+                Name = ModIds.WirelessTerminal,
+                DisplayName = this.Name("wireless-terminal"),
+                Description = this.Translations.Get("item.wireless-terminal.description"),
+                Type = "Crafting",
+                Category = 0,
+                Price = 2500,
+                Texture = ModIds.ItemsTexture,
+                SpriteIndex = 0,
+                Edibility = -300,
+                CanBeGivenAsGift = false,
+                CanBeTrashed = true,
+                ExcludeFromRandomSale = true,
+                ExcludeFromShippingCollection = true,
+                ContextTags = new List<string> { "logistics_device", "not_placeable" },
                 CustomFields = new Dictionary<string, string>()
             };
         }
@@ -129,6 +150,9 @@ namespace StardewLogistics.Integrations
 
             // 621 quality sprinkler: the harvester waters, so it's built around one.
             data["Auto-Harvester"] = $"335 5 336 2 621 1 787 1/Home/{ModIds.AutoHarvester} 1/true/null/{this.Name("auto-harvester")}";
+
+            // 337 iridium bar: the handheld reaches a network from anywhere, so it's the dearest to build.
+            data["Wireless Terminal"] = $"337 2 787 2 338 5/Home/{ModIds.WirelessTerminal} 1/false/null/{this.Name("wireless-terminal")}";
         }
 
 

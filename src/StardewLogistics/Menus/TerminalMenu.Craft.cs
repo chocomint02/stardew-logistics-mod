@@ -102,13 +102,27 @@ namespace StardewLogistics.Menus
         {
             if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.not-connected"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 
             if (!entry.CanCraft)
             {
                 this.ShowError(this.Translations.Get("error.missing-ingredients"));
+                return;
+            }
+
+            // A farmhand's craft is made by the host, from the network, into the network.
+            if (Multiplayer.MultiplayerSync.IsRemote)
+            {
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.CraftRequest
+                {
+                    Network = this.NetworkReference,
+                    Recipe = entry.Recipe.name,
+                    Cooking = entry.Recipe.isCookingRecipe,
+                    Times = times
+                }, Multiplayer.MessageTypes.Craft);
+                Game1.playSound("coin");
                 return;
             }
 
@@ -134,6 +148,7 @@ namespace StardewLogistics.Menus
             {
                 Game1.playSound("coin");
                 Game1.stats.checkForCraftingAchievements();
+                Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
                 this.RefreshStock();
             }
             else
@@ -196,7 +211,7 @@ namespace StardewLogistics.Menus
 
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 
@@ -262,7 +277,7 @@ namespace StardewLogistics.Menus
         {
             if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.not-connected"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 

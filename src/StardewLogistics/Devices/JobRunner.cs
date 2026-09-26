@@ -68,7 +68,10 @@ namespace StardewLogistics.Devices
         ** Accessors
         *********/
         /// <summary>Every job, finished ones included until they're cleared.</summary>
-        public IReadOnlyList<CraftJob> Jobs => this.JobList;
+        /// <remarks>On a farmhand, the host's jobs as last heard: only the host runs them.</remarks>
+        public IReadOnlyList<CraftJob> Jobs => Multiplayer.MultiplayerSync.IsRemote
+            ? Multiplayer.MultiplayerSync.Instance?.RemoteJobs ?? new List<CraftJob>()
+            : this.JobList;
 
 
         /*********
@@ -96,6 +99,23 @@ namespace StardewLogistics.Devices
         public CraftJob TryQueue(string targetId, int count, StorageNetwork network, int maxMachines, IReadOnlyDictionary<string, string> preferredMachines, out string error, int targetQuality = Quality.Any, bool useFairyDust = false, string fertilizerId = null, string ruleKey = null)
         {
             error = null;
+
+            // A farmhand's order is the host's to plan and run. The job appears once the host has queued it.
+            if (Multiplayer.MultiplayerSync.IsRemote && network != null)
+            {
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.QueueRequest
+                {
+                    Network = this.RemoteRef?.Invoke(network),
+                    TargetId = targetId,
+                    Count = count,
+                    MaxMachines = maxMachines,
+                    Preferred = preferredMachines?.ToDictionary(pair => pair.Key, pair => pair.Value) ?? new Dictionary<string, string>(),
+                    Quality = targetQuality,
+                    FairyDust = useFairyDust,
+                    Fertilizer = fertilizerId
+                }, Multiplayer.MessageTypes.Queue);
+                return new CraftJob { Id = "?", TargetId = targetId, TargetCount = count, DisplayName = GetName(targetId) };
+            }
 
             if (network == null)
             {
@@ -171,6 +191,7 @@ namespace StardewLogistics.Devices
 
             job.Status = JobStatus.Pending;
             this.JobList.Add(job);
+            Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
             Log.Debug($"Queued {job.Id}: {count}x {job.DisplayName} in {job.Steps.Count} steps.");
 
             // Start straight away rather than on the next tick, so the fruit is in the keg before the player
@@ -231,6 +252,9 @@ namespace StardewLogistics.Devices
         /// <summary>Stops a job and releases any machines it holds.</summary>
         public bool Cancel(string jobId)
         {
+            if (this.SendJobRequest(jobId, "cancel"))
+                return true;
+
             CraftJob job = this.JobList.FirstOrDefault(candidate => string.Equals(candidate.Id, jobId, StringComparison.OrdinalIgnoreCase));
             if (job == null || job.Status is JobStatus.Complete or JobStatus.Cancelled)
                 return false;
@@ -298,9 +322,37 @@ namespace StardewLogistics.Devices
         /// <summary>Removes one finished job from the list.</summary>
         public bool Dismiss(string jobId)
         {
+            if (this.SendJobRequest(jobId, "dismiss"))
+                return true;
+
             return this.JobList.RemoveAll(job =>
                 string.Equals(job.Id, jobId, StringComparison.OrdinalIgnoreCase)
                 && job.Status is JobStatus.Complete or JobStatus.Cancelled) > 0;
+        }
+
+        /// <summary>Switches Fairy Dust on or off for a job.</summary>
+        public void SetFairyDust(CraftJob job, bool use)
+        {
+            job.UseFairyDust = use;
+            if (Multiplayer.MultiplayerSync.IsRemote)
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.JobRequest { Token = job.Token, Action = "dust", Value = use }, Multiplayer.MessageTypes.Job);
+        }
+
+        /// <summary>Resolves the reference a farmhand's request names a network by.</summary>
+        /// <remarks>Set by the terminal that's open, which knows whether it's placed or wireless.</remarks>
+        public Func<StorageNetwork, string> RemoteRef { get; set; }
+
+        /// <summary>Sends a job action to the host, as a farmhand.</summary>
+        /// <returns>Whether it was sent, in which case there's nothing to do here.</returns>
+        private bool SendJobRequest(string jobId, string action)
+        {
+            if (!Multiplayer.MultiplayerSync.IsRemote)
+                return false;
+
+            CraftJob job = this.Jobs.FirstOrDefault(candidate => string.Equals(candidate.Id, jobId, StringComparison.OrdinalIgnoreCase));
+            if (job != null)
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.JobRequest { Token = job.Token, Action = action }, Multiplayer.MessageTypes.Job);
+            return true;
         }
 
         /// <summary>Removes finished and cancelled jobs from the list.</summary>
@@ -641,7 +693,7 @@ namespace StardewLogistics.Devices
         /// <summary>The job that has reserved a growing crop, or a tile to plant on, if one has.</summary>
         public CraftJob GetReservation(GameLocation location, Microsoft.Xna.Framework.Vector2 tile)
         {
-            return this.JobList.FirstOrDefault(job =>
+            return this.Jobs.FirstOrDefault(job =>
                 job.Status is not (JobStatus.Complete or JobStatus.Cancelled)
                 && (job.CropReservations.Any(crop => crop.Location == location && crop.Tile == tile)
                     || job.Plantings.Any(planting => planting.Location == location && planting.Tile == tile)));

@@ -190,7 +190,7 @@ namespace StardewLogistics.Menus
 
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 
@@ -478,9 +478,16 @@ namespace StardewLogistics.Menus
         {
             Rectangle grid = this.GetGridBounds();
 
+            // A Wireless Terminal is tuned here: its channel, and whether anything's broadcasting on it.
+            if (this.IsWireless)
+            {
+                this.DrawChannelControl(b, grid);
+                grid = new Rectangle(grid.X, grid.Y + 104, grid.Width, grid.Height - 104);
+            }
+
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 
@@ -519,12 +526,72 @@ namespace StardewLogistics.Menus
         }
 
 
+        /// <summary>The Wireless Terminal's channel buttons.</summary>
+        private (Rectangle Minus, Rectangle Plus) GetChannelButtons()
+        {
+            Rectangle grid = this.GetGridBounds();
+            int labelWidth = (int)Game1.smallFont.MeasureString(this.Translations.Get("wireless-terminal.channel")).X + 24;
+            Rectangle minus = new(grid.X + 16 + labelWidth, grid.Y + 8, 44, 44);
+            return (minus, new Rectangle(minus.Right + 90, minus.Y, 44, 44));
+        }
+
+        /// <summary>Draws the Wireless Terminal's channel and link.</summary>
+        private void DrawChannelControl(SpriteBatch b, Rectangle grid)
+        {
+            (Rectangle minus, Rectangle plus) = this.GetChannelButtons();
+            Utility.drawTextWithShadow(b, this.Translations.Get("wireless-terminal.channel"), Game1.smallFont, new Vector2(grid.X + 16, minus.Y + 10), Game1.textColor);
+
+            foreach ((Rectangle bounds, string label) in new[] { (minus, "-"), (plus, "+") })
+            {
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
+                Vector2 size = Game1.smallFont.MeasureString(label);
+                Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
+            }
+
+            string channel = this.WirelessChannel.ToString();
+            Vector2 channelSize = Game1.smallFont.MeasureString(channel);
+            Utility.drawTextWithShadow(b, channel, Game1.smallFont, new Vector2(((minus.Right + plus.X) / 2) - (channelSize.X / 2), minus.Y + 10), Game1.textColor);
+
+            Multiplayer.NetworkRef.GetNetworkOnChannel(this.Networks, this.WirelessChannel, out NetworkNode transmitter);
+            string status = transmitter != null
+                ? this.Translations.Get("wireless-terminal.linked", new { location = transmitter.Location?.GetDisplayName() ?? transmitter.Location?.Name, x = (int)transmitter.Tile.X, y = (int)transmitter.Tile.Y })
+                : this.Translations.Get("wireless-terminal.unlinked", new { channel = this.WirelessChannel });
+            Marquee.DrawWrapped(b, status, Game1.smallFont, new Vector2(grid.X + 16, minus.Bottom + 12), grid.Width - 32, transmitter != null ? new Color(40, 120, 40) : Color.Firebrick, maxLines: 1);
+        }
+
+        /// <summary>Handles a click on the Wireless Terminal's channel buttons.</summary>
+        /// <returns>Whether the click was on them.</returns>
+        private bool ReceiveClickOnChannel(int x, int y)
+        {
+            if (!this.IsWireless)
+                return false;
+
+            (Rectangle minus, Rectangle plus) = this.GetChannelButtons();
+            if (!minus.Contains(x, y) && !plus.Contains(x, y))
+                return false;
+
+            int step = (IsShiftDown() ? 10 : 1) * (plus.Contains(x, y) ? 1 : -1);
+            int channel = Math.Clamp(this.WirelessChannel + step, NetworkNode.MinChannel, NetworkNode.MaxChannel);
+            NetworkNode.SetChannel(this.WirelessTerminal as StardewValley.Object, channel);
+
+            this.StockRowsCache = null;
+            this.FarmRowsCache = null;
+            this.SummaryCache = null;
+            this.RefreshStock();
+            Game1.playSound("drumkit6");
+            return true;
+        }
+
+
         /*********
         ** Private methods: input on the non-item tabs
         *********/
         /// <summary>Handles a click while the Storage or Network tab is showing.</summary>
         private void ReceiveClickOnTab(int x, int y, bool rightClick)
         {
+            if (this.Tab == TerminalTab.Network && !rightClick && this.ReceiveClickOnChannel(x, y))
+                return;
+
             if (this.Tab != TerminalTab.Storage)
                 return;
 
@@ -612,6 +679,16 @@ namespace StardewLogistics.Menus
         /// <summary>Sets the hover text while the Storage or Network tab is showing.</summary>
         private void PerformHoverOnTab(int x, int y)
         {
+            if (this.Tab == TerminalTab.Network && this.IsWireless)
+            {
+                (Rectangle minus, Rectangle plus) = this.GetChannelButtons();
+                if (minus.Contains(x, y) || plus.Contains(x, y))
+                {
+                    this.HoverText = this.Translations.Get("wireless-terminal.channel-hint");
+                    return;
+                }
+            }
+
             if (this.Tab != TerminalTab.Storage)
                 return;
 

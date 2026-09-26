@@ -29,6 +29,9 @@ namespace StardewLogistics.Framework
         /// <summary>Joins its network to a live channel's.</summary>
         public const string WirelessReceiver = ModId + "_WirelessReceiver";
 
+        /// <summary>The handheld terminal, worn in its own accessory slot and opened with a hotkey anywhere.</summary>
+        public const string WirelessTerminal = ModId + "_WirelessTerminal";
+
         /// <summary>Tills, plants, waters and harvests an area, drawing seeds from and sending crops to the network.</summary>
         public const string AutoHarvester = ModId + "_AutoHarvester";
 
@@ -43,6 +46,20 @@ namespace StardewLogistics.Framework
 
         /// <summary>The terminal's own UI icons, drawn rather than cropped out of the game's shared cursor sheet.</summary>
         public const string UiIconsTexture = ModId + "/UiIcons";
+
+        /// <summary>The spritesheet for the mod's 16x16 objects.</summary>
+        public const string ItemsTexture = ModId + "/Items";
+
+        /// <summary>The global inventory holding a player's equipped Wireless Terminal, by player ID.</summary>
+        public const string AccessoryInventoryPrefix = ModId + "/accessory/";
+
+        /// <summary>Global inventories that carry items between a farmhand and the host's network, by player ID.</summary>
+        /// <remarks>The host puts what a farmhand withdrew in their mailbox; the farmhand puts what they deposit in their outbox.</remarks>
+        public const string MailboxPrefix = ModId + "/mailbox/";
+        public const string OutboxPrefix = ModId + "/outbox/";
+
+        /// <summary>The network a player's open terminal is using, on the player, so the host knows where deposits go.</summary>
+        public const string TerminalRefKey = ModId + "/terminal-ref";
 
         /*********
         ** modData keys

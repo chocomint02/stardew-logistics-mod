@@ -43,7 +43,12 @@ namespace StardewLogistics.Devices
         private List<(GameLocation Location, Vector2 Tile)> Terminals;
 
         /// <summary>Why each rule last failed, by rule key.</summary>
-        private readonly Dictionary<string, string> Errors = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> ErrorsByRule = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Why each rule last failed, by rule key; on a farmhand, as the host last said.</summary>
+        public IReadOnlyDictionary<string, string> Errors => Multiplayer.MultiplayerSync.IsRemote
+            ? Multiplayer.MultiplayerSync.Instance?.RemoteRuleErrors ?? new Dictionary<string, string>()
+            : this.ErrorsByRule;
 
         /// <summary>When each failed rule may be tried again, as <see cref="Now"/>.</summary>
         private readonly Dictionary<string, int> RetryAt = new(StringComparer.OrdinalIgnoreCase);
@@ -69,7 +74,7 @@ namespace StardewLogistics.Devices
         public void Reset()
         {
             this.Terminals = null;
-            this.Errors.Clear();
+            this.ErrorsByRule.Clear();
             this.RetryAt.Clear();
             this.Warned.Clear();
         }
@@ -128,7 +133,7 @@ namespace StardewLogistics.Devices
                 return rules;
 
             HashSet<string> keys = new(StringComparer.OrdinalIgnoreCase);
-            foreach (NetworkNode terminal in network.Terminals)
+            foreach (NetworkNode terminal in network.Nodes.Where(node => node.IsTerminal || node.Kind == NodeKind.WirelessTransmitter))
             {
                 foreach (StockRule rule in StockRule.Read(terminal.Object))
                 {
@@ -161,11 +166,31 @@ namespace StardewLogistics.Devices
             if (network == null || rule?.ItemId == null)
                 return;
 
+            // A farmhand's rule is set by the host, which then checks it.
+            if (Multiplayer.MultiplayerSync.IsRemote)
+            {
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.RuleRequest
+                {
+                    Network = this.Jobs.RemoteRef?.Invoke(network),
+                    ItemId = rule.ItemId,
+                    Quality = rule.Quality,
+                    Target = rule.Target,
+                    FairyDust = rule.UseFairyDust,
+                    Fertilizer = rule.FertilizerId,
+                    MaxMachines = rule.MaxMachines,
+                    Replacing = replacing
+                }, Multiplayer.MessageTypes.Rule);
+                return;
+            }
+
             if (replacing != null && !string.Equals(replacing, rule.Key, StringComparison.OrdinalIgnoreCase))
                 this.RemoveRule(network, replacing);
 
-            // Changed where it's kept, if a terminal on the network already has it; otherwise kept here.
-            SObject holder = network.Terminals.Select(node => node.Object).FirstOrDefault(terminal => StockRule.Read(terminal).Any(existing => existing.Key == rule.Key)) ?? home;
+            // Changed where it's kept, if a device on the network already has it; otherwise kept here -- or, from a
+            // Wireless Terminal, which isn't placed, on the network's first terminal or transmitter.
+            SObject holder = RuleHolders(network).FirstOrDefault(terminal => StockRule.Read(terminal).Any(existing => existing.Key == rule.Key))
+                ?? home
+                ?? RuleHolders(network).FirstOrDefault();
             if (holder == null)
                 return;
 
@@ -174,7 +199,7 @@ namespace StardewLogistics.Devices
             rules.Add(rule);
             StockRule.Write(holder, rules);
 
-            this.Errors.Remove(rule.Key);
+            this.ErrorsByRule.Remove(rule.Key);
             this.RetryAt.Remove(rule.Key);
             this.Warned.Remove(rule.Key);
             this.Invalidate();
@@ -189,14 +214,20 @@ namespace StardewLogistics.Devices
             if (network == null || key == null)
                 return;
 
-            foreach (SObject terminal in network.Terminals.Select(node => node.Object))
+            if (Multiplayer.MultiplayerSync.IsRemote)
+            {
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.RuleRequest { Network = this.Jobs.RemoteRef?.Invoke(network), RemoveKey = key }, Multiplayer.MessageTypes.Rule);
+                return;
+            }
+
+            foreach (SObject terminal in RuleHolders(network))
             {
                 List<StockRule> rules = StockRule.Read(terminal);
                 if (rules.RemoveAll(rule => rule.Key == key) > 0)
                     StockRule.Write(terminal, rules);
             }
 
-            this.Errors.Remove(key);
+            this.ErrorsByRule.Remove(key);
             this.RetryAt.Remove(key);
         }
 
@@ -204,6 +235,15 @@ namespace StardewLogistics.Devices
         /*********
         ** Private methods
         *********/
+        /// <summary>The devices on a network that can hold rules: its terminals, then its transmitters.</summary>
+        private static IEnumerable<SObject> RuleHolders(StorageNetwork network)
+        {
+            return network.Nodes
+                .Where(node => node.Object != null && (node.IsTerminal || node.Kind == NodeKind.WirelessTransmitter))
+                .OrderBy(node => node.IsTerminal ? 0 : 1)
+                .Select(node => node.Object);
+        }
+
         /// <summary>Queues a job for one rule if storage has dropped below it.</summary>
         private void CheckRule(StockRule rule, StorageNetwork network)
         {
@@ -212,7 +252,7 @@ namespace StardewLogistics.Devices
             long deficit = rule.Target - have - coming;
             if (deficit <= 0)
             {
-                this.Errors.Remove(rule.Key);
+                this.ErrorsByRule.Remove(rule.Key);
                 return;
             }
 
@@ -249,13 +289,13 @@ namespace StardewLogistics.Devices
 
             if (job != null)
             {
-                this.Errors.Remove(rule.Key);
+                this.ErrorsByRule.Remove(rule.Key);
                 this.RetryAt.Remove(rule.Key);
                 Log.Debug($"Stock rule for {job.DisplayName}: {have} stored, {coming} coming, queued {job.Id} for {count} more.");
                 return;
             }
 
-            this.Errors[rule.Key] = error;
+            this.ErrorsByRule[rule.Key] = error;
             this.RetryAt[rule.Key] = Now() + 100;
             Log.Trace($"Stock rule for {StockId.GetDisplayName(rule.ItemId)}: {have} of {rule.Target} stored, and no more can be made ({error}). Trying again in an hour.");
 
@@ -296,7 +336,7 @@ namespace StardewLogistics.Devices
             {
                 foreach ((Vector2 tile, SObject obj) in location.Objects.Pairs)
                 {
-                    if (obj != null && NetworkNode.GetKind(obj.ItemId) is NodeKind.Terminal or NodeKind.CraftingTerminal)
+                    if (obj != null && NetworkNode.GetKind(obj.ItemId) is NodeKind.Terminal or NodeKind.CraftingTerminal or NodeKind.WirelessTransmitter)
                         found.Add((location, tile));
                 }
                 return true;

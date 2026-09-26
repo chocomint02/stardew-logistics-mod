@@ -217,11 +217,20 @@ namespace StardewLogistics.Framework
         /// <summary>Whether a minimum-stock rule queued this job, rather than the player.</summary>
         public bool FromStockRule => this.RuleKey != null;
 
+        /// <summary>The host's figure for how far through the job is, on a farmhand, who has no steps to work it out from.</summary>
+        public double? RemoteProgress { get; set; }
+
+        /// <summary>The host's estimate of the minutes left, on a farmhand.</summary>
+        public int? RemoteEta { get; set; }
+
         /// <summary>How far through the job is, from zero to one.</summary>
         public double Progress
         {
             get
             {
+                if (this.RemoteProgress.HasValue)
+                    return this.RemoteProgress.Value;
+
                 int total = this.Steps.Sum(step => step.TotalBatches);
                 if (total <= 0)
                     return this.Status == JobStatus.Complete ? 1 : 0;
@@ -245,6 +254,9 @@ namespace StardewLogistics.Framework
         {
             get
             {
+                if (this.RemoteEta.HasValue)
+                    return this.RemoteEta.Value;
+
                 int total = 0;
 
                 foreach (JobStep step in this.Steps)

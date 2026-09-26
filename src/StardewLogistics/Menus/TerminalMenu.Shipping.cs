@@ -139,6 +139,16 @@ namespace StardewLogistics.Menus
             {
                 Item item = this.GetShippingSummary().BinItems[index];
                 string name = item.DisplayName;
+
+                // A farmhand's bin is emptied by the host.
+                if (Multiplayer.MultiplayerSync.IsRemote)
+                {
+                    ItemKey key = ItemKey.From(item);
+                    Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.ShipRequest { Network = this.NetworkReference, ItemId = key.QualifiedId, Quality = key.Quality, Variant = key.Variant }, Multiplayer.MessageTypes.Return);
+                    Game1.playSound("coin");
+                    return;
+                }
+
                 int moved = ShippingService.Return(this.Network, item);
                 this.SummaryCache = null;
                 if (moved > 0)
@@ -160,7 +170,7 @@ namespace StardewLogistics.Menus
             this.ReleaseKeyboard();
             TerminalMenu terminal = this;
             Game1.playSound("bigSelect");
-            Game1.activeClickableMenu = new SellMenu(this.Network, entry, this.Translations, () =>
+            Game1.activeClickableMenu = new SellMenu(this.Network, entry, this.Translations, this.NetworkReference, () =>
             {
                 terminal.SummaryCache = null;
                 terminal.RefreshStock();
@@ -215,7 +225,7 @@ namespace StardewLogistics.Menus
             Rectangle grid = this.GetGridBounds();
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 

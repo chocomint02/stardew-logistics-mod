@@ -35,6 +35,7 @@ namespace StardewLogistics
         private HarvesterRunner Harvesters;
         private StockKeeper Stock;
         private ShippingLedger Ledger;
+        private Multiplayer.MultiplayerSync Sync;
 
 
         /*********
@@ -61,6 +62,7 @@ namespace StardewLogistics
             CaskPatches.Apply(harmony, this.Jobs.ReclaimFromCask);
             this.Harvesters = new HarvesterRunner(this.Networks, helper.Translation);
             SoilPatches.Apply(harmony, this.Harvesters.IsProtected);
+            AccessorySlot.Apply(harmony, helper.Translation, () => this.Config.OpenWirelessTerminalKey.ToString());
 
             // Growing crops feed autocrafting, and reserved ones go to their job when harvested.
             this.Jobs.Forecast = this.Harvesters.Forecast;
@@ -84,6 +86,9 @@ namespace StardewLogistics
             // The history of what each day earned.
             this.Ledger = new ShippingLedger(helper.Data);
             this.Jobs.Ledger = this.Ledger;
+
+            // Farmhands' terminals act through the host, and see what only the host knows.
+            this.Sync = new Multiplayer.MultiplayerSync(helper, this.ModManifest.UniqueID, this.Networks, this.Jobs);
             helper.Events.GameLoop.Saving += (_, _) => this.Ledger.CloseDay();
 
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
@@ -125,6 +130,8 @@ namespace StardewLogistics
                 e.LoadFromModFile<Texture2D>("assets/cable-floor.png", AssetLoadPriority.Medium);
             else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.UiIconsTexture))
                 e.LoadFromModFile<Texture2D>("assets/ui-icons.png", AssetLoadPriority.Medium);
+            else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.ItemsTexture))
+                e.LoadFromModFile<Texture2D>("assets/items.png", AssetLoadPriority.Medium);
         }
 
 
@@ -164,6 +171,7 @@ namespace StardewLogistics
             api.AddSectionTitle(this.ModManifest, () => i18n.Get("config.section.general"));
             api.AddBoolOption(this.ModManifest, () => this.Config.UnlockAllRecipes, value => this.Config.UnlockAllRecipes = value, () => i18n.Get("config.recipes.name"), () => i18n.Get("config.recipes.tooltip"));
             api.AddKeybindList(this.ModManifest, () => this.Config.OpenTerminalKey, value => this.Config.OpenTerminalKey = value, () => i18n.Get("config.terminal-key.name"), () => i18n.Get("config.terminal-key.tooltip"));
+            api.AddKeybindList(this.ModManifest, () => this.Config.OpenWirelessTerminalKey, value => this.Config.OpenWirelessTerminalKey = value, () => i18n.Get("config.wireless-key.name"), () => i18n.Get("config.wireless-key.tooltip"));
         }
 
         /// <summary>Clears cached networks when a save is loaded.</summary>
@@ -217,6 +225,7 @@ namespace StardewLogistics
             this.Jobs.Reset();
             this.Stock.Reset();
             this.Ledger.Reset();
+            this.Sync.Reset();
         }
 
         /// <summary>Lets auto-harvesters work through the day, so a new plan starts within ten minutes, and tops up stock.</summary>
@@ -344,7 +353,13 @@ namespace StardewLogistics
         {
             // Only the host moves items. Farmhands see the results through the game's own object sync, so running
             // this everywhere would move each item once per player.
-            if (!Context.IsWorldReady || !Context.IsMainPlayer)
+            if (!Context.IsWorldReady)
+                return;
+
+            // Every player: items in and out of the hand-off inventories, and news between host and farmhands.
+            this.Sync.Update();
+
+            if (!Context.IsMainPlayer)
                 return;
 
             if (!e.IsMultipleOf((uint)this.Config.BusIntervalTicks))
@@ -371,6 +386,14 @@ namespace StardewLogistics
                 return;
 
             bool isAction = e.Button.IsActionButton();
+            // The Wireless Terminal opens from anywhere, if one is equipped.
+            if (this.Config.OpenWirelessTerminalKey.JustPressed())
+            {
+                this.Helper.Input.SuppressActiveKeybinds(this.Config.OpenWirelessTerminalKey);
+                this.OpenWirelessTerminal();
+                return;
+            }
+
             bool isHotkey = this.Config.OpenTerminalKey.JustPressed();
             if (!isAction && !isHotkey)
                 return;
@@ -441,6 +464,29 @@ namespace StardewLogistics
             catch (Exception ex)
             {
                 Log.Error($"Couldn't open the terminal at {location.NameOrUniqueName} ({tile.X}, {tile.Y}).", ex);
+                Game1.addHUDMessage(new HUDMessage(this.Helper.Translation.Get("error.terminal-failed"), HUDMessage.error_type));
+            }
+        }
+
+
+        /// <summary>Opens the equipped Wireless Terminal, or says there isn't one.</summary>
+        private void OpenWirelessTerminal()
+        {
+            Item terminal = AccessorySlot.GetTerminal(Game1.player);
+            if (terminal == null)
+            {
+                Game1.showRedMessage(this.Helper.Translation.Get("wireless-terminal.none"));
+                return;
+            }
+
+            try
+            {
+                Game1.playSound("bigSelect");
+                Game1.activeClickableMenu = new TerminalMenu(this.Networks, this.Helper.Translation, Game1.currentLocation, Game1.player.Tile, canCraft: true, this.MachineRecipes, this.Jobs, this.Config, wirelessTerminal: terminal);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Couldn't open the Wireless Terminal.", ex);
                 Game1.addHUDMessage(new HUDMessage(this.Helper.Translation.Get("error.terminal-failed"), HUDMessage.error_type));
             }
         }
