@@ -32,7 +32,7 @@ Requires **Stardew Valley 1.6** and **SMAPI 4.0** or later. Built and tested on 
 ## Installation
 
 1. Install [SMAPI](https://smapi.io/) 4.0 or later.
-2. Download the latest [Release](https://github.com/chocomint02/stardew-logistics-mod/releases/tag/Release)
+2. Download the latest [Release](https://github.com/chocomint02/stardew-logistics-mod/releases/tag/Release).
 3. Unzip it into your game's `Mods` folder.
 4. Launch the game through SMAPI.
 
