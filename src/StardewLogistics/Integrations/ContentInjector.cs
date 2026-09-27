@@ -1,11 +1,14 @@
 using System.Collections.Generic;
+using Microsoft.Xna.Framework;
 using StardewLogistics.Framework;
 using StardewModdingAPI;
 using StardewValley.GameData.BigCraftables;
+using StardewValley.GameData.FloorsAndPaths;
+using StardewValley.GameData.Objects;
 
 namespace StardewLogistics.Integrations
 {
-    /// <summary>Defines the craftables this mod adds and injects them into the game's data assets.</summary>
+    /// <summary>Defines the content this mod adds and injects it into the game's data assets.</summary>
     internal class ContentInjector
     {
         /*********
@@ -17,16 +20,17 @@ namespace StardewLogistics.Integrations
         /*********
         ** Accessors
         *********/
-        /// <summary>The crafting recipes this mod adds, mapped to the mining level that teaches them.</summary>
+        /// <summary>The crafting recipes this mod adds, mapped to the skill and level that teach them.</summary>
         /// <remarks>Recipe keys double as the entries in <c>Data/CraftingRecipes</c>, so they stay in English.</remarks>
-        public static readonly IReadOnlyDictionary<string, int> RecipeUnlockLevels = new Dictionary<string, int>
+        public static readonly IReadOnlyDictionary<string, (int Skill, int Level)> RecipeUnlockLevels = new Dictionary<string, (int Skill, int Level)>
         {
-            ["Logistics Cable"] = 2,
-            ["Storage Terminal"] = 4,
-            ["Import Bus"] = 5,
-            ["Export Bus"] = 5,
-            ["Logistics Controller"] = 7,
-            ["Crafting Terminal"] = 8
+            ["Logistics Cable"] = (StardewValley.Farmer.miningSkill, 2),
+            ["Storage Terminal"] = (StardewValley.Farmer.miningSkill, 4),
+            ["Crafting Terminal"] = (StardewValley.Farmer.miningSkill, 8),
+            ["Wireless Transmitter"] = (StardewValley.Farmer.miningSkill, 7),
+            ["Wireless Receiver"] = (StardewValley.Farmer.miningSkill, 7),
+            ["Auto-Harvester"] = (StardewValley.Farmer.farmingSkill, 6),
+            ["Wireless Terminal"] = (StardewValley.Farmer.miningSkill, 9)
         };
 
 
@@ -38,15 +42,93 @@ namespace StardewLogistics.Integrations
             this.Translations = translations;
         }
 
-        /// <summary>Adds the mod's big craftables to <c>Data/BigCraftables</c>.</summary>
+        /// <summary>Adds the mod's terminals to <c>Data/BigCraftables</c>.</summary>
+        /// <remarks>Sprite indexes 0 and 1 in the craftables sheet are unused: they held the cable before it became
+        /// a floor, and the controller before it was removed. 4 and 5, once the buses, are now the wireless pair.</remarks>
         public void EditBigCraftables(IDictionary<string, BigCraftableData> data)
         {
-            this.Add(data, ModIds.Cable, "cable", spriteIndex: 0, price: 30);
-            this.Add(data, ModIds.Controller, "controller", spriteIndex: 1, price: 800);
-            this.Add(data, ModIds.Terminal, "terminal", spriteIndex: 2, price: 500);
-            this.Add(data, ModIds.CraftingTerminal, "crafting-terminal", spriteIndex: 3, price: 900);
-            this.Add(data, ModIds.ImportBus, "import-bus", spriteIndex: 4, price: 220);
-            this.Add(data, ModIds.ExportBus, "export-bus", spriteIndex: 5, price: 220);
+            this.AddCraftable(data, ModIds.Terminal, "terminal", spriteIndex: 2, price: 500);
+            this.AddCraftable(data, ModIds.CraftingTerminal, "crafting-terminal", spriteIndex: 3, price: 900);
+            this.AddCraftable(data, ModIds.WirelessTransmitter, "wireless-transmitter", spriteIndex: 4, price: 1200);
+            this.AddCraftable(data, ModIds.WirelessReceiver, "wireless-receiver", spriteIndex: 5, price: 700);
+            this.AddCraftable(data, ModIds.AutoHarvester, "auto-harvester", spriteIndex: 0, price: 1500);
+        }
+
+        /// <summary>Adds the cable item to <c>Data/Objects</c>.</summary>
+        /// <remarks>
+        /// The cable is an object rather than a big craftable because placing it lays a <c>Flooring</c>, and only
+        /// objects listed in <c>Data/FloorsAndPaths</c> do that. Its icon is borrowed from the floor tilesheet:
+        /// on a 64px-wide sheet, sprite index 14 lands on the straight horizontal run.
+        /// </remarks>
+        public void EditObjects(IDictionary<string, ObjectData> data)
+        {
+            data[ModIds.Cable] = new ObjectData
+            {
+                Name = ModIds.Cable,
+                DisplayName = this.Name("cable"),
+                Description = this.Translations.Get("item.cable.description"),
+                Type = "Crafting",
+                Category = -24,
+                Price = 10,
+                Texture = ModIds.CableFloorTexture,
+                SpriteIndex = 14,
+                Edibility = -300,
+                CanBeGivenAsGift = false,
+                CanBeTrashed = true,
+                ExcludeFromRandomSale = true,
+                ContextTags = new List<string> { "logistics_device", "floor_item" },
+                CustomFields = new Dictionary<string, string>()
+            };
+
+            // The handheld terminal: worn in its accessory slot, not placed.
+            data[ModIds.WirelessTerminal] = new ObjectData
+            {
+                Name = ModIds.WirelessTerminal,
+                DisplayName = this.Name("wireless-terminal"),
+                Description = this.Translations.Get("item.wireless-terminal.description"),
+                Type = "Crafting",
+                Category = 0,
+                Price = 2500,
+                Texture = ModIds.ItemsTexture,
+                SpriteIndex = 0,
+                Edibility = -300,
+                CanBeGivenAsGift = false,
+                CanBeTrashed = true,
+                ExcludeFromRandomSale = true,
+                ExcludeFromShippingCollection = true,
+                ContextTags = new List<string> { "logistics_device", "not_placeable" },
+                CustomFields = new Dictionary<string, string>()
+            };
+        }
+
+        /// <summary>Registers the cable floor in <c>Data/FloorsAndPaths</c>.</summary>
+        /// <remarks>
+        /// <c>ConnectType.Default</c> makes neighbouring cables merge into a continuous run, which is what the
+        /// sixteen-variant tilesheet is for. The winter texture points at the same sheet so cables don't vanish
+        /// under snow.
+        ///
+        /// Note the asset is a dictionary keyed by floor ID, not a list, so the entry is assigned rather than
+        /// appended and its <c>Id</c> has to match the key.
+        /// </remarks>
+        public void EditFloors(IDictionary<string, FloorPathData> data)
+        {
+            data[ModIds.CableFloorId] = new FloorPathData
+            {
+                Id = ModIds.CableFloorId,
+                ItemId = ModIds.Cable,
+                Texture = ModIds.CableFloorTexture,
+                Corner = Point.Zero,
+                WinterTexture = ModIds.CableFloorTexture,
+                WinterCorner = Point.Zero,
+                PlacementSound = "crafting",
+                RemovalSound = null,
+                RemovalDebrisType = 0,
+                FootstepSound = "stoneStep",
+                ConnectType = FloorPathConnectType.Default,
+                ShadowType = FloorPathShadowType.None,
+                CornerSize = 0,
+                FarmSpeedBuff = 0.1f
+            };
         }
 
         /// <summary>Adds the mod's recipes to <c>Data/CraftingRecipes</c>.</summary>
@@ -57,14 +139,20 @@ namespace StardewLogistics.Integrations
         /// </remarks>
         public void EditRecipes(IDictionary<string, string> data)
         {
-            // 334 copper bar, 335 iron bar, 336 gold bar, 337 iridium bar, 338 refined quartz,
-            // 390 stone, 709 hardwood, 787 battery pack.
-            data["Logistics Cable"] = $"334 1 390 5/Home/{ModIds.Cable} 8/true/null/{this.Name("cable")}";
+            // 334 copper bar, 335 iron bar, 336 gold bar, 338 refined quartz, 390 stone, 709 hardwood, 787 battery.
+            data["Logistics Cable"] = $"334 1 390 5/Home/{ModIds.Cable} 8/false/null/{this.Name("cable")}";
             data["Storage Terminal"] = $"335 2 338 5 709 10/Home/{ModIds.Terminal} 1/true/null/{this.Name("terminal")}";
-            data["Import Bus"] = $"335 2 338 2 390 20/Home/{ModIds.ImportBus} 1/true/null/{this.Name("import-bus")}";
-            data["Export Bus"] = $"335 2 338 2 390 20/Home/{ModIds.ExportBus} 1/true/null/{this.Name("export-bus")}";
-            data["Logistics Controller"] = $"337 1 787 2 336 5/Home/{ModIds.Controller} 1/true/null/{this.Name("controller")}";
             data["Crafting Terminal"] = $"336 3 338 10 787 1/Home/{ModIds.CraftingTerminal} 1/true/null/{this.Name("crafting-terminal")}";
+
+            // The transmitter costs more: a channel needs only one, and it's what makes the link at all.
+            data["Wireless Transmitter"] = $"336 2 338 5 787 1/Home/{ModIds.WirelessTransmitter} 1/true/null/{this.Name("wireless-transmitter")}";
+            data["Wireless Receiver"] = $"336 1 338 2 787 1/Home/{ModIds.WirelessReceiver} 1/true/null/{this.Name("wireless-receiver")}";
+
+            // 621 quality sprinkler: the harvester waters, so it's built around one.
+            data["Auto-Harvester"] = $"335 5 336 2 621 1 787 1/Home/{ModIds.AutoHarvester} 1/true/null/{this.Name("auto-harvester")}";
+
+            // 337 iridium bar: the handheld reaches a network from anywhere, so it's the dearest to build.
+            data["Wireless Terminal"] = $"337 2 787 2 338 5/Home/{ModIds.WirelessTerminal} 1/false/null/{this.Name("wireless-terminal")}";
         }
 
 
@@ -72,7 +160,7 @@ namespace StardewLogistics.Integrations
         ** Private methods
         *********/
         /// <summary>Adds one big craftable entry.</summary>
-        private void Add(IDictionary<string, BigCraftableData> data, string id, string translationKey, int spriteIndex, int price)
+        private void AddCraftable(IDictionary<string, BigCraftableData> data, string id, string translationKey, int spriteIndex, int price)
         {
             data[id] = new BigCraftableData
             {

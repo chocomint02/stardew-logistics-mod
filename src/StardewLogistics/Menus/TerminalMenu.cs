@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using StardewLogistics.Devices;
 using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewModdingAPI;
@@ -24,8 +25,16 @@ namespace StardewLogistics.Menus
     internal enum TerminalTab
     {
         Items,
+        Craft,
+        Auto,
+        Jobs,
         Storage,
-        Network
+        Network,
+        Farm,
+        Stock,
+        Shipping,
+        Income,
+        Settings
     }
 
     /// <summary>The storage terminal: one searchable, sortable view of everything on the network.</summary>
@@ -40,35 +49,126 @@ namespace StardewLogistics.Menus
         ** Fields
         *********/
         private const int SlotSize = 64;
-        private const int Columns = 12;
-        private const int HeaderHeight = 112;
-        private const int InventoryHeight = 3 * SlotSize + 28;
+        private const int Columns = 13;
+        /// <summary>Vertical space above the grid: two rows of tabs, the control row, and the search row.</summary>
+        /// <remarks>
+        /// The search box has a row to itself so it can span the window. Sharing the control row meant it took
+        /// whatever was left over, which was never much and cut off longer queries. The tabs have two rows since
+        /// one ran out of room.
+        /// </remarks>
+        private const int HeaderHeight = 216;
+
+        /// <summary>The height of one row of tabs, gap included.</summary>
+        private const int TabRowHeight = 48;
+        /// <summary>Vertical space reserved for the player inventory.</summary>
+        /// <remarks>
+        /// InventoryMenu spaces its rows by more than the slot size and draws hotbar key labels above the first
+        /// row, so reserving exactly three slots' worth pushes the bottom row through the menu's own border.
+        /// </remarks>
+        private const int InventoryHeight = 3 * SlotSize + 84;
+
+        /// <summary>Vertical space between the grid and the player inventory.</summary>
+        /// <remarks>
+        /// This has to clear two things, not one: the summary line the terminal draws, and the row of hotbar key
+        /// labels ("1 2 3 ... 0 - =") that <see cref="InventoryMenu"/> draws above its own top row. Sizing it for
+        /// the summary alone puts the two on top of each other.
+        /// </remarks>
+        private const int SummaryBand = 148;
+
+        /// <summary>The most grid rows to show, when the window is tall enough for them.</summary>
+        private const int MaxRows = 8;
 
         private readonly ITranslationHelper Translations;
         private readonly NetworkManager Networks;
+        private readonly MachineRecipeIndex MachineRecipes;
+        private readonly JobRunner Jobs;
+        private readonly ModConfig Config;
         private readonly GameLocation TerminalLocation;
         private readonly Vector2 TerminalTile;
         private readonly bool CanCraft;
 
         private StorageNetwork Network;
         private List<NetworkItemStack> AllStock = new();
+
+        /// <summary>The Wireless Terminal this menu was opened from, or <c>null</c> for a placed terminal.</summary>
+        private readonly Item WirelessTerminal;
+
+        /// <summary>The network revision last shown, so a change anywhere refreshes the menu straight away.</summary>
+        private int LastRevision = -1;
+
+        /// <summary>Whether this is a Wireless Terminal, which reaches its network by channel rather than cable.</summary>
+        private bool IsWireless => this.WirelessTerminal != null;
+
+        /// <summary>The Wireless Terminal's channel.</summary>
+        private int WirelessChannel => NetworkNode.GetChannel(this.WirelessTerminal as StardewValley.Object);
+
+        /// <summary>How other players' machines name this menu's network: its tile, or its channel.</summary>
+        private string NetworkReference => this.IsWireless
+            ? Multiplayer.NetworkRef.ForChannel(this.WirelessChannel)
+            : Multiplayer.NetworkRef.ForTile(this.TerminalLocation, this.TerminalTile);
+
+        /// <summary>What to say when there's no network: no cable, or nothing on the channel.</summary>
+        private string NotConnectedText => this.IsWireless
+            ? this.Translations.Get("error.no-wireless-link", new { channel = this.WirelessChannel })
+            : this.Translations.Get("error.not-connected");
         private List<NetworkItemStack> VisibleStock = new();
 
         private readonly InventoryMenu PlayerInventory;
         private readonly TextBox SearchBox;
         private ClickableComponent SearchBoxBounds;
-        private ClickableTextureComponent SortButton;
+        private ClickableComponent SortButton;
         private ClickableTextureComponent DepositAllButton;
+        private ClickableComponent TypeFilterButton;
+        private ClickableComponent ModFilterButton;
+        private readonly DropdownPopup Dropdown = new();
+        private readonly StockFilter Filter = new();
+        private string OpenDropdownName;
         private readonly List<ClickableComponent> TabButtons = new();
 
         private int Rows;
-        private int ScrollOffset;
+        /// <summary>Where each tab is scrolled to.</summary>
+        /// <remarks>
+        /// One position per tab, not one shared between them. A single field was being clamped by every tab's
+        /// filter on each refresh, so a tab with few rows dragged a longer tab's position back to the top every
+        /// time the stock list rebuilt. Keeping them apart also means switching tabs no longer loses your place.
+        /// </remarks>
+        private readonly Dictionary<TerminalTab, int> ScrollByTab = new();
+
+        /// <summary>Where the current tab is scrolled to.</summary>
+        private int ScrollOffset
+        {
+            get => this.ScrollByTab.TryGetValue(this.Tab, out int value) ? value : 0;
+            set => this.ScrollByTab[this.Tab] = Math.Max(0, value);
+        }
+        private int SearchBoxLeft;
+        private int SearchBoxWidth;
         private SortMode Sort = SortMode.Name;
         private TerminalTab Tab = TerminalTab.Items;
         private string HoverText = "";
         private string LastSearch = "";
         private Item HoverItem;
         private int RefreshCounter;
+
+        /// <summary>A tooltip with colours of its own, shown instead of <see cref="HoverText"/> when set.</summary>
+        private RichTooltip HoverTooltip;
+
+        /// <summary>How long switching tabs takes to animate at normal speed.</summary>
+        private const double TabTransitionMs = 240;
+
+        /// <summary>How far a new tab's content slides in from.</summary>
+        private const int TabSlideDistance = 48;
+
+        /// <summary>When the tab last changed, for its transition.</summary>
+        private DateTime TabChangedAt = DateTime.MinValue;
+
+        /// <summary>Which way the new tab slides in from: 1 from the right, -1 from the left.</summary>
+        private int TabDirection;
+
+        /// <summary>Where the active-tab highlight started gliding from.</summary>
+        private Rectangle TabHighlightFrom;
+
+        /// <summary>How big each grid icon is drawn, for the hovered one growing like an inventory item.</summary>
+        private readonly HoverScales GridHover = new();
 
 
         /*********
@@ -80,53 +180,76 @@ namespace StardewLogistics.Menus
         /// <param name="location">The location holding the terminal.</param>
         /// <param name="tile">The tile the terminal occupies.</param>
         /// <param name="canCraft">Whether this terminal offers the crafting page.</param>
-        public TerminalMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 tile, bool canCraft)
+        /// <param name="wirelessTerminal">The Wireless Terminal the menu was opened from, if it wasn't a placed one.</param>
+        public TerminalMenu(NetworkManager networks, ITranslationHelper translations, GameLocation location, Vector2 tile, bool canCraft, MachineRecipeIndex machineRecipes, JobRunner jobs, ModConfig config, Item wirelessTerminal = null)
         {
+            this.WirelessTerminal = wirelessTerminal;
             this.Networks = networks;
+            this.MachineRecipes = machineRecipes;
+            this.Jobs = jobs;
+            this.Config = config;
             this.Translations = translations;
             this.TerminalLocation = location;
             this.TerminalTile = tile;
             this.CanCraft = canCraft;
 
-            // Shrink the grid on small windows rather than overflowing off-screen.
-            int available = Game1.uiViewport.Height - (HeaderHeight + InventoryHeight + 160);
-            this.Rows = Math.Clamp(available / SlotSize, 3, 6);
+            // Grow the grid to fill a tall window, but shrink it rather than overflowing a short one.
+            int available = Game1.uiViewport.Height - (HeaderHeight + SummaryBand + InventoryHeight + 120);
+            this.Rows = Math.Clamp(available / SlotSize, 3, MaxRows);
 
             this.width = (Columns * SlotSize) + 96;
-            this.height = HeaderHeight + (this.Rows * SlotSize) + 32 + InventoryHeight;
+            this.height = HeaderHeight + (this.Rows * SlotSize) + SummaryBand + InventoryHeight;
             this.xPositionOnScreen = (Game1.uiViewport.Width - this.width) / 2;
             this.yPositionOnScreen = (Game1.uiViewport.Height - this.height) / 2;
 
+            // The player's inventory is always 12 slots wide; the grid above it is not, so centre it rather than
+            // left-aligning it under a wider grid.
             this.PlayerInventory = new InventoryMenu(
-                this.xPositionOnScreen + 32,
+                this.xPositionOnScreen + ((this.width - (12 * SlotSize)) / 2),
                 this.yPositionOnScreen + this.height - InventoryHeight + 24,
                 playerInventory: true
             );
 
-            this.SearchBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
+            this.SetUpComponents();
+
+            this.SearchBox = new TextBox(UiTheme.TextBoxTexture(), null, Game1.smallFont, UiTheme.TextColour)
             {
-                X = this.xPositionOnScreen + this.width - 300,
-                Y = this.yPositionOnScreen + 64,
-                Width = 256,
+                X = this.SearchBoxLeft,
+                Y = this.yPositionOnScreen + 16 + (2 * TabRowHeight) + 52,
+                Width = this.SearchBoxWidth,
                 Height = 40
             };
+            this.SearchBoxBounds = new ClickableComponent(new Rectangle(this.SearchBox.X, this.SearchBox.Y, this.SearchBox.Width, this.SearchBox.Height), "search");
 
-            this.SetUpComponents();
             this.RefreshStock();
             this.initializeUpperRightCloseButton();
+
+            this.LogOpened(location, tile);
         }
 
         /// <inheritdoc />
         public override void update(GameTime time)
         {
             base.update(time);
+            this.GridHover.Update(time);
 
             // TextBox has no "text changed" event, so poll it: re-filtering is a list pass over data we already hold.
             if (this.SearchBox.Text != this.LastSearch)
             {
                 this.LastSearch = this.SearchBox.Text;
+                this.Filter.SetSearch(this.SearchBox.Text);
                 this.ScrollOffset = 0;
                 this.ApplyFilterAndSort();
+            }
+
+            // Another player changed a network, or the host sent news: show it now rather than on the next poll.
+            if (Multiplayer.MultiplayerSync.Revision != this.LastRevision)
+            {
+                this.LastRevision = Multiplayer.MultiplayerSync.Revision;
+                this.StockRowsCache = null;
+                this.FarmRowsCache = null;
+                this.SummaryCache = null;
+                this.RefreshCounter = 30;
             }
 
             // The network is live: chests can be filled by buses, farmhands or other mods while the menu is open.
@@ -155,6 +278,20 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveLeftClick(int x, int y, bool playSound = true)
         {
+            // An open dropdown sits above everything else, so it consumes the click either way.
+            if (this.Dropdown.IsOpen)
+            {
+                bool wasChoosing = this.OpenDropdownName != null;
+                if (this.Dropdown.ReceiveLeftClick(x, y, out object chosen))
+                {
+                    if (wasChoosing && chosen != null)
+                        this.ApplyDropdownChoice(chosen);
+                    else if (wasChoosing && !this.Dropdown.IsOpen)
+                        this.ApplyDropdownChoice(null);
+                    return;
+                }
+            }
+
             if (this.upperRightCloseButton?.containsPoint(x, y) == true)
             {
                 this.exitThisMenu();
@@ -167,23 +304,96 @@ namespace StardewLogistics.Menus
                 if (!tab.containsPoint(x, y))
                     continue;
 
-                if (tab.name == "craft")
+                this.SwitchTab(Enum.Parse<TerminalTab>(tab.name));
+                if (this.Tab == TerminalTab.Income)
+                    this.RestartGraphAnimation();
+
+                // Don't leave the search box holding the keyboard on a tab that has no search box.
+                if (!this.TabHasSearch)
                 {
-                    this.OpenCraftingPage();
-                    return;
+                    this.SearchBox.Selected = false;
+                    this.ReleaseKeyboard();
                 }
 
-                this.Tab = Enum.Parse<TerminalTab>(tab.name);
-                this.ScrollOffset = 0;
                 Game1.playSound("smallSelect");
                 return;
             }
 
-            // Search box
-            bool clickedSearch = this.SearchBoxBounds.containsPoint(x, y);
-            this.SearchBox.Selected = clickedSearch;
-            if (clickedSearch)
+            // Search box. It filters the item grid and the recipe grid, but nothing on the other tabs.
+            if (this.TabHasSearch)
+            {
+                bool clickedSearch = this.SearchBoxBounds.containsPoint(x, y);
+                this.SearchBox.Selected = clickedSearch;
+                if (clickedSearch)
+                    return;
+            }
+
+            if (this.Tab == TerminalTab.Auto)
+            {
+                if (this.HandleSharedHeaderClick(x, y))
+                    return;
+
+                AutoTarget target = this.GetTargetAt(x, y);
+                if (target != null)
+                    this.OpenPlanner(target);
                 return;
+            }
+
+            if (this.Tab == TerminalTab.Jobs)
+            {
+                this.ReceiveClickOnJobs(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Farm)
+            {
+                this.ReceiveClickOnFarm(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Stock)
+            {
+                this.ReceiveClickOnStock(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Shipping)
+            {
+                this.ReceiveClickOnShipping(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Income)
+            {
+                this.ReceiveClickOnIncome(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Settings)
+            {
+                this.ReceiveClickOnSettings(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Craft)
+            {
+                if (this.CraftableOnlyButton.containsPoint(x, y))
+                {
+                    this.CraftableOnly = !this.CraftableOnly;
+                    this.ScrollOffset = 0;
+                    this.ApplyRecipeFilter();
+                    Game1.playSound("smallSelect");
+                    return;
+                }
+
+                if (this.HandleSharedHeaderClick(x, y))
+                    return;
+
+                RecipeEntry recipe = this.GetRecipeAt(x, y);
+                if (recipe != null)
+                    this.CraftRecipe(recipe, IsShiftDown() ? 5 : 1);
+                return;
+            }
 
             if (this.Tab != TerminalTab.Items)
             {
@@ -191,13 +401,8 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.SortButton.containsPoint(x, y))
-            {
-                this.Sort = (SortMode)(((int)this.Sort + 1) % 3);
-                this.ApplyFilterAndSort();
-                Game1.playSound("shwip");
+            if (this.HandleSharedHeaderClick(x, y))
                 return;
-            }
 
             if (this.DepositAllButton.containsPoint(x, y))
             {
@@ -223,6 +428,42 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveRightClick(int x, int y, bool playSound = true)
         {
+            if (this.Dropdown.IsOpen)
+            {
+                this.Dropdown.Close();
+                this.OpenDropdownName = null;
+                return;
+            }
+
+            // Right-clicking a filter button clears it, rather than making the player reopen the list to pick "all".
+            if (this.Tab == TerminalTab.Items && this.TypeFilterButton.containsPoint(x, y))
+            {
+                this.Filter.Category = null;
+                this.Filter.CategoryLabel = null;
+                this.ApplyFilterAndSort();
+                Game1.playSound("trashcan");
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Items && this.ModFilterButton.containsPoint(x, y))
+            {
+                this.Filter.Mod = null;
+                this.ApplyFilterAndSort();
+                Game1.playSound("trashcan");
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Craft)
+            {
+                RecipeEntry recipe = this.GetRecipeAt(x, y);
+                if (recipe != null)
+                    this.OpenBulkCraft(recipe);
+                return;
+            }
+
+            if (this.Tab is TerminalTab.Stock or TerminalTab.Shipping or TerminalTab.Income or TerminalTab.Settings)
+                return;
+
             if (this.Tab != TerminalTab.Items)
             {
                 this.ReceiveClickOnTab(x, y, rightClick: true);
@@ -244,7 +485,10 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveScrollWheelAction(int direction)
         {
-            int rows = this.Tab == TerminalTab.Items ? this.Rows : 1;
+            if (this.Dropdown.ReceiveScroll(direction))
+                return;
+
+            int rows = this.Tab is TerminalTab.Items or TerminalTab.Craft or TerminalTab.Auto or TerminalTab.Shipping ? this.Rows : 1;
             int step = direction > 0 ? -1 : 1;
             this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset + step, Math.Max(0, this.GetMaxScroll(rows))));
             Game1.playSound("shiny4");
@@ -279,9 +523,82 @@ namespace StardewLogistics.Menus
         {
             this.HoverText = "";
             this.HoverItem = null;
+            this.HoverTooltip = null;
+            this.GridHover.Hover(null);
 
-            this.SortButton?.tryHover(x, y);
+            if (this.Dropdown.IsOpen)
+            {
+                this.Dropdown.PerformHover(x, y);
+                return;
+            }
+
+            int gridIndex = this.GetGridIndexAt(x, y);
+            if (gridIndex >= 0)
+                this.GridHover.Hover(this.GridKey(gridIndex));
+
             this.DepositAllButton?.tryHover(x, y);
+            this.CraftableOnlyButton?.tryHover(x, y);
+
+            this.HoverRecipe = null;
+            this.HoverTarget = null;
+            this.HoverX = x;
+            this.HoverY = y;
+
+            if (this.Tab == TerminalTab.Auto)
+            {
+                if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.filter-hint");
+                else
+                {
+                    this.HoverTarget = this.GetTargetAt(x, y);
+                    if (this.HoverTarget != null)
+                    {
+                        this.HoverItem = this.HoverTarget.Sample;
+                        this.HoverText = this.Translations.Get("auto.target-hint", new { count = NumberFormat.Full(this.HoverTarget.Count) });
+                    }
+                }
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Craft)
+            {
+                if (this.CraftableOnlyButton.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.craftable-only");
+                else if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.filter-hint");
+                else if (this.TabHasSearch && this.SearchBoxBounds.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.search-help");
+                else
+                    this.HoverRecipe = this.GetRecipeAt(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Stock)
+            {
+                this.HoverText = this.GetStockHover(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Shipping)
+            {
+                if (this.TabHasSearch && this.SearchBoxBounds.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.search-help");
+                else
+                    this.PerformHoverOnShipping(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Income)
+            {
+                this.PerformHoverOnIncome(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Settings)
+            {
+                this.PerformHoverOnSettings(x, y);
+                return;
+            }
 
             if (this.Tab != TerminalTab.Items)
             {
@@ -289,7 +606,11 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.SortButton.containsPoint(x, y))
+            if (this.TabHasSearch && this.SearchBoxBounds.containsPoint(x, y))
+                this.HoverText = this.Translations.Get("ui.search-help");
+            else if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
+                this.HoverText = this.Translations.Get("ui.filter-hint");
+            else if (this.SortButton.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.sort-by", new { mode = this.Translations.Get("sort." + this.Sort.ToString().ToLowerInvariant()) });
             else if (this.DepositAllButton.containsPoint(x, y))
                 this.HoverText = this.Translations.Get("ui.deposit-all");
@@ -315,7 +636,7 @@ namespace StardewLogistics.Menus
         {
             base.gameWindowSizeChanged(oldBounds, newBounds);
             this.ReleaseKeyboard();
-            Game1.activeClickableMenu = new TerminalMenu(this.Networks, this.Translations, this.TerminalLocation, this.TerminalTile, this.CanCraft);
+            Game1.activeClickableMenu = new TerminalMenu(this.Networks, this.Translations, this.TerminalLocation, this.TerminalTile, this.CanCraft, this.MachineRecipes, this.Jobs, this.Config, this.WirelessTerminal);
         }
 
         /// <inheritdoc />
@@ -324,14 +645,68 @@ namespace StardewLogistics.Menus
             // Dim the world behind the menu.
             b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.5f);
 
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White, 1f, drawShadow: true);
 
-            this.DrawHeader(b);
+            this.DrawTabs(b);
 
+            // A new tab's content slides in from the side it's on and fades up from the panel.
+            float transition = UiAnimation.EaseOut(UiAnimation.Progress(this.TabChangedAt, TabTransitionMs));
+            Rectangle content = this.GetContentBounds();
+            bool sliding = transition < 1f && UiBatch.Push(b, content, new Vector2((1f - transition) * TabSlideDistance * this.TabDirection, 0));
+            try
+            {
+                this.DrawHeader(b);
+                this.DrawTab(b);
+            }
+            finally
+            {
+                if (sliding)
+                    UiBatch.Pop(b);
+            }
+
+            if (transition < 1f)
+                this.DrawPanelOver(b, content, 1f - transition);
+
+            this.PlayerInventory.draw(b);
+            this.upperRightCloseButton?.draw(b);
+            this.Dropdown.Draw(b);
+
+            if (this.HoverTooltip != null)
+                this.HoverTooltip.Draw(b);
+            else if (this.HoverRecipe != null)
+                this.DrawRecipeTooltip(b);
+            else if (this.HoverItem != null)
+                drawToolTip(b, this.HoverText, this.HoverItem.DisplayName, this.HoverItem);
+            else if (!string.IsNullOrEmpty(this.HoverText))
+                drawHoverText(b, this.HoverText, Game1.smallFont);
+
+            this.drawMouse(b);
+        }
+
+        /// <summary>Draws the current tab's content.</summary>
+        private void DrawTab(SpriteBatch b)
+        {
             switch (this.Tab)
             {
                 case TerminalTab.Items:
                     this.DrawItemsTab(b);
+                    break;
+                case TerminalTab.Craft:
+                    this.DrawCraftTab(b);
+                    break;
+                case TerminalTab.Auto:
+                    this.DrawAutoTab(b);
+                    break;
+                case TerminalTab.Jobs:
+                    this.DrawJobsTab(b);
                     break;
                 case TerminalTab.Storage:
                     this.DrawStorageTab(b);
@@ -339,18 +714,106 @@ namespace StardewLogistics.Menus
                 case TerminalTab.Network:
                     this.DrawNetworkTab(b);
                     break;
+                case TerminalTab.Farm:
+                    this.DrawFarmTab(b);
+                    break;
+                case TerminalTab.Stock:
+                    this.DrawStockTab(b);
+                    break;
+                case TerminalTab.Shipping:
+                    this.DrawShippingTab(b);
+                    break;
+                case TerminalTab.Income:
+                    this.DrawIncomeTab(b);
+                    break;
+                case TerminalTab.Settings:
+                    this.DrawSettingsTab(b);
+                    break;
             }
-
-            this.PlayerInventory.draw(b);
-            this.upperRightCloseButton?.draw(b);
-
-            if (this.HoverItem != null)
-                drawToolTip(b, this.HoverText, this.HoverItem.DisplayName, this.HoverItem);
-            else if (!string.IsNullOrEmpty(this.HoverText))
-                drawHoverText(b, this.HoverText, Game1.smallFont);
-
-            this.drawMouse(b);
         }
+
+        /// <summary>Draws the window's own panel over an area, partly see-through, for content fading in.</summary>
+        /// <remarks>The whole window box, clipped to the area, so the cover matches the panel beneath it exactly.</remarks>
+        private void DrawPanelOver(SpriteBatch b, Rectangle area, float opacity)
+        {
+            if (!UiBatch.Push(b, area, Vector2.Zero))
+                return;
+
+            try
+            {
+                drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White * opacity, 1f, drawShadow: false);
+            }
+            finally
+            {
+                UiBatch.Pop(b);
+            }
+        }
+
+        /// <summary>Changes tab, starting its transition.</summary>
+        private void SwitchTab(TerminalTab tab)
+        {
+            if (tab == this.Tab)
+                return;
+
+            int from = this.TabButtons.FindIndex(button => button.name == this.Tab.ToString());
+            int to = this.TabButtons.FindIndex(button => button.name == tab.ToString());
+
+            // From wherever the highlight is now, so clicking through tabs quickly doesn't make it jump.
+            this.TabHighlightFrom = this.GetTabHighlight();
+            this.TabDirection = Math.Sign(to - from);
+            this.TabChangedAt = DateTime.UtcNow;
+            this.Tab = tab;
+        }
+
+        /// <summary>Where the active-tab highlight is drawn: gliding from the last tab to this one.</summary>
+        private Rectangle GetTabHighlight()
+        {
+            Rectangle target = this.TabButtons.FirstOrDefault(button => button.name == this.Tab.ToString())?.bounds ?? Rectangle.Empty;
+            float t = UiAnimation.EaseOut(UiAnimation.Progress(this.TabChangedAt, TabTransitionMs));
+            if (t >= 1f || this.TabHighlightFrom.IsEmpty)
+                return target;
+
+            return new Rectangle(
+                (int)MathHelper.Lerp(this.TabHighlightFrom.X, target.X, t),
+                (int)MathHelper.Lerp(this.TabHighlightFrom.Y, target.Y, t),
+                (int)MathHelper.Lerp(this.TabHighlightFrom.Width, target.Width, t),
+                (int)MathHelper.Lerp(this.TabHighlightFrom.Height, target.Height, t)
+            );
+        }
+
+        /// <summary>The area a tab's content is drawn in: below the tabs and above the player's inventory.</summary>
+        private Rectangle GetContentBounds()
+        {
+            int top = this.yPositionOnScreen + 16 + (2 * TabRowHeight) - 4;
+            int bottom = this.GetGridBounds().Bottom + SummaryBand - 8;
+            return new Rectangle(this.xPositionOnScreen + 12, top, this.width - 24, bottom - top);
+        }
+
+        /// <summary>The index of the grid slot under a screen position on a tab with a grid, or -1.</summary>
+        private int GetGridIndexAt(int x, int y)
+        {
+            int count = this.Tab switch
+            {
+                TerminalTab.Items => this.VisibleStock.Count,
+                TerminalTab.Craft => this.VisibleRecipes.Count,
+                TerminalTab.Auto => this.VisibleTargets.Count,
+                TerminalTab.Shipping => this.ShippingItemCount,
+                _ => 0
+            };
+
+            Rectangle grid = this.GetGridBounds();
+            if (count == 0 || !grid.Contains(x, y))
+                return -1;
+
+            int index = ((this.ScrollOffset + ((y - grid.Y) / SlotSize)) * Columns) + ((x - grid.X) / SlotSize);
+            return index < count ? index : -1;
+        }
+
+        /// <summary>Identifies a grid slot on the current tab, for its hover size.</summary>
+        private int GridKey(int index) => ((int)this.Tab << 20) | index;
+
+        /// <summary>How big to draw the icon in a grid slot on the current tab.</summary>
+        private float GridScale(int index) => this.GridHover.Get(this.GridKey(index));
 
 
         /*********
@@ -359,38 +822,118 @@ namespace StardewLogistics.Menus
         /// <summary>Builds the clickable components whose positions never change.</summary>
         private void SetUpComponents()
         {
-            this.SearchBoxBounds = new ClickableComponent(new Rectangle(this.SearchBox.X, this.SearchBox.Y, this.SearchBox.Width, this.SearchBox.Height), "search");
-
-            int tabX = this.xPositionOnScreen + 32;
             int tabY = this.yPositionOnScreen + 16;
-            foreach (string name in this.GetTabNames())
+            foreach (string[] row in this.GetTabRows())
             {
-                int tabWidth = (int)Game1.smallFont.MeasureString(this.GetTabLabel(name)).X + 32;
-                this.TabButtons.Add(new ClickableComponent(new Rectangle(tabX, tabY, tabWidth, 44), name));
-                tabX += tabWidth + 8;
+                int tabX = this.xPositionOnScreen + 32;
+                foreach (string name in row)
+                {
+                    int tabWidth = (int)Game1.smallFont.MeasureString(this.GetTabLabel(name)).X + 32;
+                    this.TabButtons.Add(new ClickableComponent(new Rectangle(tabX, tabY, tabWidth, 44), name));
+                    tabX += tabWidth + 8;
+                }
+                tabY += TabRowHeight;
             }
 
-            int buttonY = this.yPositionOnScreen + 64;
-            this.SortButton = new ClickableTextureComponent(
-                new Rectangle(this.xPositionOnScreen + 32, buttonY, 44, 44),
-                Game1.mouseCursors,
-                new Rectangle(162, 440, 16, 16),
-                2.75f
-            );
-            this.DepositAllButton = new ClickableTextureComponent(
-                new Rectangle(this.xPositionOnScreen + 88, buttonY, 44, 44),
-                Game1.mouseCursors,
-                new Rectangle(526, 218, 16, 16),
-                2.75f
-            );
+            int buttonY = this.yPositionOnScreen + 16 + (2 * TabRowHeight);
+
+            // Icons come from the mod's own sheet: picking rectangles out of the game's shared cursor texture is
+            // guesswork, and a wrong guess renders as a meaningless crop rather than failing visibly.
+            Texture2D icons = Game1.content.Load<Texture2D>(ModIds.UiIconsTexture);
+
+            // Size each labelled button to its widest possible caption rather than a fixed width, so the sort
+            // mode never has to be abbreviated. Measuring every sort option keeps the row from shifting about
+            // as the player cycles through them.
+            int sortWidth = this.GetNames<SortMode>()
+                .Select(mode => MeasureButton(this.Translations.Get("ui.sort-label", new { mode = this.Translations.Get("sort." + mode.ToLowerInvariant()) })))
+                .Max();
+            int typeWidth = MeasureButton(this.Translations.Get("ui.filter-type", new { value = this.Translations.Get("ui.filter-all-types") }));
+            int modWidth = MeasureButton(this.Translations.Get("ui.filter-mod", new { value = this.Translations.Get("ui.filter-all-mods") }));
+
+            int x = this.xPositionOnScreen + 32;
+
+            this.SortButton = new ClickableComponent(new Rectangle(x, buttonY, sortWidth, 44), "sort");
+            x += sortWidth + 10;
+
+            this.DepositAllButton = new ClickableTextureComponent(new Rectangle(x, buttonY, 44, 44), icons, new Rectangle(32, 0, 16, 16), 2.5f);
+            this.CraftableOnlyButton = new ClickableTextureComponent(new Rectangle(x, buttonY, 44, 44), icons, new Rectangle(0, 0, 16, 16), 2.5f);
+            x += 54;
+
+            this.TypeFilterButton = new ClickableComponent(new Rectangle(x, buttonY, typeWidth, 44), "type");
+            x += typeWidth + 10;
+
+            this.ModFilterButton = new ClickableComponent(new Rectangle(x, buttonY, modWidth, 44), "mod");
+            x += modWidth + 10;
+
+
+            // The search box sits on its own row and spans the full content width.
+            this.SearchBoxLeft = this.xPositionOnScreen + 32;
+            this.SearchBoxWidth = Columns * SlotSize;
         }
 
-        /// <summary>The tabs this terminal shows, which depends on whether it can craft.</summary>
+        /// <summary>The width a labelled header button needs to show a caption without truncating it.</summary>
+        private static int MeasureButton(string label)
+        {
+            // Text inset plus room for the dropdown caret on the right.
+            return (int)Game1.smallFont.MeasureString(label).X + 54;
+        }
+
+        /// <summary>The names of an enum's values, for measuring every caption a button might show.</summary>
+        private IEnumerable<string> GetNames<T>() where T : struct, Enum => Enum.GetNames<T>();
+
+        /// <summary>Whether the current tab uses the search box and filter dropdowns.</summary>
+        private bool TabHasSearch => this.Tab is TerminalTab.Items or TerminalTab.Craft or TerminalTab.Auto or TerminalTab.Shipping;
+
+        /// <summary>Handles a click on the controls shared by the Items and Craft tabs.</summary>
+        /// <returns>Whether the click was consumed.</returns>
+        private bool HandleSharedHeaderClick(int x, int y)
+        {
+            if (this.TypeFilterButton.containsPoint(x, y))
+            {
+                this.OpenDropdownName = "type";
+                this.Dropdown.Open(this.BuildTypeOptions(), this.TypeFilterButton.bounds);
+                Game1.playSound("shwip");
+                return true;
+            }
+
+            if (this.ModFilterButton.containsPoint(x, y))
+            {
+                this.OpenDropdownName = "mod";
+                this.Dropdown.Open(this.BuildModOptions(), this.ModFilterButton.bounds);
+                Game1.playSound("shwip");
+                return true;
+            }
+
+            if (this.SortButton.containsPoint(x, y))
+            {
+                this.Sort = (SortMode)(((int)this.Sort + 1) % 3);
+                this.ApplyFilterAndSort();
+                Game1.playSound("shwip");
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>The tabs this terminal shows, a row at a time.</summary>
+        private IEnumerable<string[]> GetTabRows()
+        {
+            yield return this.GetTabNames().ToArray();
+            yield return new[] { nameof(TerminalTab.Shipping), nameof(TerminalTab.Income), nameof(TerminalTab.Settings) };
+        }
+
+        /// <summary>The first row of tabs, which depends on whether the terminal can craft.</summary>
         private IEnumerable<string> GetTabNames()
         {
             yield return nameof(TerminalTab.Items);
             if (this.CanCraft)
-                yield return "craft";
+            {
+                yield return nameof(TerminalTab.Craft);
+                yield return nameof(TerminalTab.Auto);
+                yield return nameof(TerminalTab.Jobs);
+                yield return nameof(TerminalTab.Stock);
+            }
+            yield return nameof(TerminalTab.Farm);
             yield return nameof(TerminalTab.Storage);
             yield return nameof(TerminalTab.Network);
         }
@@ -425,26 +968,98 @@ namespace StardewLogistics.Menus
                 : null;
         }
 
+        /// <summary>Clamps one tab's scroll position to its own maximum.</summary>
+        private void ClampScroll(TerminalTab tab, int max)
+        {
+            int current = this.ScrollByTab.TryGetValue(tab, out int value) ? value : 0;
+            this.ScrollByTab[tab] = Math.Max(0, Math.Min(current, Math.Max(0, max)));
+        }
+
         /// <summary>The largest scroll offset that still shows content.</summary>
         private int GetMaxScroll(int rows)
         {
-            if (this.Tab != TerminalTab.Items)
-                return this.GetMaxScrollForTab();
+            // A switch rather than a chain of ifs: the chain began with "not Items, defer to the storage tab",
+            // which made every branch after it unreachable and left Craft, Auto and Jobs reporting no scroll
+            // room at all.
+            switch (this.Tab)
+            {
+                case TerminalTab.Craft:
+                    return this.GetMaxRecipeScroll();
 
-            int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
-            return Math.Max(0, totalRows - rows);
+                case TerminalTab.Auto:
+                    return this.GetMaxTargetScroll();
+
+                case TerminalTab.Jobs:
+                    return Math.Max(0, (this.Jobs?.Jobs.Count ?? 0) - (this.GetGridBounds().Height / JobRowHeight));
+
+                case TerminalTab.Storage:
+                    return this.GetMaxScrollForTab();
+
+                case TerminalTab.Network:
+                    return 0;
+
+                case TerminalTab.Farm:
+                    return Math.Max(0, this.GetFarmRows().Count - (this.GetGridBounds().Height / 96));
+
+                case TerminalTab.Stock:
+                    return Math.Max(0, this.GetStockRows().Count - (this.GetGridBounds().Height / StockRowHeight));
+
+                case TerminalTab.Shipping:
+                    return this.GetMaxShippingScroll();
+
+                case TerminalTab.Income:
+                    return this.GetMaxIncomeScroll();
+
+                case TerminalTab.Settings:
+                    return this.GetMaxSettingsScroll();
+
+                default:
+                    int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
+                    return Math.Max(0, totalRows - rows);
+            }
         }
 
 
         /*********
         ** Private methods: data
         *********/
+        /// <summary>Records what the terminal found, so a report of "it looked wrong" can be checked against the log.</summary>
+        private void LogOpened(GameLocation location, Vector2 tile)
+        {
+            string where = $"{location?.NameOrUniqueName} ({tile.X}, {tile.Y})";
+
+            if (this.Network == null)
+            {
+                Log.Trace($"Terminal opened at {where}: not connected to a cable.");
+                return;
+            }
+
+            Log.Trace(
+                $"Terminal opened at {where}: {this.Network.TotalCableCount} cable tiles in {this.Network.Segments.Count} segment(s), "
+                + $"{this.Network.Machines.Count()} machines, "
+                + $"{this.Network.Storages.Count} chests, "
+                + $"{this.AllStock.Count} item kinds, "
+                + $"{this.AllStock.Sum(entry => entry.Count)} items, "
+                + $"{this.Network.FreeSlots} free slots; "
+                + $"grid is {Columns}x{this.Rows} at {this.width}x{this.height}."
+            );
+        }
+
         /// <summary>Re-resolves the network and rebuilds the item list.</summary>
         private void RefreshStock()
         {
-            this.Network = this.Networks.GetNetworkAt(this.TerminalLocation, this.TerminalTile);
+            this.Network = this.IsWireless
+                ? Multiplayer.NetworkRef.GetNetworkOnChannel(this.Networks, this.WirelessChannel, out _)
+                : this.Networks.GetNetworkAt(this.TerminalLocation, this.TerminalTile);
+
+            // A farmhand's requests name this network, and the host sends their deposits to it.
+            string reference = this.NetworkReference;
+            this.Jobs.RemoteRef = _ => reference;
+            Multiplayer.MultiplayerSync.SetActiveNetwork(reference);
             this.AllStock = this.Network?.Aggregate() ?? new List<NetworkItemStack>();
             this.RefreshConfigRows();
+            this.RefreshRecipes();
+            this.RefreshTargets();
             this.ApplyFilterAndSort();
         }
 
@@ -453,9 +1068,8 @@ namespace StardewLogistics.Menus
         {
             IEnumerable<NetworkItemStack> query = this.AllStock;
 
-            string search = this.SearchBox?.Text?.Trim();
-            if (!string.IsNullOrEmpty(search))
-                query = query.Where(entry => Matches(entry, search));
+            if (!this.Filter.IsEmpty)
+                query = query.Where(entry => this.Filter.Matches(entry));
 
             query = this.Sort switch
             {
@@ -465,34 +1079,71 @@ namespace StardewLogistics.Menus
             };
 
             this.VisibleStock = query.ToList();
-            this.ScrollOffset = Math.Max(0, Math.Min(this.ScrollOffset, this.GetMaxScroll(this.Rows)));
+            this.ApplyRecipeFilter();
+            this.ApplyTargetFilter();
+            this.ApplyShippingFilter();
+
+            int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
+            this.ClampScroll(TerminalTab.Items, totalRows - this.Rows);
         }
 
-        /// <summary>Whether a stock entry matches the search box.</summary>
-        /// <remarks>Supports a plain name search, <c>#tag</c> for context tags, and <c>@category</c> for categories.</remarks>
-        private static bool Matches(NetworkItemStack entry, string search)
+        /// <summary>Builds the choices for the type filter, counting how many kinds of item each category holds.</summary>
+        private IEnumerable<(string Label, object Value)> BuildTypeOptions()
         {
-            if (search.StartsWith("#") && search.Length > 1)
+            yield return (this.Translations.Get("ui.filter-all-types"), null);
+
+            foreach (IGrouping<int, NetworkItemStack> group in this.AllStock.GroupBy(entry => entry.Category).OrderBy(group => group.Key))
             {
-                string tag = search.Substring(1);
-                try
-                {
-                    return entry.Sample.GetContextTags().Any(value => value.Contains(tag, StringComparison.OrdinalIgnoreCase));
-                }
-                catch
-                {
-                    return false;
-                }
+                string name = group.First().Sample.getCategoryName();
+                if (string.IsNullOrWhiteSpace(name))
+                    name = this.Translations.Get("ui.filter-no-category");
+
+                yield return ($"{name} ({group.Count()})", group.Key);
+            }
+        }
+
+        /// <summary>Builds the choices for the mod filter.</summary>
+        private IEnumerable<(string Label, object Value)> BuildModOptions()
+        {
+            yield return (this.Translations.Get("ui.filter-all-mods"), null);
+
+            foreach (IGrouping<string, NetworkItemStack> group in this.AllStock.GroupBy(entry => entry.SourceMod).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+                yield return ($"{group.Key} ({group.Count()})", group.Key);
+        }
+
+        /// <summary>Applies a choice made in an open dropdown.</summary>
+        private void ApplyDropdownChoice(object value)
+        {
+            if (this.OpenDropdownName == "type")
+            {
+                this.Filter.Category = value as int?;
+                this.Filter.CategoryLabel = value == null
+                    ? null
+                    : this.AllStock.FirstOrDefault(entry => entry.Category == (int)value)?.Sample.getCategoryName();
+            }
+            else if (this.OpenDropdownName == "mod")
+            {
+                this.Filter.Mod = value as string;
             }
 
-            if (search.StartsWith("@") && search.Length > 1)
+            this.OpenDropdownName = null;
+            this.ScrollOffset = 0;
+            this.ApplyFilterAndSort();
+        }
+
+        /// <summary>The label shown on a filter button, including its current selection.</summary>
+        private string GetFilterButtonLabel(string which)
+        {
+            if (which == "type")
             {
-                string category = search.Substring(1);
-                string name = entry.Sample.getCategoryName();
-                return !string.IsNullOrEmpty(name) && name.Contains(category, StringComparison.OrdinalIgnoreCase);
+                string type = this.Filter.Category == null
+                    ? this.Translations.Get("ui.filter-all-types")
+                    : this.Filter.CategoryLabel ?? this.Translations.Get("ui.filter-no-category");
+                return this.Translations.Get("ui.filter-type", new { value = type });
             }
 
-            return entry.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase);
+            string mod = this.Filter.Mod ?? this.Translations.Get("ui.filter-all-mods");
+            return this.Translations.Get("ui.filter-mod", new { value = mod });
         }
 
 
@@ -504,9 +1155,9 @@ namespace StardewLogistics.Menus
         /// <param name="requested">The most items to withdraw; pass <see cref="int.MaxValue"/> to fill the inventory.</param>
         private void Withdraw(NetworkItemStack entry, int requested)
         {
-            if (this.Network?.IsOnline != true)
+            if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.offline"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 
@@ -520,6 +1171,21 @@ namespace StardewLogistics.Menus
             int count = (int)Math.Min(Math.Min((long)requested, entry.Count), space);
             if (count <= 0)
                 return;
+
+            // A farmhand's items come from the host, into their mailbox and then their bag.
+            if (Multiplayer.MultiplayerSync.IsRemote)
+            {
+                Multiplayer.MultiplayerSync.Instance?.Send(new Multiplayer.WithdrawRequest
+                {
+                    Network = this.NetworkReference,
+                    ItemId = entry.Key.QualifiedId,
+                    Quality = entry.Key.Quality,
+                    Variant = entry.Key.Variant,
+                    Unique = entry.Key.Unique,
+                    Count = count
+                }, Multiplayer.MessageTypes.Withdraw);
+                return;
+            }
 
             List<Item> withdrawn = this.Network.ExtractMerged(entry.Key, entry.Sample, count);
             int returned = 0;
@@ -537,6 +1203,7 @@ namespace StardewLogistics.Menus
             if (returned > 0)
                 this.ShowError(this.Translations.Get("error.inventory-full"));
 
+            Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
             this.RefreshStock();
         }
 
@@ -546,9 +1213,9 @@ namespace StardewLogistics.Menus
         /// <param name="singleItem">Whether to send a single item rather than the whole stack.</param>
         private void DepositSlot(int slot, bool allOfType, bool singleItem = false)
         {
-            if (this.Network?.IsOnline != true)
+            if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.offline"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 
@@ -560,7 +1227,7 @@ namespace StardewLogistics.Menus
             if (singleItem)
             {
                 Item one = item.getOne();
-                moved = this.Network.Insert(one);
+                moved = this.Store(one);
                 if (moved > 0)
                 {
                     item.Stack -= moved;
@@ -588,10 +1255,27 @@ namespace StardewLogistics.Menus
             if (moved > 0)
             {
                 Game1.playSound("Ship");
+                Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
                 this.RefreshStock();
             }
             else
                 this.ShowError(this.Translations.Get("error.network-full"));
+        }
+
+        /// <summary>Stores an item: into the network, or for a farmhand, sent to the host to store.</summary>
+        /// <returns>How many were stored or sent.</returns>
+        private int Store(Item item)
+        {
+            if (!Multiplayer.MultiplayerSync.IsRemote)
+                return this.Network.Insert(item);
+
+            // Sent whole: the host stores it, and returns anything the network has no room for.
+            Item sent = item.getOne();
+            sent.Stack = item.Stack;
+            int moved = item.Stack;
+            item.Stack = 0;
+            Multiplayer.MultiplayerSync.Instance?.Deposit(sent);
+            return moved;
         }
 
         /// <summary>Sends every item in one inventory slot to the network.</summary>
@@ -602,7 +1286,7 @@ namespace StardewLogistics.Menus
             if (item == null)
                 return 0;
 
-            int moved = this.Network.Insert(item);
+            int moved = this.Store(item);
             if (item.Stack <= 0)
                 Game1.player.Items[slot] = null;
 
@@ -612,9 +1296,9 @@ namespace StardewLogistics.Menus
         /// <summary>Sends the player's whole inventory to the network, keeping tools and equipped items.</summary>
         private void DepositAll()
         {
-            if (this.Network?.IsOnline != true)
+            if (this.Network == null)
             {
-                this.ShowError(this.Translations.Get("error.offline"));
+                this.ShowError(this.NotConnectedText);
                 return;
             }
 
@@ -634,34 +1318,9 @@ namespace StardewLogistics.Menus
             if (moved > 0)
             {
                 Game1.playSound("Ship");
+                Multiplayer.MultiplayerSync.Instance?.NotifyChanged();
                 this.RefreshStock();
             }
-        }
-
-        /// <summary>Opens the vanilla crafting page backed by the network's chests.</summary>
-        /// <remarks>
-        /// The game's own crafting menu already knows how to craft from a list of nearby chests, so the crafting
-        /// terminal hands it every chest on the network instead of reimplementing recipe matching.
-        /// </remarks>
-        private void OpenCraftingPage()
-        {
-            if (this.Network?.IsOnline != true)
-            {
-                this.ShowError(this.Translations.Get("error.offline"));
-                return;
-            }
-
-            this.ReleaseKeyboard();
-            Game1.playSound("bigSelect");
-            Game1.activeClickableMenu = new CraftingPage(
-                this.xPositionOnScreen,
-                this.yPositionOnScreen,
-                this.width,
-                this.height,
-                cooking: false,
-                standalone_menu: true,
-                material_containers: this.Network.GetMaterialInventories()
-            );
         }
 
         /// <summary>How many of an item the player's inventory could still take.</summary>

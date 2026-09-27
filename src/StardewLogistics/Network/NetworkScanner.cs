@@ -1,13 +1,21 @@
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
+using StardewLogistics.Devices;
 using StardewLogistics.Framework;
 using StardewValley;
 using StardewValley.Objects;
+using StardewValley.TerrainFeatures;
 using SObject = StardewValley.Object;
 
 namespace StardewLogistics.Network
 {
-    /// <summary>Rebuilds the storage networks in a location by flood-filling the cables placed there.</summary>
+    /// <summary>Rebuilds the storage networks in a location by flood-filling the cable floor laid there.</summary>
+    /// <remarks>
+    /// Cables are a custom <see cref="Flooring"/>, not placed objects, which is what lets a chest or machine sit on
+    /// the same tile as the cable feeding it. The graph is therefore a set of tiles in
+    /// <see cref="GameLocation.terrainFeatures"/>, and anything in the object layer attaches to it by being on a
+    /// cable tile or orthogonally beside one.
+    /// </remarks>
     internal static class NetworkScanner
     {
         /*********
@@ -28,95 +36,149 @@ namespace StardewLogistics.Network
         *********/
         /// <summary>Finds every storage network in a location.</summary>
         /// <param name="location">The location to scan.</param>
-        /// <param name="config">The mod settings, which decide the channel budget and the size cap.</param>
+        /// <param name="config">The mod settings, which cap how far a single network may spread.</param>
         public static List<StorageNetwork> Scan(GameLocation location, ModConfig config)
         {
             List<StorageNetwork> networks = new();
             if (location == null)
                 return networks;
 
-            // Index the mod's devices once, so the flood fill is pure dictionary lookups afterwards.
-            Dictionary<Vector2, NetworkNode> conductors = new();
-            Dictionary<Vector2, NetworkNode> devices = new();
-            foreach (KeyValuePair<Vector2, SObject> pair in location.Objects.Pairs)
-            {
-                NodeKind? kind = NetworkNode.GetKind(pair.Value?.ItemId);
-                if (kind == null)
-                    continue;
-
-                NetworkNode node = new(kind.Value, pair.Key, pair.Value);
-                if (node.IsConductive)
-                    conductors[pair.Key] = node;
-                else
-                    devices[pair.Key] = node;
-            }
-
-            if (conductors.Count == 0)
+            HashSet<Vector2> cables = FindCableTiles(location);
+            if (cables.Count == 0)
                 return networks;
 
-            HashSet<Vector2> globallyVisited = new();
+            HashSet<Vector2> visited = new();
             Queue<Vector2> queue = new();
 
-            foreach (Vector2 seed in conductors.Keys)
+            foreach (Vector2 seed in cables)
             {
-                if (globallyVisited.Contains(seed))
+                if (visited.Contains(seed))
                     continue;
 
-                List<NetworkNode> nodes = new();
-                List<StorageEntry> storages = new();
-                HashSet<Vector2> attached = new();
-                int controllers = 0;
-
+                HashSet<Vector2> component = new();
                 queue.Clear();
                 queue.Enqueue(seed);
-                globallyVisited.Add(seed);
+                visited.Add(seed);
 
                 while (queue.Count > 0)
                 {
                     Vector2 tile = queue.Dequeue();
-                    NetworkNode conductor = conductors[tile];
-                    nodes.Add(conductor);
-                    if (conductor.Kind == NodeKind.Controller)
-                        controllers++;
+                    component.Add(tile);
 
                     // A pathological cable run shouldn't be able to stall the game; stop growing and work with
-                    // what we have, which still leaves the player a usable (if truncated) network.
-                    if (nodes.Count >= config.MaxNetworkSize)
+                    // what we have, which still leaves the player a usable if truncated network.
+                    if (component.Count >= config.MaxNetworkSize)
                         break;
 
                     foreach (Vector2 direction in Directions)
                     {
                         Vector2 neighbour = tile + direction;
-
-                        if (conductors.ContainsKey(neighbour))
-                        {
-                            if (globallyVisited.Add(neighbour))
-                                queue.Enqueue(neighbour);
-                            continue;
-                        }
-
-                        if (!attached.Add(neighbour))
-                            continue;
-
-                        if (devices.TryGetValue(neighbour, out NetworkNode device))
-                            nodes.Add(device);
-                        else if (location.Objects.TryGetValue(neighbour, out SObject obj) && IsNetworkStorage(obj, out Chest chest))
-                            storages.Add(new StorageEntry(chest, neighbour));
+                        if (cables.Contains(neighbour) && visited.Add(neighbour))
+                            queue.Enqueue(neighbour);
                     }
                 }
 
-                int capacity = config.AdHocDeviceLimit + (controllers * config.ChannelsPerController);
-                networks.Add(new StorageNetwork(location, nodes, storages, capacity, config.EnableChannelLimits));
+                networks.Add(BuildNetwork(location, component));
             }
 
             return networks;
         }
 
+
+        /*********
+        ** Private methods
+        *********/
+        /// <summary>Collects every tile in a location carrying the mod's cable floor.</summary>
+        private static HashSet<Vector2> FindCableTiles(GameLocation location)
+        {
+            HashSet<Vector2> tiles = new();
+
+            foreach (KeyValuePair<Vector2, TerrainFeature> pair in location.terrainFeatures.Pairs)
+            {
+                if (pair.Value is Flooring floor && floor.whichFloor.Value == ModIds.CableFloorId)
+                    tiles.Add(pair.Key);
+            }
+
+            return tiles;
+        }
+
+        /// <summary>Attaches everything touching a connected run of cable, and builds the network from it.</summary>
+        private static StorageNetwork BuildNetwork(GameLocation location, HashSet<Vector2> cables)
+        {
+            List<NetworkNode> nodes = new();
+            List<StorageEntry> storages = new();
+            HashSet<Vector2> inspected = new();
+
+            foreach (Vector2 cable in cables)
+            {
+                // The cable's own tile first: an object placed directly on the cable is connected, which is the
+                // whole point of cables being a floor.
+                Attach(location, cable, inspected, nodes, storages);
+
+                foreach (Vector2 direction in Directions)
+                    Attach(location, cable + direction, inspected, nodes, storages);
+            }
+
+            return new StorageNetwork(location, cables, nodes, storages);
+        }
+
+        /// <summary>Attaches whatever object occupies a tile, if it's something the network can use.</summary>
+        private static void Attach(GameLocation location, Vector2 tile, HashSet<Vector2> inspected, List<NetworkNode> nodes, List<StorageEntry> storages)
+        {
+            if (!inspected.Add(tile))
+                return;
+
+            // The farm's Shipping Bin is a building, not an object; cable beside it connects it.
+            if (location.getBuildingAt(tile) is StardewValley.Buildings.ShippingBin bin)
+            {
+                Vector2 origin = new(bin.tileX.Value, bin.tileY.Value);
+                if (!nodes.Exists(node => node.Kind == NodeKind.ShippingBin && node.Object == null && node.Tile == origin))
+                    nodes.Add(new NetworkNode(NodeKind.ShippingBin, location, origin, null));
+                return;
+            }
+
+            if (!location.Objects.TryGetValue(tile, out SObject obj) || obj == null)
+                return;
+
+            // A Mini-Shipping Bin sells what's in it overnight: somewhere to sell through, never to store.
+            if (obj is Chest { SpecialChestType: Chest.SpecialChestTypes.MiniShippingBin })
+            {
+                nodes.Add(new NetworkNode(NodeKind.ShippingBin, location, tile, obj));
+                return;
+            }
+
+            NodeKind? kind = NetworkNode.GetKind(obj.ItemId);
+            if (kind != null)
+            {
+                nodes.Add(new NetworkNode(kind.Value, location, tile, obj));
+                return;
+            }
+
+            if (IsNetworkStorage(obj, out Chest chest))
+            {
+                storages.Add(new StorageEntry(chest, location, tile));
+                return;
+            }
+
+            // Tappers and crab pots produce by the game's own code, not machine rules. Tappers have machine data
+            // with no rules at all, so they're checked first, or they'd be treated -- and emptied -- as machines.
+            if (obj.IsTapper() || obj is CrabPot)
+            {
+                nodes.Add(new NetworkNode(NodeKind.Producer, location, tile, obj));
+                return;
+            }
+
+            // Anything else with machine data is a keg, furnace, preserves jar and so on: wiring one to the
+            // network is how it becomes available for processing jobs.
+            if (MachineIO.IsMachine(obj))
+                nodes.Add(new NetworkNode(NodeKind.Machine, location, tile, obj));
+        }
+
         /// <summary>Whether a placed object is a chest the network may use for storage.</summary>
         /// <remarks>
-        /// Loot chests, shipping bins and Junimo chests are excluded: they either aren't the player's to take from, or
-        /// they already share their contents through some other mechanism, and letting the network drain them would be
-        /// a surprise rather than a feature.
+        /// Loot chests, shipping bins and Junimo chests are excluded: they either aren't the player's to take from,
+        /// or they already share their contents some other way, and draining them would be a surprise rather than
+        /// a feature.
         /// </remarks>
         private static bool IsNetworkStorage(SObject obj, out Chest chest)
         {

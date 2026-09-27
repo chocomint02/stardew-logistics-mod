@@ -10,9 +10,8 @@ namespace StardewLogistics.Network
 {
     /// <summary>A chest attached to a storage network, with the priority and partition that govern what lands in it.</summary>
     /// <remarks>
-    /// This is the mod's answer to an Applied Energistics storage cell: the chest supplies the capacity, and the
-    /// priority and filter stored in its <c>modData</c> supply the routing rules. Settings live on the chest itself so
-    /// that breaking and replacing a cable never loses them.
+    /// The chest supplies the capacity, and the priority and filter stored in its <c>modData</c> supply the routing
+    /// rules. Settings live on the chest itself so that breaking and replacing a cable never loses them.
     /// </remarks>
     internal class StorageEntry
     {
@@ -21,6 +20,9 @@ namespace StardewLogistics.Network
         *********/
         /// <summary>The chest holding the items.</summary>
         public Chest Chest { get; }
+
+        /// <summary>The location the chest is in.</summary>
+        public GameLocation Location { get; }
 
         /// <summary>The tile the chest occupies.</summary>
         public Vector2 Tile { get; }
@@ -71,9 +73,10 @@ namespace StardewLogistics.Network
         /*********
         ** Public methods
         *********/
-        public StorageEntry(Chest chest, Vector2 tile)
+        public StorageEntry(Chest chest, GameLocation location, Vector2 tile)
         {
             this.Chest = chest;
+            this.Location = location;
             this.Tile = tile;
 
             this.PriorityField = chest.modData.TryGetValue(ModIds.PriorityKey, out string rawPriority)

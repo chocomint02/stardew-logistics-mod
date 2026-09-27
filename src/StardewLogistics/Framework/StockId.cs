@@ -1,0 +1,211 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using StardewValley;
+using SObject = StardewValley.Object;
+
+namespace StardewLogistics.Framework
+{
+    /// <summary>Names an item the way autocrafting needs to: precisely enough to tell Starfruit Wine from Blueberry Wine.</summary>
+    /// <remarks>
+    /// Every wine in the game is <c>(O)348</c>; what makes one Starfruit Wine is the ingredient recorded on it. The
+    /// planner and scheduler pass item identities around as strings, so a flavoured item is written as its item ID
+    /// and its ingredient joined by a bar: <c>(O)348|268</c>. A plain ID with no bar means "any of these", which is
+    /// what every recipe that existed before flavoured items still asks for.
+    ///
+    /// Quality is deliberately not part of the ID. Planning counts a gold and a normal Starfruit as two Starfruit,
+    /// the same way the terminal's counts always have.
+    /// </remarks>
+    internal static class StockId
+    {
+        /*********
+        ** Fields
+        *********/
+        private const char Separator = '|';
+
+        /// <summary>A real instance of each flavoured item seen, so one can be recreated with its proper name and sprite.</summary>
+        /// <remarks>
+        /// A flavoured item can't be rebuilt from its ID alone -- a wine's name, colour and price are set when the
+        /// keg makes it. Keeping one made by the game's own machine code is the only way to get all of that right.
+        /// </remarks>
+        private static readonly Dictionary<string, Item> Samples = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Display names already worked out, since the UI asks for them every frame.</summary>
+        private static readonly Dictionary<string, string> Names = new(StringComparer.OrdinalIgnoreCase);
+
+
+        /*********
+        ** Public methods
+        *********/
+        /// <summary>The stock ID for an item: its qualified ID, plus its ingredient when it has one.</summary>
+        public static string Of(Item item)
+        {
+            if (item == null)
+                return null;
+
+            string flavour = (item as SObject)?.preservedParentSheetIndex?.Value;
+            return string.IsNullOrEmpty(flavour)
+                ? item.QualifiedItemId
+                : item.QualifiedItemId + Separator + flavour;
+        }
+
+        /// <summary>Whether an ID names one particular flavour rather than any item with that ID.</summary>
+        public static bool IsFlavoured(string id) => id != null && id.IndexOf(Separator) >= 0;
+
+        /// <summary>The qualified item ID with any flavour removed.</summary>
+        public static string BaseId(string id)
+        {
+            int index = id?.IndexOf(Separator) ?? -1;
+            return index < 0 ? id : id.Substring(0, index);
+        }
+
+        /// <summary>Whether an ID is a spec for a group of items rather than one: a category ("-2", any gem), or
+        /// context tags ("#tag1,tag2", any item with all of them).</summary>
+        /// <remarks>Recipes ask for these -- a crafting recipe's "any egg", a machine's extra ingredient -- and
+        /// matching them the same way everywhere is what lets storage, jobs and machines all use them.</remarks>
+        public static bool IsSpec(string id) => id != null && (id.StartsWith("-") || id.StartsWith("#"));
+
+        /// <summary>The spec for items with all of some context tags.</summary>
+        public static string ForTags(IEnumerable<string> tags) => "#" + string.Join(",", tags);
+
+        /// <summary>Whether an item satisfies a request for a stock ID.</summary>
+        /// <remarks>A plain ID accepts any flavour; a flavoured one accepts only that flavour; a spec accepts any
+        /// item in its category, or with all its tags.</remarks>
+        public static bool Matches(Item item, string id)
+        {
+            if (item == null || string.IsNullOrEmpty(id))
+                return false;
+
+            if (id.StartsWith("-"))
+                return int.TryParse(id, out int category) && item.Category == category;
+            if (id.StartsWith("#"))
+                return id.Substring(1).Split(',').Select(tag => tag.Trim()).Where(tag => tag.Length > 0).All(item.HasContextTag);
+
+            return IsFlavoured(id)
+                ? string.Equals(Of(item), id, StringComparison.OrdinalIgnoreCase)
+                : string.Equals(item.QualifiedItemId, id, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Keeps a copy of a flavoured item so it can be recreated later.</summary>
+        public static void Remember(Item sample)
+        {
+            string id = Of(sample);
+            if (!IsFlavoured(id) || Samples.ContainsKey(id))
+                return;
+
+            Item copy = sample.getOne();
+            Samples[id] = copy;
+            Names[id] = copy.DisplayName;
+        }
+
+        /// <summary>Drops everything remembered, for when a different save is loaded.</summary>
+        public static void Reset()
+        {
+            Samples.Clear();
+            Names.Clear();
+        }
+
+        /// <summary>Creates an item from a stock ID, or <c>null</c> if it doesn't resolve.</summary>
+        public static Item Create(string id, int stack = 1)
+        {
+            if (string.IsNullOrWhiteSpace(id) || id.StartsWith("-"))
+                return null;
+
+            try
+            {
+                if (Samples.TryGetValue(id, out Item sample))
+                {
+                    Item copy = sample.getOne();
+                    copy.Stack = Math.Max(1, stack);
+                    return copy;
+                }
+
+                // Not seen from a machine yet: the game's own factory makes a flavoured item from its ingredient,
+                // with its proper name, colour and price -- Parsnip Juice, not Juice.
+                if (IsFlavoured(id) && CreateFlavoured(id) is Item flavoured)
+                {
+                    Remember(flavoured);
+                    flavoured.Stack = Math.Max(1, stack);
+                    return flavoured;
+                }
+
+                Item item = ItemRegistry.Create(BaseId(id), Math.Max(1, stack), 0, allowNull: true);
+
+                // Something the factory doesn't know. The ingredient can still be recorded, which is enough to stack
+                // and match correctly even if the name is the generic one.
+                if (IsFlavoured(id) && item is SObject obj)
+                    obj.preservedParentSheetIndex.Value = FlavourOf(id);
+
+                return item;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>The ingredient part of a flavoured stock ID, or <c>null</c> for a plain one.</summary>
+        public static string FlavourOf(string id)
+        {
+            int index = id?.IndexOf(Separator) ?? -1;
+            return index < 0 ? null : id.Substring(index + 1);
+        }
+
+        /// <summary>Makes a flavoured item with the game's own factory, if it's one of the game's preserve types.</summary>
+        private static Item CreateFlavoured(string id)
+        {
+            try
+            {
+                if (ItemRegistry.Create(FlavourOf(id), allowNull: true) is not SObject ingredient)
+                    return null;
+
+                StardewValley.ItemTypeDefinitions.ObjectDataDefinition objects = ItemRegistry.GetObjectTypeDefinition();
+                foreach (SObject.PreserveType type in Enum.GetValues<SObject.PreserveType>())
+                {
+                    if (string.Equals(objects.GetBaseItemIdForFlavoredItem(type, ingredient.ItemId), BaseId(id), StringComparison.OrdinalIgnoreCase))
+                        return objects.CreateFlavoredItem(type, ingredient);
+                }
+            }
+            catch
+            {
+                // Fall back on the generic item.
+            }
+
+            return null;
+        }
+
+        /// <summary>The display name for a stock ID, falling back to the ID itself.</summary>
+        public static string GetDisplayName(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return "?";
+
+            // A spec names a group: "Any Gem", "Any honey_item".
+            if (id.StartsWith("-"))
+                return int.TryParse(id, out int category) && !string.IsNullOrWhiteSpace(SObject.GetCategoryDisplayName(category))
+                    ? "Any " + SObject.GetCategoryDisplayName(category)
+                    : id;
+            if (id.StartsWith("#"))
+                return "Any " + id.Substring(1).Replace(",", " + ");
+
+            if (Names.TryGetValue(id, out string cached))
+                return cached;
+
+            string name;
+            try
+            {
+                name = IsFlavoured(id)
+                    ? Create(id)?.DisplayName
+                    : ItemRegistry.GetData(id)?.DisplayName;
+            }
+            catch
+            {
+                name = null;
+            }
+
+            name ??= id;
+            Names[id] = name;
+            return name;
+        }
+    }
+}

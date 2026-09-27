@@ -15,7 +15,7 @@ namespace StardewLogistics.Framework
         Deny
     }
 
-    /// <summary>A partition list attached to a chest or a bus, mirroring Applied Energistics' partitioned cells.</summary>
+    /// <summary>A partition list attached to a chest or a bus, restricting what it accepts.</summary>
     /// <remarks>
     /// Filters are matched on qualified item ID only, so a partition for "Wine" accepts every quality and flavour of
     /// wine. The meaning of an <em>empty</em> filter depends on the device: an unpartitioned chest accepts anything,
@@ -58,12 +58,23 @@ namespace StardewLogistics.Framework
         /// <param name="acceptAllWhenEmpty">What an empty filter means: <c>true</c> to pass everything (a chest), <c>false</c> to pass nothing (an export bus).</param>
         public bool Accepts(Item item, bool acceptAllWhenEmpty)
         {
-            if (item == null)
+            return item != null && this.AcceptsId(item.QualifiedItemId, acceptAllWhenEmpty);
+        }
+
+        /// <summary>Whether an item ID passes the filter.</summary>
+        /// <remarks>
+        /// The scheduler tests filters against a recipe's input several times a second across every machine on
+        /// the network, and it only ever has an ID. Building an <see cref="Item"/> just to read its ID back off
+        /// again would be wasted work.
+        /// </remarks>
+        public bool AcceptsId(string qualifiedItemId, bool acceptAllWhenEmpty)
+        {
+            if (string.IsNullOrEmpty(qualifiedItemId))
                 return false;
             if (this.Entries.Count == 0)
                 return this.Mode == FilterMode.Deny || acceptAllWhenEmpty;
 
-            bool listed = this.Entries.Contains(item.QualifiedItemId);
+            bool listed = this.Entries.Contains(qualifiedItemId);
             return this.Mode == FilterMode.Allow ? listed : !listed;
         }
 

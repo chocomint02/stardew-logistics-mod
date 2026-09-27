@@ -8,14 +8,9 @@ namespace StardewLogistics.Framework
         /*********
         ** Network rules
         *********/
-        /// <summary>Whether devices consume channels, so a network needs a controller to grow past a handful of devices.</summary>
-        public bool EnableChannelLimits { get; set; } = true;
-
-        /// <summary>How many devices a network without a controller supports.</summary>
-        public int AdHocDeviceLimit { get; set; } = 8;
-
-        /// <summary>How many devices each controller adds to the network's budget.</summary>
-        public int ChannelsPerController { get; set; } = 32;
+        /// <summary>How many recipe steps deep autocrafting may plan.</summary>
+        /// <remarks>Ore to bar to a crafted item is three; beyond about six the plans stop being comprehensible.</remarks>
+        public int MaxCraftDepth { get; set; } = 6;
 
         /// <summary>The most cable tiles a single network may span, as a safety valve against runaway scans.</summary>
         public int MaxNetworkSize { get; set; } = 20000;
@@ -41,15 +36,37 @@ namespace StardewLogistics.Framework
         /// <summary>A key that opens the terminal for the network under the cursor, as an alternative to clicking it.</summary>
         public KeybindList OpenTerminalKey { get; set; } = new KeybindList();
 
+        /// <summary>The key that opens the equipped Wireless Terminal, anywhere.</summary>
+        public KeybindList OpenWirelessTerminalKey { get; set; } = KeybindList.Parse("B");
+
+        /*********
+        ** Appearance
+        *********/
+        /// <summary>The colour scheme the mod's windows are drawn in: one of <see cref="Menus.UiTheme.Names"/>.</summary>
+        public string Theme { get; set; } = Menus.UiTheme.Vanilla;
+
+        /// <summary>How fast menu animations play, as a percentage of normal; zero turns them off.</summary>
+        public int AnimationSpeed { get; set; } = 100;
+
         /// <summary>Clamps every setting to a usable range, so a hand-edited config can't break the mod.</summary>
         public void Normalise()
         {
-            this.AdHocDeviceLimit = Clamp(this.AdHocDeviceLimit, 1, 1000);
-            this.ChannelsPerController = Clamp(this.ChannelsPerController, 1, 10000);
+            this.MaxCraftDepth = Clamp(this.MaxCraftDepth, 1, 12);
             this.MaxNetworkSize = Clamp(this.MaxNetworkSize, 64, 200000);
             this.BusIntervalTicks = Clamp(this.BusIntervalTicks, 6, 3600);
             this.BusItemsPerRun = Clamp(this.BusItemsPerRun, 1, 999);
             this.OpenTerminalKey ??= new KeybindList();
+            this.OpenWirelessTerminalKey ??= KeybindList.Parse("B");
+            this.AnimationSpeed = Clamp(this.AnimationSpeed, 0, 300);
+            if (!Menus.UiTheme.IsKnown(this.Theme))
+                this.Theme = Menus.UiTheme.Vanilla;
+        }
+
+        /// <summary>Puts the appearance settings into effect.</summary>
+        public void ApplyAppearance()
+        {
+            Menus.UiTheme.Current = this.Theme;
+            Menus.UiAnimation.SpeedPercent = this.AnimationSpeed;
         }
 
         private static int Clamp(int value, int min, int max)

@@ -7,7 +7,7 @@
     <Version>0.1.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <EnableHarmony>false</EnableHarmony>
+    <EnableHarmony>true</EnableHarmony>
   </PropertyGroup>
 
   <ItemGroup>

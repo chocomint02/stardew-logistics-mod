@@ -7,6 +7,7 @@ using StardewLogistics.Framework;
 using StardewLogistics.Network;
 using StardewValley;
 using StardewValley.Menus;
+using SObject = StardewValley.Object;
 
 namespace StardewLogistics.Menus
 {
@@ -16,7 +17,7 @@ namespace StardewLogistics.Menus
         /*********
         ** Fields
         *********/
-        private const int RowHeight = 84;
+        private const int RowHeight = 104;
         private const int FilterSlotSize = 32;
 
         private readonly List<ConfigRow> ConfigRows = new();
@@ -45,8 +46,11 @@ namespace StardewLogistics.Menus
             /// <summary>The filter being edited.</summary>
             public ItemFilter Filter;
 
-            /// <summary>Whether this row has an insertion priority, which buses don't.</summary>
-            public bool HasPriority => this.Entry != null;
+            /// <summary>Whether the row's filter and priority can be edited.</summary>
+            public bool ReadOnly;
+
+            /// <summary>Whether this row has an insertion priority, which only chests do.</summary>
+            public bool HasPriority => this.Entry != null && !this.ReadOnly;
 
             /// <summary>Writes the filter back to the underlying object's <c>modData</c>.</summary>
             public void Save()
@@ -62,28 +66,19 @@ namespace StardewLogistics.Menus
         /*********
         ** Private methods: shared chrome
         *********/
-        /// <summary>Draws the title, tabs, search box and the Items-tab toolbar.</summary>
-        private void DrawHeader(SpriteBatch b)
+        /// <summary>Draws the tabs, with the active one's highlight gliding to it when the tab changes.</summary>
+        private void DrawTabs(SpriteBatch b)
         {
             foreach (ClickableComponent tab in this.TabButtons)
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), tab.bounds.X, tab.bounds.Y, tab.bounds.Width, tab.bounds.Height, Color.White * 0.65f, 3f, drawShadow: false);
+
+            Rectangle highlight = this.GetTabHighlight();
+            if (!highlight.IsEmpty)
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), highlight.X, highlight.Y, highlight.Width, highlight.Height, Color.White, 3f, drawShadow: false);
+
+            foreach (ClickableComponent tab in this.TabButtons)
             {
-                bool active = tab.name == "craft"
-                    ? false
-                    : this.Tab.ToString() == tab.name;
-
-                drawTextureBox(
-                    b,
-                    Game1.mouseCursors,
-                    new Rectangle(384, 396, 15, 15),
-                    tab.bounds.X,
-                    tab.bounds.Y,
-                    tab.bounds.Width,
-                    tab.bounds.Height,
-                    active ? Color.White : Color.White * 0.65f,
-                    3f,
-                    drawShadow: false
-                );
-
+                bool active = this.Tab.ToString() == tab.name;
                 Utility.drawTextWithShadow(
                     b,
                     this.GetTabLabel(tab.name),
@@ -92,6 +87,13 @@ namespace StardewLogistics.Menus
                     active ? Game1.textColor : Game1.textColor * 0.7f
                 );
             }
+        }
+
+        /// <summary>Draws the search box and toolbar, on the tabs that have them.</summary>
+        private void DrawHeader(SpriteBatch b)
+        {
+            if (!this.TabHasSearch)
+                return;
 
             this.SearchBox.Draw(b);
             if (string.IsNullOrEmpty(this.SearchBox.Text) && !this.SearchBox.Selected)
@@ -105,21 +107,52 @@ namespace StardewLogistics.Menus
                 );
             }
 
-            if (this.Tab != TerminalTab.Items)
-                return;
-
-            this.SortButton.draw(b);
-            this.DepositAllButton.draw(b);
-
-            long totalItems = this.AllStock.Sum(entry => entry.Count);
-            string summary = this.Translations.Get("ui.summary", new
+            this.DrawFilterButton(b, this.SortButton, this.Translations.Get("ui.sort-label", new
             {
-                types = NumberFormat.Full(this.AllStock.Count),
-                items = NumberFormat.Full(totalItems),
-                free = NumberFormat.Full(this.Network?.FreeSlots ?? 0)
-            });
+                mode = this.Translations.Get("sort." + this.Sort.ToString().ToLowerInvariant())
+            }), active: false);
 
-            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(this.xPositionOnScreen + 148, this.yPositionOnScreen + 76), Game1.textColor);
+            // The second slot is "deposit everything" while browsing stock, and "show craftable only"
+            // while browsing recipes.
+            if (this.Tab == TerminalTab.Craft)
+                this.CraftableOnlyButton.draw(b, this.CraftableOnly ? Color.White : Color.White * 0.5f, 0.9f);
+            else if (this.Tab == TerminalTab.Items)
+                this.DepositAllButton.draw(b);
+            // Neither control means anything on the Auto tab, so the slot is left empty rather than showing a
+            // button that does nothing when clicked.
+
+            this.DrawFilterButton(b, this.TypeFilterButton, this.GetFilterButtonLabel("type"), this.Filter.Category != null);
+            this.DrawFilterButton(b, this.ModFilterButton, this.GetFilterButtonLabel("mod"), this.Filter.Mod != null);
+
+        }
+
+        /// <summary>Draws one of the header's dropdown filter buttons.</summary>
+        /// <param name="active">Whether the filter is currently restricting anything, which tints the button.</param>
+        private void DrawFilterButton(SpriteBatch b, ClickableComponent button, string label, bool active)
+        {
+            drawTextureBox(
+                b,
+                Game1.mouseCursors,
+                new Rectangle(384, 396, 15, 15),
+                button.bounds.X,
+                button.bounds.Y,
+                button.bounds.Width,
+                button.bounds.Height,
+                active ? Color.Wheat : Color.White,
+                3f,
+                drawShadow: false
+            );
+
+            // A long mod name scrolls within the button rather than spilling past its edge or the caret.
+            Marquee.Draw(b, label, Game1.smallFont, new Vector2(button.bounds.X + 14, button.bounds.Y + 10), button.bounds.Width - 40, Game1.textColor);
+
+            // A small caret marking it as a dropdown.
+            b.Draw(
+                Game1.mouseCursors,
+                new Rectangle(button.bounds.Right - 26, button.bounds.Y + 16, 16, 12),
+                new Rectangle(421, 472, 12, 9),
+                Color.White
+            );
         }
 
         /// <summary>Draws a vertical scrollbar beside a scrollable area.</summary>
@@ -154,13 +187,7 @@ namespace StardewLogistics.Menus
 
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
-                return;
-            }
-
-            if (!this.Network.IsOnline)
-            {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.overloaded", new { used = this.Network.UsedChannels, capacity = this.Network.ChannelCapacity }));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 
@@ -180,25 +207,45 @@ namespace StardewLogistics.Menus
                         continue;
 
                     NetworkItemStack entry = this.VisibleStock[index];
-                    entry.Sample.drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: true);
+                    // The count is drawn separately on its own plate; the game still draws the quality star, which is
+                    // the only way to tell a gold stack from a normal one.
+                    (entry.Icon ?? entry.Sample).drawInMenu(b, new Vector2(x, y), this.GridScale(index), 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
 
                     // Vanilla stack numbers max out long before a network does, so draw the count ourselves.
-                    string count = NumberFormat.Abbreviate(entry.Count);
-                    Vector2 size = Game1.tinyFont.MeasureString(count);
-                    Utility.drawTextWithShadow(b, count, Game1.tinyFont, new Vector2(x + SlotSize - size.X - 6, y + SlotSize - size.Y - 4), Color.White);
+                    DrawSlotCount(b, NumberFormat.Abbreviate(entry.Count), x, y);
                 }
             }
 
             if (this.VisibleStock.Count == 0)
             {
-                string message = string.IsNullOrWhiteSpace(this.SearchBox.Text)
-                    ? this.Translations.Get("ui.empty-network")
-                    : this.Translations.Get("ui.no-results");
-                this.DrawCentredMessage(b, grid, message);
+                // Only explain something the player can act on. A network with chests attached and nothing in them
+                // is working exactly as intended, so it gets an empty grid rather than a message telling the player
+                // to do what they have already done.
+                string message = null;
+                if (this.Network.Storages.Count == 0)
+                    message = this.Translations.Get("ui.no-storage");
+                else if (!this.Filter.IsEmpty)
+                    message = this.Translations.Get("ui.no-results");
+
+                if (message != null)
+                    this.DrawCentredMessage(b, grid, message);
             }
 
             int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);
             this.DrawScrollbar(b, grid, this.Rows, totalRows);
+
+            long totalItems = this.AllStock.Sum(entry => entry.Count);
+            string summary = this.Translations.Get("ui.summary", new
+            {
+                types = NumberFormat.Full(this.AllStock.Count),
+                items = NumberFormat.Full(totalItems),
+                free = NumberFormat.Full(this.Network?.FreeSlots ?? 0)
+            });
+
+            if (this.VisibleStock.Count != this.AllStock.Count)
+                summary += this.Translations.Get("ui.summary-filtered", new { shown = NumberFormat.Full(this.VisibleStock.Count) });
+
+            Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 6), Game1.textColor);
         }
 
 
@@ -216,26 +263,55 @@ namespace StardewLogistics.Menus
             {
                 this.ConfigRows.Add(new ConfigRow
                 {
-                    Title = this.Translations.Get("device.chest", new { x = (int)entry.Tile.X, y = (int)entry.Tile.Y }),
+                    Title = this.Translations.Get("device.chest", new { x = (int)entry.Tile.X, y = (int)entry.Tile.Y }) + this.DescribeElsewhere(entry.Location),
                     Subtitle = this.Translations.Get("device.chest-slots", new { used = entry.UsedSlots, total = entry.Capacity }),
                     Entry = entry,
                     Filter = entry.Filter
                 });
             }
 
-            foreach (NetworkNode node in this.Network.Nodes.Where(n => n.Kind is NodeKind.ImportBus or NodeKind.ExportBus))
+            // Machines are listed so the player can see what the network has picked up, but they carry no
+            // filter or priority of their own yet; that arrives with the autocrafting scheduler.
+            foreach (NetworkNode node in this.Network.Machines)
             {
                 this.ConfigRows.Add(new ConfigRow
                 {
-                    Title = this.Translations.Get(node.Kind == NodeKind.ImportBus ? "device.import-bus" : "device.export-bus", new { x = (int)node.Tile.X, y = (int)node.Tile.Y }),
-                    Subtitle = this.Translations.Get(node.Kind == NodeKind.ImportBus ? "device.import-hint" : "device.export-hint"),
+                    Title = this.Translations.Get("device.machine", new { name = node.Object.DisplayName, x = (int)node.Tile.X, y = (int)node.Tile.Y }) + this.DescribeElsewhere(node.Location),
+                    Subtitle = DescribeMachine(node),
                     Node = node,
-                    Filter = node.GetFilter()
+                    Filter = node.GetFilter(),
+                    ReadOnly = true
                 });
             }
         }
 
-        /// <summary>Draws the per-chest and per-bus configuration rows.</summary>
+        /// <summary>Names a location other than the terminal's, so a cellar chest isn't mistaken for one here.</summary>
+        private string DescribeElsewhere(GameLocation location)
+        {
+            if (location == null || location == this.TerminalLocation)
+                return "";
+
+            return this.Translations.Get("device.elsewhere", new { location = location.GetDisplayName() ?? location.Name });
+        }
+
+        /// <summary>Describes what a wired machine is currently doing.</summary>
+        private string DescribeMachine(NetworkNode node)
+        {
+            SObject machine = node.Object;
+
+            if (!Devices.MachineIO.IsOperable(machine))
+                return this.Translations.Get("device.cask-invalid");
+
+            if (machine.readyForHarvest.Value && machine.heldObject.Value != null)
+                return this.Translations.Get("device.machine-ready", new { item = machine.heldObject.Value.DisplayName });
+
+            if (machine.MinutesUntilReady > 0)
+                return this.Translations.Get("device.machine-busy", new { minutes = machine.MinutesUntilReady });
+
+            return this.Translations.Get("device.machine-idle");
+        }
+
+        /// <summary>Draws the per-chest and per-machine configuration rows.</summary>
         private void DrawStorageTab(SpriteBatch b)
         {
             Rectangle grid = this.GetGridBounds();
@@ -259,8 +335,10 @@ namespace StardewLogistics.Menus
 
                 drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), grid.X, y, grid.Width, RowHeight - 8, Color.White * 0.9f, 1f, drawShadow: false);
 
-                Utility.drawTextWithShadow(b, row.Title, Game1.smallFont, new Vector2(grid.X + 20, y + 14), Game1.textColor);
-                Utility.drawTextWithShadow(b, row.Subtitle, Game1.smallFont, new Vector2(grid.X + 20, y + 42), Game1.textColor * 0.6f);
+                // Names run up to the priority buttons; a chest named at length scrolls rather than running under them.
+                int nameWidth = this.GetPriorityButton(grid, y, increase: false).X - 12 - (grid.X + 18);
+                Marquee.Draw(b, row.Title, Game1.smallFont, new Vector2(grid.X + 18, y + 16), nameWidth, Game1.textColor);
+                Marquee.Draw(b, row.Subtitle, Game1.smallFont, new Vector2(grid.X + 18, y + 52), nameWidth, Game1.textColor * 0.6f);
 
                 // Priority controls
                 if (row.HasPriority)
@@ -273,17 +351,20 @@ namespace StardewLogistics.Menus
 
                     string priority = row.Entry.Priority.ToString();
                     Vector2 size = Game1.smallFont.MeasureString(priority);
-                    Utility.drawTextWithShadow(b, priority, Game1.smallFont, new Vector2(minus.Right + 20 - (size.X / 2), y + 26), Game1.textColor);
+                    Utility.drawTextWithShadow(b, priority, Game1.smallFont, new Vector2(minus.Right + 16 - (size.X / 2), y + 36), Game1.textColor);
                 }
 
                 // Allow/deny toggle
                 Rectangle mode = this.GetModeButton(grid, y);
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), mode.X, mode.Y, mode.Width, mode.Height, Color.White, 2f, drawShadow: false);
+
+                string modeLabel = this.Translations.Get(row.Filter.Mode == FilterMode.Allow ? "filter.allow" : "filter.deny");
+                Vector2 modeSize = Game1.smallFont.MeasureString(modeLabel);
                 Utility.drawTextWithShadow(
                     b,
-                    this.Translations.Get(row.Filter.Mode == FilterMode.Allow ? "filter.allow" : "filter.deny"),
-                    Game1.tinyFont,
-                    new Vector2(mode.X + 8, mode.Y + 10),
+                    modeLabel,
+                    Game1.smallFont,
+                    new Vector2(mode.Center.X - (modeSize.X / 2), mode.Center.Y - (modeSize.Y / 2)),
                     Game1.textColor
                 );
 
@@ -297,7 +378,7 @@ namespace StardewLogistics.Menus
                     b.Draw(Game1.menuTexture, bounds, Game1.getSourceRectForStandardTileSheet(Game1.menuTexture, 10), pending ? Color.Gold : Color.White);
 
                     if (slot < samples.Count && samples[slot] != null)
-                        samples[slot].drawInMenu(b, new Vector2(bounds.X, bounds.Y), 0.5f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+                        DrawItemInSlot(b, samples[slot], bounds);
                 }
             }
 
@@ -315,20 +396,74 @@ namespace StardewLogistics.Menus
             }
         }
 
+        /// <summary>Draws a quantity in the corner of a grid slot.</summary>
+        /// <remarks>
+        /// The number sits on a dark plate rather than relying on text colour alone. No single colour works: white
+        /// disappears against the menu's light background, and black disappears against dark items like coal or
+        /// iron bars. A plate behind the text makes the contrast independent of whatever it covers.
+        /// </remarks>
+        private static void DrawSlotCount(SpriteBatch b, string text, int slotX, int slotY)
+        {
+            const float scale = 0.75f;
+            const int padX = 5;
+            const int padY = 2;
+
+            Vector2 size = Game1.smallFont.MeasureString(text) * scale;
+            int width = (int)size.X + (padX * 2);
+            int height = (int)size.Y + (padY * 2);
+            int x = slotX + SlotSize - width - 4;
+            int y = slotY + SlotSize - height - 4;
+
+            b.Draw(Game1.staminaRect, new Rectangle(x, y, width, height), new Color(26, 22, 32) * 0.78f);
+            b.DrawString(
+                Game1.smallFont,
+                text,
+                new Vector2(x + padX, y + padY),
+                Color.White,
+                0f,
+                Vector2.Zero,
+                scale,
+                SpriteEffects.None,
+                0.95f
+            );
+        }
+
+        /// <summary>Draws an item centred inside a slot smaller than a normal inventory square.</summary>
+        /// <remarks>
+        /// <see cref="Item.drawInMenu(SpriteBatch, Vector2, float, float, float, StackDrawType, Color, bool)"/>
+        /// centres the sprite on <c>position + (32, 32)</c> within a 64px cell, so passing a small slot's top-left
+        /// corner pushes the icon half a cell down and right, over its neighbour. Offsetting back by half a cell
+        /// puts it where it belongs. Big craftables are 16x32 rather than 16x16, so they need half the scale again
+        /// or they overflow the slot vertically.
+        /// </remarks>
+        private static void DrawItemInSlot(SpriteBatch b, Item item, Rectangle slot)
+        {
+            bool tall = item is SObject obj && obj.bigCraftable.Value;
+            float scale = (slot.Height / 64f) * (tall ? 0.5f : 1f);
+            Vector2 position = new(slot.Center.X - 32, slot.Center.Y - 32);
+
+            item.drawInMenu(b, position, scale, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+        }
+
         /// <summary>The bounds of a priority button on a row.</summary>
+        /// <remarks>
+        /// The columns below are laid out against the 768px content width: label 18-260, priority 270-358,
+        /// allow/deny 370-460, then nine 32px filter slots ending at 760. Widening any of them pushes the
+        /// filter slots off the panel, which is what clipped them before.
+        /// </remarks>
         private Rectangle GetPriorityButton(Rectangle grid, int rowY, bool increase)
         {
-            int x = grid.X + 300 + (increase ? 72 : 0);
-            return new Rectangle(x, rowY + 24, 28, 32);
+            int x = grid.X + 270 + (increase ? 60 : 0);
+            return new Rectangle(x, rowY + 32, 28, 32);
         }
 
         /// <summary>The bounds of the allow/deny toggle on a row.</summary>
-        private Rectangle GetModeButton(Rectangle grid, int rowY) => new(grid.X + 400, rowY + 20, 64, 40);
+        private Rectangle GetModeButton(Rectangle grid, int rowY) => new(grid.X + 370, rowY + 28, 90, 44);
 
         /// <summary>The bounds of one filter slot on a row.</summary>
         private Rectangle GetFilterSlot(Rectangle grid, int rowY, int slot)
         {
-            return new Rectangle(grid.X + 480 + (slot * FilterSlotSize), rowY + 22, FilterSlotSize, FilterSlotSize);
+            return new Rectangle(grid.X + 472 + (slot * FilterSlotSize), rowY + 32, FilterSlotSize, FilterSlotSize);
         }
 
 
@@ -340,25 +475,24 @@ namespace StardewLogistics.Menus
         {
             Rectangle grid = this.GetGridBounds();
 
+            // A Wireless Terminal is tuned here: its channel, and whether anything's broadcasting on it.
+            if (this.IsWireless)
+            {
+                this.DrawChannelControl(b, grid);
+                grid = new Rectangle(grid.X, grid.Y + 104, grid.Width, grid.Height - 104);
+            }
+
             if (this.Network == null)
             {
-                this.DrawCentredMessage(b, grid, this.Translations.Get("error.not-connected"));
+                this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
 
             List<string> lines = new()
             {
-                this.Translations.Get(this.Network.IsOnline ? "network.status-online" : "network.status-overloaded"),
-                "",
-                this.Translations.Get("network.channels", new { used = this.Network.UsedChannels, capacity = this.Network.ChannelCapacity }),
-                this.Translations.Get("network.controllers", new { count = this.Network.ControllerCount }),
-                this.Translations.Get("network.cables", new { count = this.Network.GetNodes(NodeKind.Cable).Count() }),
-                this.Translations.Get("network.terminals", new { count = this.Network.GetNodes(NodeKind.Terminal).Count() + this.Network.GetNodes(NodeKind.CraftingTerminal).Count() }),
-                this.Translations.Get("network.buses", new
-                {
-                    imports = this.Network.GetNodes(NodeKind.ImportBus).Count(),
-                    exports = this.Network.GetNodes(NodeKind.ExportBus).Count()
-                }),
+                this.Translations.Get("network.cables", new { count = this.Network.TotalCableCount }),
+                this.Translations.Get("network.terminals", new { count = this.Network.Terminals.Count() }),
+                this.Translations.Get("network.machines", new { count = this.Network.Machines.Count() }),
                 "",
                 this.Translations.Get("network.chests", new { count = this.Network.Storages.Count }),
                 this.Translations.Get("network.slots", new { used = NumberFormat.Full(this.Network.UsedSlots), total = NumberFormat.Full(this.Network.TotalSlots) }),
@@ -369,10 +503,14 @@ namespace StardewLogistics.Menus
                 })
             };
 
-            if (!this.Network.IsOnline)
+            // A wirelessly linked network says where else it reaches.
+            if (this.Network.IsLinked)
             {
                 lines.Add("");
-                lines.Add(this.Translations.Get("network.overload-hint"));
+                lines.Add(this.Translations.Get("network.linked", new
+                {
+                    places = string.Join(", ", this.Network.Locations.Select(location => location.GetDisplayName() ?? location.Name))
+                }));
             }
 
             int y = grid.Y + 8;
@@ -385,12 +523,72 @@ namespace StardewLogistics.Menus
         }
 
 
+        /// <summary>The Wireless Terminal's channel buttons.</summary>
+        private (Rectangle Minus, Rectangle Plus) GetChannelButtons()
+        {
+            Rectangle grid = this.GetGridBounds();
+            int labelWidth = (int)Game1.smallFont.MeasureString(this.Translations.Get("wireless-terminal.channel")).X + 24;
+            Rectangle minus = new(grid.X + 16 + labelWidth, grid.Y + 8, 44, 44);
+            return (minus, new Rectangle(minus.Right + 90, minus.Y, 44, 44));
+        }
+
+        /// <summary>Draws the Wireless Terminal's channel and link.</summary>
+        private void DrawChannelControl(SpriteBatch b, Rectangle grid)
+        {
+            (Rectangle minus, Rectangle plus) = this.GetChannelButtons();
+            Utility.drawTextWithShadow(b, this.Translations.Get("wireless-terminal.channel"), Game1.smallFont, new Vector2(grid.X + 16, minus.Y + 10), Game1.textColor);
+
+            foreach ((Rectangle bounds, string label) in new[] { (minus, "-"), (plus, "+") })
+            {
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
+                Vector2 size = Game1.smallFont.MeasureString(label);
+                Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
+            }
+
+            string channel = this.WirelessChannel.ToString();
+            Vector2 channelSize = Game1.smallFont.MeasureString(channel);
+            Utility.drawTextWithShadow(b, channel, Game1.smallFont, new Vector2(((minus.Right + plus.X) / 2) - (channelSize.X / 2), minus.Y + 10), Game1.textColor);
+
+            Multiplayer.NetworkRef.GetNetworkOnChannel(this.Networks, this.WirelessChannel, out NetworkNode transmitter);
+            string status = transmitter != null
+                ? this.Translations.Get("wireless-terminal.linked", new { location = transmitter.Location?.GetDisplayName() ?? transmitter.Location?.Name, x = (int)transmitter.Tile.X, y = (int)transmitter.Tile.Y })
+                : this.Translations.Get("wireless-terminal.unlinked", new { channel = this.WirelessChannel });
+            Marquee.DrawWrapped(b, status, Game1.smallFont, new Vector2(grid.X + 16, minus.Bottom + 12), grid.Width - 32, transmitter != null ? UiTheme.Good : UiTheme.Bad, maxLines: 1);
+        }
+
+        /// <summary>Handles a click on the Wireless Terminal's channel buttons.</summary>
+        /// <returns>Whether the click was on them.</returns>
+        private bool ReceiveClickOnChannel(int x, int y)
+        {
+            if (!this.IsWireless)
+                return false;
+
+            (Rectangle minus, Rectangle plus) = this.GetChannelButtons();
+            if (!minus.Contains(x, y) && !plus.Contains(x, y))
+                return false;
+
+            int step = (IsShiftDown() ? 10 : 1) * (plus.Contains(x, y) ? 1 : -1);
+            int channel = Math.Clamp(this.WirelessChannel + step, NetworkNode.MinChannel, NetworkNode.MaxChannel);
+            NetworkNode.SetChannel(this.WirelessTerminal as StardewValley.Object, channel);
+
+            this.StockRowsCache = null;
+            this.FarmRowsCache = null;
+            this.SummaryCache = null;
+            this.RefreshStock();
+            Game1.playSound("drumkit6");
+            return true;
+        }
+
+
         /*********
         ** Private methods: input on the non-item tabs
         *********/
         /// <summary>Handles a click while the Storage or Network tab is showing.</summary>
         private void ReceiveClickOnTab(int x, int y, bool rightClick)
         {
+            if (this.Tab == TerminalTab.Network && !rightClick && this.ReceiveClickOnChannel(x, y))
+                return;
+
             if (this.Tab != TerminalTab.Storage)
                 return;
 
@@ -478,6 +676,16 @@ namespace StardewLogistics.Menus
         /// <summary>Sets the hover text while the Storage or Network tab is showing.</summary>
         private void PerformHoverOnTab(int x, int y)
         {
+            if (this.Tab == TerminalTab.Network && this.IsWireless)
+            {
+                (Rectangle minus, Rectangle plus) = this.GetChannelButtons();
+                if (minus.Contains(x, y) || plus.Contains(x, y))
+                {
+                    this.HoverText = this.Translations.Get("wireless-terminal.channel-hint");
+                    return;
+                }
+            }
+
             if (this.Tab != TerminalTab.Storage)
                 return;
 
