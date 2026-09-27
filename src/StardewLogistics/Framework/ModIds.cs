@@ -91,6 +91,10 @@ namespace StardewLogistics.Framework
         /// output a job is waiting for.</remarks>
         public const string JobKey = ModId + "/job";
 
+        /// <summary>The <c>modData</c> key marking a machine a job filled itself, rather than through the game's own loading.</summary>
+        /// <remarks>Its timer is the job's, not the game's, so it says nothing about what timers the game sets (see Calibration).</remarks>
+        public const string DirectLoadKey = ModId + "/direct-load";
+
         /// <summary>Returns the qualified item ID for one of the mod's big craftables.</summary>
         public static string Qualify(string itemId) => "(BC)" + itemId;
 

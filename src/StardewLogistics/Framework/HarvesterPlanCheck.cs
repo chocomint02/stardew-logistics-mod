@@ -107,8 +107,8 @@ namespace StardewLogistics.Framework
                 if (plan.Automation)
                     continue;
 
-                // Fertilizer is only needed where the soil doesn't already have that one; a different one is replaced.
-                if (plan.FertilizerId != null && !CropMath.SameFertilizer(CropMath.FertilizerOf(soil), plan.FertilizerId))
+                // Fertilizer is only needed where the soil doesn't already have that one, alone or among others.
+                if (plan.FertilizerId != null && !CropMath.HasFertilizer(CropMath.FertilizerOf(soil), plan.FertilizerId))
                     Demand(fertilizerDemand, plan.FertilizerId, point);
 
                 if (plan.SeedId == null)
@@ -128,7 +128,7 @@ namespace StardewLogistics.Framework
 
                 if (window != int.MaxValue)
                 {
-                    int? days = DaysToGrow(plan.SeedId, plan.FertilizerId ?? CropMath.FertilizerOf(soil), tile);
+                    int? days = DaysToGrow(plan.SeedId, CropMath.FertilizerAfterLaying(CropMath.FertilizerOf(soil), plan.FertilizerId, location, tile), tile);
                     if (days > window)
                     {
                         Add(seasonal, plan.SeedId + "|late", point, () => translate("plan.problem-late", new { name = getName(plan.SeedId), days, left = window }));

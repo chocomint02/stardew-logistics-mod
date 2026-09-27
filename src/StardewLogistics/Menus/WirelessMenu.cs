@@ -14,11 +14,20 @@ namespace StardewLogistics.Menus
     /// <summary>Tunes a wireless transmitter or receiver, and says what it's linked to.</summary>
     internal class WirelessMenu : IClickableMenu
     {
+        /// <summary>Hover highlights and click ripples on the menu's controls.</summary>
+        private readonly UiFx Fx = new();
+
         /*********
         ** Fields
         *********/
         private const int MenuWidth = 640;
         private const int MenuHeight = 470;
+
+        /// <summary>How far below the window's top its visible frame starts.</summary>
+        private const int FrameTop = 64;
+
+        /// <summary>When the window opened, for it to grow into place.</summary>
+        private readonly DateTime OpenedAt = DateTime.UtcNow;
 
         private readonly NetworkManager Networks;
         private readonly ITranslationHelper Translations;
@@ -55,7 +64,15 @@ namespace StardewLogistics.Menus
             this.IsTransmitter = NetworkNode.GetKind(device.ItemId) == NodeKind.WirelessTransmitter;
 
             this.LayoutButtons();
+            this.PlaceCloseButton();
             this.RefreshStatus();
+        }
+
+        /// <summary>Puts the close button on the frame's corner, where the mod's other windows have it.</summary>
+        private void PlaceCloseButton()
+        {
+            if (this.upperRightCloseButton != null)
+                this.upperRightCloseButton.bounds.Y += FrameTop;
         }
 
         /// <inheritdoc />
@@ -88,6 +105,7 @@ namespace StardewLogistics.Menus
             this.xPositionOnScreen = (Game1.uiViewport.Width - MenuWidth) / 2;
             this.yPositionOnScreen = (Game1.uiViewport.Height - MenuHeight) / 2;
             this.initializeUpperRightCloseButton();
+            this.PlaceCloseButton();
             this.LayoutButtons();
         }
 
@@ -103,7 +121,34 @@ namespace StardewLogistics.Menus
         private void DrawThemed(SpriteBatch b)
         {
             b.Draw(Game1.fadeToBlackRect, Game1.graphics.GraphicsDevice.Viewport.Bounds, Color.Black * 0.4f);
-            Game1.drawDialogueBox(this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, false, true);
+
+            // The window grows into place as it opens.
+            Rectangle frame = this.GetFrame();
+            bool growing = UiAnimation.PushOpening(b, this.OpenedAt, frame);
+            try
+            {
+                this.DrawWindow(b, frame);
+            }
+            finally
+            {
+                if (growing)
+                    UiBatch.Pop(b);
+            }
+
+            this.drawMouse(b);
+        }
+
+        /// <summary>The window's visible frame: where the game's dialogue box used to draw it, below the top margin.</summary>
+        private Rectangle GetFrame() => new(this.xPositionOnScreen, this.yPositionOnScreen + FrameTop, this.width, this.height - FrameTop);
+
+        /// <summary>Draws the window and everything in it.</summary>
+        /// <remarks>
+        /// The frame is the same window box the mod's other windows use, rather than the game's dialogue box: the
+        /// colour schemes recolour that box, and the dialogue box is drawn from other parts of the texture.
+        /// </remarks>
+        private void DrawWindow(SpriteBatch b, Rectangle frame)
+        {
+            drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), frame.X, frame.Y, frame.Width, frame.Height, Color.White, 1f, drawShadow: true);
 
             int left = this.xPositionOnScreen + 48;
             int contentWidth = this.width - 96;
@@ -121,6 +166,7 @@ namespace StardewLogistics.Menus
                 Rectangle button = this.StepButtons[i];
                 bool hover = button.Contains(Game1.getMouseX(), Game1.getMouseY());
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), button.X, button.Y, button.Width, button.Height, hover ? Color.Wheat : Color.White, 4f, drawShadow: false);
+                this.Fx.Control(b, button, inset: 6);
 
                 Vector2 size = Game1.smallFont.MeasureString(Steps[i].Label);
                 Utility.drawTextWithShadow(b, Steps[i].Label, Game1.smallFont, new Vector2(button.Center.X - (size.X / 2), button.Center.Y - (size.Y / 2)), Game1.textColor);
@@ -139,7 +185,6 @@ namespace StardewLogistics.Menus
             }
 
             base.draw(b);
-            this.drawMouse(b);
         }
 
 

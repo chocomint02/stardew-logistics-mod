@@ -28,7 +28,19 @@ namespace StardewLogistics.Framework
         }
 
         /// <summary>What one of an item sells for, or <c>null</c> if it can't be shipped.</summary>
+        /// <remarks>
+        /// The game's own price, allowing for what shipping has been seen to really pay in this save -- a mod can
+        /// change the payout without changing the price (see <see cref="Calibration"/>).
+        /// </remarks>
         public static int? UnitPrice(Item item)
+        {
+            int? price = RawUnitPrice(item);
+            double factor = Calibration.PriceFactor;
+            return price == null || factor == 1 ? price : (int)Math.Round(price.Value * factor);
+        }
+
+        /// <summary>What one of an item sells for by the game's own price alone, or <c>null</c> if it can't be shipped.</summary>
+        public static int? RawUnitPrice(Item item)
         {
             if (!CanSell(item))
                 return null;

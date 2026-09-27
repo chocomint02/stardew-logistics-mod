@@ -141,5 +141,8 @@ namespace StardewLogistics.Multiplayer
     internal class LedgerMessage
     {
         public LedgerData Data { get; set; }
+
+        /// <summary>What the host has learned about timings and prices, so a farmhand's plans agree with its jobs.</summary>
+        public Framework.Calibration.CalibrationData Calibration { get; set; }
     }
 }

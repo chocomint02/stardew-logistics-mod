@@ -685,6 +685,27 @@ namespace StardewLogistics.Framework
                 int guaranteed = ApplyStackModifiers(minimum, output, location, who, product, input, WorstCase);
                 int best = ApplyStackModifiers(Math.Max(minimum, output.MaxStack), output, location, who, product, input, BestCase);
                 int minutes = overrideMinutes ?? rule.MinutesUntilReady;
+                int days = rule.DaysUntilReady;
+
+                // The machine's ready-time modifiers, applied as the game applies them when it starts a run: to the
+                // run's minutes, a day-long run's included. Content packs use them to speed machines up.
+                if (context.Data?.ReadyTimeModifiers?.Count > 0)
+                {
+                    try
+                    {
+                        int before = days > 0 ? days * CraftPlan.MinutesPerDay : minutes;
+                        int after = (int)Utility.ApplyQuantityModifiers(before, context.Data.ReadyTimeModifiers, context.Data.ReadyTimeModifierMode, location, who, product, input);
+                        if (after != before)
+                        {
+                            minutes = Math.Max(10, after);
+                            days = 0;
+                        }
+                    }
+                    catch
+                    {
+                        // Keep the data's own time.
+                    }
+                }
 
                 return new MachineRecipe
                 {
@@ -702,7 +723,7 @@ namespace StardewLogistics.Framework
                     OutputCount = guaranteed,
                     MaxOutputCount = Math.Max(guaranteed, best),
                     Minutes = Math.Max(0, minutes),
-                    Days = Math.Max(0, rule.DaysUntilReady)
+                    Days = Math.Max(0, days)
                 };
             }
         }
@@ -861,6 +882,58 @@ namespace StardewLogistics.Framework
             return copy;
         }
 
+        /// <summary>What a machine makes from the actual items going into it, by the game's own machine code.</summary>
+        /// <param name="machine">The machine.</param>
+        /// <param name="recipe">The recipe being run.</param>
+        /// <param name="input">The actual main input: a gold Starfruit rather than any Starfruit.</param>
+        /// <param name="ingredients">The actual extra ingredients, for rules that take them.</param>
+        /// <returns>The product, or <c>null</c> if the game makes something other than the recipe's product, or nothing.</returns>
+        /// <remarks>
+        /// A recipe's product was worked out once, from a plain sample of its input. The real input can change it:
+        /// a rule that copies the input's quality, a mod's per-machine bonuses, anything the machine's rules say.
+        /// Asking again with the real items gets the product the machine would make if the player loaded it. Where
+        /// that's something else entirely -- a rule that picks at random -- the recipe's own product stands, so the
+        /// job still gets what it planned for.
+        /// </remarks>
+        public Item MakeOutput(SObject machine, MachineRecipe recipe, Item input, IEnumerable<Item> ingredients)
+        {
+            if (machine == null || recipe == null || input == null || recipe.IsAging)
+                return null;
+
+            try
+            {
+                MachineData data = machine.GetMachineData();
+                if (data == null)
+                    return null;
+
+                Farmer who = Game1.player;
+                GameLocation location = machine.Location ?? who?.currentLocation ?? Game1.getFarm();
+
+                StardewValley.Inventories.Inventory offered = new();
+                foreach (Item ingredient in ingredients ?? Enumerable.Empty<Item>())
+                    offered.Add(ingredient);
+
+                using (OfferIngredients(offered))
+                {
+                    if (!MachineDataUtility.TryGetMachineOutputRule(machine, data, MachineOutputTrigger.ItemPlacedInMachine, input, who, location, out MachineOutputRule rule, out _, out _, out _) || rule == null)
+                        return null;
+
+                    MachineItemOutput output = MachineDataUtility.GetOutputData(machine, data, rule, input, who, location);
+                    if (output == null)
+                        return null;
+
+                    Item product = MachineDataUtility.GetOutputItem(machine, output, input, who, probe: true, out _);
+                    return product != null && string.Equals(StockId.Of(product), recipe.OutputId, StringComparison.OrdinalIgnoreCase)
+                        ? product
+                        : null;
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         /// <summary>Sets the game's auto-load inventory while the index asks about a machine, and restores it after.</summary>
         /// <remarks>Extra Machine Config looks for extra ingredients there before the player's bag, and stays quiet when they're missing.</remarks>
         private static IDisposable OfferIngredients(StardewValley.Inventories.IInventory inventory)
@@ -943,8 +1016,8 @@ namespace StardewLogistics.Framework
             return !string.Equals(specific.OutputId, general.OutputId, StringComparison.OrdinalIgnoreCase)
                 || specific.OutputCount != general.OutputCount
                 || specific.InputCount != general.InputCount
-                || specific.Minutes != general.Minutes
-                || specific.Days != general.Days;
+                || specific.BaseMinutes != general.BaseMinutes
+                || specific.BaseDays != general.BaseDays;
         }
 
         /// <summary>Adds a recipe to the by-output lookup the planner uses.</summary>

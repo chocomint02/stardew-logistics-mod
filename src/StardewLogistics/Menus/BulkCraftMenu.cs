@@ -19,6 +19,12 @@ namespace StardewLogistics.Menus
     /// </remarks>
     internal class BulkCraftMenu : IClickableMenu
     {
+        /// <summary>The tooltip, growing in as it appears and shrinking away as it goes.</summary>
+        private readonly TooltipPresenter Tooltips = new();
+
+        /// <summary>Hover highlights and click ripples on the menu's controls.</summary>
+        private readonly UiFx Fx = new();
+
         /*********
         ** Fields
         *********/
@@ -219,9 +225,8 @@ namespace StardewLogistics.Menus
 
             this.upperRightCloseButton?.draw(b);
 
-            if (!string.IsNullOrEmpty(this.HoverText))
-                drawHoverText(b, this.HoverText, Game1.smallFont);
-
+            string hover = this.HoverText;
+            this.Tooltips.Draw(b, string.IsNullOrEmpty(hover) ? null : batch => TooltipFx.Around(batch, () => drawHoverText(batch, hover, Game1.smallFont)));
             this.drawMouse(b);
         }
 
@@ -363,6 +368,7 @@ namespace StardewLogistics.Menus
             foreach ((Rectangle bounds, int delta) in this.StepButtons)
             {
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, bounds);
 
                 string label = delta switch
                 {
@@ -387,6 +393,8 @@ namespace StardewLogistics.Menus
             Rectangle bounds = this.CraftButton.bounds;
 
             drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, enabled ? Color.White : Color.Gray, 3f, drawShadow: false);
+            if (enabled)
+                this.Fx.Control(b, bounds, inset: 6);
 
             string label = this.Translations.Get("bulk.craft", new { count = this.Quantity });
             Vector2 size = Game1.smallFont.MeasureString(label);

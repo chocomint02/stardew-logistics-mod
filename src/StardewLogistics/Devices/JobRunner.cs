@@ -148,7 +148,7 @@ namespace StardewLogistics.Devices
                 AnchorTile = anchor,
                 FertilizerId = fertilizerId,
                 RuleKey = ruleKey,
-                Steps = Flatten(plan, maxMachines, network.CountUsableMachines)
+                Steps = Flatten(plan, maxMachines, network.CountUsableMachines, recipe => MachinePaces.For(network, recipe))
             };
 
             // Crops the plan waits on are the job's from now: their harvest comes here instead of storage. Seeds it
@@ -246,7 +246,7 @@ namespace StardewLogistics.Devices
         /// <summary>Names what a plan is short of.</summary>
         private static string DescribeShortfall(CraftPlan plan)
         {
-            return "short of " + plan.DescribeShortfalls(GetName);
+            return "missing " + plan.DescribeShortfalls(GetName);
         }
 
         /// <summary>Stops a job and releases any machines it holds.</summary>
@@ -317,6 +317,7 @@ namespace StardewLogistics.Devices
             machine.showNextIndex.Value = false;
             machine.minutesUntilReady.Value = 0;
             machine.modData.Remove(ModIds.JobKey);
+            machine.modData.Remove(ModIds.DirectLoadKey);
         }
 
         /// <summary>Removes one finished job from the list.</summary>
@@ -521,7 +522,7 @@ namespace StardewLogistics.Devices
         }
 
         /// <summary>Flattens a plan into steps, deepest first so a step's inputs are produced before it runs.</summary>
-        private static List<JobStep> Flatten(CraftPlan plan, int maxMachines, Func<MachineRecipe, int> countMachines)
+        private static List<JobStep> Flatten(CraftPlan plan, int maxMachines, Func<MachineRecipe, int> countMachines, Func<MachineRecipe, IReadOnlyList<MachinePace>> paces = null)
         {
             List<PlanNode> nodes = plan.Root
                 .Walk()
@@ -539,7 +540,7 @@ namespace StardewLogistics.Devices
                 {
                     // Divide the budget across the shares the same way the planner dialog showed it, so the job
                     // occupies the machines the player was told it would.
-                    Dictionary<MachineAssignment, int> allocation = MachineAllocator.Allocate(node, maxMachines, countMachines);
+                    Dictionary<MachineAssignment, int> allocation = MachineAllocator.Allocate(node, maxMachines, countMachines, paces);
 
                     foreach (MachineAssignment assignment in node.Assignments)
                     {
@@ -593,7 +594,7 @@ namespace StardewLogistics.Devices
                         foreach (Item input in batch.Inputs)
                             job.Buffer?.Add(input);
                         step.InFlight.Remove(batch);
-                        step.RemainingBatches++;
+                        step.RemainingBatches += batch.Runs;
                         job.MachineLost = true;
                         continue;
                     }
@@ -620,8 +621,9 @@ namespace StardewLogistics.Devices
                     if (!machine.readyForHarvest.Value && machine.heldObject.Value == null && machine.MinutesUntilReady <= 0)
                     {
                         machine.modData.Remove(ModIds.JobKey);
+                        machine.modData.Remove(ModIds.DirectLoadKey);
                         step.InFlight.Remove(batch);
-                        step.CompletedBatches++;
+                        step.CompletedBatches += batch.Runs;
                         Log.Trace($"{job.Id}: a run finished but was collected by something else; counting it.");
                     }
                 }
@@ -878,7 +880,7 @@ namespace StardewLogistics.Devices
                             this.Deliver(held, job, step, network);
                         else
                             job.Buffer?.Add(held);
-                        step.CompletedBatches++;
+                        step.CompletedBatches += batch.Runs;
                     }
                     else
                     {
@@ -893,7 +895,7 @@ namespace StardewLogistics.Devices
                             foreach (Item input in batch.Inputs)
                                 job.Buffer?.Add(input);
                         }
-                        step.RemainingBatches++;
+                        step.RemainingBatches += batch.Runs;
                     }
 
                     step.InFlight.Remove(batch);
@@ -947,9 +949,10 @@ namespace StardewLogistics.Devices
             machine.showNextIndex.Value = false;
             machine.minutesUntilReady.Value = 0;
             machine.modData.Remove(ModIds.JobKey);
+            machine.modData.Remove(ModIds.DirectLoadKey);
 
             step.InFlight.Remove(batch);
-            step.CompletedBatches++;
+            step.CompletedBatches += batch.Runs;
         }
 
         /// <summary>Starts whatever work the job can start right now.</summary>
@@ -1092,7 +1095,12 @@ namespace StardewLogistics.Devices
             int free = 0;
             ItemCost? missing = null;
 
-            foreach (NetworkNode node in network.Machines)
+            // The fastest machines first -- an upgraded or combined one before a plain one -- so a job allowed only
+            // a few gets the best of them. Machines whose pace isn't known keep their place after those.
+            List<NetworkNode> fastestFirst = MachinePaces.For(network, recipe).Select(pace => pace.Node).ToList();
+            IEnumerable<NetworkNode> candidates = fastestFirst.Concat(network.Machines.Where(node => !fastestFirst.Contains(node)));
+
+            foreach (NetworkNode node in candidates)
             {
                 if (allowance <= 0 || step.RemainingBatches <= 0)
                     break;
@@ -1136,7 +1144,7 @@ namespace StardewLogistics.Devices
                 bool inputComing = HasEarlierWork(job, step);
                 bool waitingOnCrops = job.WaitingOnFields;
 
-                if (!this.TryLoadMachine(machine, recipe, job.Buffer, inputComing || waitingOnCrops ? null : network, out int minutes, out List<Item> consumed, out ItemCost? lacking))
+                if (!this.TryLoadMachine(machine, recipe, job.Buffer, inputComing || waitingOnCrops ? null : network, step.RemainingBatches, out int minutes, out List<Item> consumed, out ItemCost? lacking, out int runs))
                 {
                     missing ??= lacking;
 
@@ -1165,7 +1173,8 @@ namespace StardewLogistics.Devices
                     LocationName = (node.Location ?? network.Location)?.NameOrUniqueName,
                     Tile = node.Tile,
                     MinutesLeft = minutes,
-                    Yield = recipe.OutputCount,
+                    Yield = recipe.OutputCount * runs,
+                    Runs = runs,
                     Inputs = consumed,
 
                     // An aging run is measured against the whole climb from normal, so a silver wine going back in
@@ -1173,7 +1182,7 @@ namespace StardewLogistics.Devices
                     ExpectedMinutes = recipe.IsAging ? Math.Max(minutes, recipe.Days * CraftPlan.MinutesPerDay) : minutes
                 });
 
-                step.RemainingBatches--;
+                step.RemainingBatches -= runs;
                 allowance--;
                 any = true;
             }
@@ -1232,14 +1241,22 @@ namespace StardewLogistics.Devices
             return job.Steps.TakeWhile(candidate => candidate != step).Any(candidate => !candidate.IsComplete);
         }
 
-        /// <summary>Takes a run's inputs from storage and sets the machine working.</summary>
+        /// <summary>Takes a run's inputs from the job and sets the machine working.</summary>
         /// <returns>Whether the machine was loaded.</returns>
         /// <param name="network">Where a shortfall may be drawn from, or <c>null</c> to use only what the job holds.</param>
-        private bool TryLoadMachine(SObject machine, MachineRecipe recipe, JobBuffer buffer, StorageNetwork network, out int minutes, out List<Item> consumed, out ItemCost? missing)
+        /// <param name="maxRuns">The most runs the machine may take at once: what the step still needs.</param>
+        /// <param name="runs">How many of the step's runs the machine took.</param>
+        /// <remarks>
+        /// The machine is loaded through the game's own loading, the way a Hopper loads it (see
+        /// <see cref="TryLoadThroughGame"/>), so it behaves as if the player had loaded it -- whatever other mods
+        /// change about it. Where that doesn't work out, the job fills the machine itself.
+        /// </remarks>
+        private bool TryLoadMachine(SObject machine, MachineRecipe recipe, JobBuffer buffer, StorageNetwork network, int maxRuns, out int minutes, out List<Item> consumed, out ItemCost? missing, out int runs)
         {
             minutes = 0;
             consumed = new List<Item>();
             missing = null;
+            runs = 1;
 
             if (recipe.IsAging)
                 return this.TryStartAging(machine, recipe, buffer, network, out minutes, out consumed, out missing);
@@ -1258,8 +1275,13 @@ namespace StardewLogistics.Devices
                 }
             }
 
-            // A copy of what the game's own machine code made when the recipe was indexed, so a wine comes out
-            // named, coloured and priced for its fruit.
+            // The game's own loading first.
+            if (this.TryLoadThroughGame(machine, recipe, buffer, Math.Max(1, maxRuns), out minutes, out consumed, out runs))
+                return true;
+            runs = 1;
+
+            // Otherwise the job fills the machine itself, with a copy of what the game's own machine code made when
+            // the recipe was indexed, so a wine comes out named, coloured and priced for its fruit.
             Item output;
             try
             {
@@ -1270,30 +1292,162 @@ namespace StardewLogistics.Devices
                 output = null;
             }
 
-            if (output is not SObject product)
+            if (output is not SObject)
                 return false;
 
             // Kept with the run, so cancelling can hand back exactly these.
             foreach (ItemCost input in inputs)
                 consumed.AddRange(buffer.Take(input.ItemId, input.Count, input.RequiredQuality));
 
+            // What the machine makes from these particular items, by the game's own rules: a rule that copies the
+            // input's quality, or a mod's bonuses, apply as if the player had loaded it. Never less than planned.
+            // The main input as one item carrying the whole count -- the rule checks there's enough -- at the lowest
+            // quality that went in, which is the one a quality-copying rule would be fair to use.
+            List<Item> mains = consumed.Where(item => StockId.Matches(item, recipe.InputId)).ToList();
+            Item primary = null;
+            if (mains.Count > 0)
+            {
+                primary = mains.OrderBy(item => item.Quality).First().getOne();
+                primary.Stack = mains.Sum(item => item.Stack);
+            }
+            if (this.MachineRecipes.MakeOutput(machine, recipe, primary, consumed.Where(item => !mains.Contains(item))) is SObject actual)
+            {
+                actual.Stack = Math.Max(actual.Stack, output.Stack);
+                output = actual;
+            }
+
+            SObject product = (SObject)output;
+
             // Set the machine to the outcome the recipe index already worked out. The game's clock counts
             // minutesUntilReady down and raises readyForHarvest on its own from here.
             // A rule measured in days finishes at 6am, the way the game schedules it: a dehydrator loaded at
             // noon is ready tomorrow morning, not at noon tomorrow.
-            minutes = recipe.Days > 0
-                ? Utility.CalculateMinutesUntilMorning(Game1.timeOfDay, recipe.Days)
-                : recipe.Minutes;
-            minutes = Math.Max(10, minutes);
+            // The time the game would set for this run, including any change a mod makes to it that's been seen
+            // here (see Calibration). How fast the timer then runs down is left to the game, as for any machine.
+            minutes = recipe.BaseDays > 0
+                ? Utility.CalculateMinutesUntilMorning(Game1.timeOfDay, recipe.BaseDays)
+                : recipe.BaseMinutes;
+            minutes = Math.Max(10, Calibration.Scale(minutes, Calibration.SetupFactor(recipe.MachineId, recipe.OutputId, machine.Location, machine.TileLocation)));
 
             machine.heldObject.Value = product;
             machine.minutesUntilReady.Value = minutes;
             machine.readyForHarvest.Value = false;
+            machine.modData[ModIds.DirectLoadKey] = "1";
 
             MachineData data = machine.GetMachineData();
             machine.showNextIndex.Value = data?.ShowNextIndexWhileWorking ?? false;
 
             return true;
+        }
+
+        /// <summary>Loads a machine through the game's own loading, from the job's items, as a Hopper loads it from a chest.</summary>
+        /// <returns>Whether the machine is now making the recipe's product.</returns>
+        /// <remarks>
+        /// The machine is offered a small store of the job's items -- the main input first, then its fuel and any
+        /// extra ingredients -- through the game's own auto-loading, which takes what a run needs from it exactly
+        /// as when a player loads the machine by hand or a Hopper does. So whatever any mod changes about loading
+        /// applies here too: how many items a run takes, what fuel it burns, what it makes and how long for.
+        ///
+        /// The store holds up to what the step still needs, not just one run's worth, so a machine a mod lets take
+        /// a bigger batch can; the runs it took are counted from how much of the main input went in. What it didn't
+        /// take goes straight back to the job, and what it did is kept, so cancelling can give it back.
+        ///
+        /// If the machine won't take it, or starts making something other than what the plan needs -- a rule that
+        /// picks at random -- nothing is lost: the machine is emptied, the items go back, and the job fills the
+        /// machine itself instead.
+        /// </remarks>
+        private bool TryLoadThroughGame(SObject machine, MachineRecipe recipe, JobBuffer buffer, int maxRuns, out int minutes, out List<Item> consumed, out int runs)
+        {
+            minutes = 0;
+            consumed = new List<Item>();
+            runs = 0;
+
+            if (machine.GetMachineData() == null || machine.heldObject.Value != null)
+                return false;
+
+            Farmer who = Game1.player;
+            int perRun = Math.Max(1, recipe.InputCount);
+            int offerRuns = Math.Clamp(buffer.Count(recipe.InputId, recipe.InputQuality) / perRun, 1, maxRuns);
+
+            // The store: the main input first, so it's what the machine is offered first; then everything else.
+            StardewValley.Inventories.Inventory feed = new();
+            List<(Item Item, int Stack)> fed = new();
+            void Offer(string itemId, int count, int quality)
+            {
+                foreach (Item item in buffer.Take(itemId, count, quality))
+                {
+                    feed.Add(item);
+                    fed.Add((item, item.Stack));
+                }
+            }
+            Offer(recipe.InputId, perRun * offerRuns, recipe.InputQuality);
+            foreach (ItemCost extra in recipe.ExtraInputs)
+                Offer(extra.ItemId, extra.Count * offerRuns, extra.RequiredQuality);
+
+            bool loaded = false;
+            try
+            {
+                // A dry run first, so a machine that won't take it is never touched.
+                StardewValley.Inventories.IInventory previous = SObject.autoLoadFrom;
+                bool accepts;
+                try
+                {
+                    SObject.autoLoadFrom = feed;
+                    accepts = feed.Count > 0 && machine.performObjectDropInAction(feed[0], probe: true, who);
+                }
+                finally
+                {
+                    SObject.autoLoadFrom = previous;
+                }
+
+                if (accepts)
+                    loaded = machine.AttemptAutoLoad(feed, who);
+            }
+            catch (Exception ex)
+            {
+                Log.Trace($"The game couldn't load a {machine.DisplayName} for a job, so the job loads it itself: {ex.Message}");
+                loaded = false;
+            }
+
+            // What the machine took, and what it left. The store lets go of everything first: an item can only be in
+            // one inventory at a time.
+            feed.Clear();
+            foreach ((Item item, int before) in fed)
+            {
+                int used = before - Math.Max(0, item.Stack);
+                if (used > 0)
+                {
+                    Item copy = item.getOne();
+                    copy.Stack = used;
+                    consumed.Add(copy);
+                }
+                if (item.Stack > 0)
+                    buffer.Add(item);
+            }
+
+            SObject held = machine.heldObject.Value;
+            if (loaded && held != null && string.Equals(StockId.Of(held), recipe.OutputId, StringComparison.OrdinalIgnoreCase))
+            {
+                int mainUsed = consumed.Where(item => StockId.Matches(item, recipe.InputId)).Sum(item => item.Stack);
+                runs = Math.Max(1, mainUsed / perRun);
+                minutes = Math.Max(0, machine.MinutesUntilReady);
+                machine.modData.Remove(ModIds.DirectLoadKey);
+                return true;
+            }
+
+            // Not loaded, or making something else: empty it and give everything back.
+            if (loaded)
+            {
+                machine.heldObject.Value = null;
+                machine.minutesUntilReady.Value = 0;
+                machine.readyForHarvest.Value = false;
+                machine.showNextIndex.Value = false;
+                Log.Trace($"A {machine.DisplayName} loaded for a job started making {held?.DisplayName ?? "nothing"} rather than {recipe.OutputName}; the job loads it itself instead.");
+            }
+            foreach (Item item in consumed)
+                buffer.Add(item);
+            consumed.Clear();
+            return false;
         }
 
 

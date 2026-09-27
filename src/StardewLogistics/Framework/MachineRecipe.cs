@@ -92,11 +92,26 @@ namespace StardewLogistics.Framework
         /// <summary>The top of the output range, kept only so the UI can say a run <em>may</em> yield more.</summary>
         public int MaxOutputCount { get; init; }
 
-        /// <summary>In-game minutes one run takes.</summary>
-        public int Minutes { get; init; }
+        /// <summary>In-game minutes one run takes: its data's figure, allowing for how long runs really take in this save.</summary>
+        /// <remarks>See <see cref="Calibration"/>. Setting it sets <see cref="BaseMinutes"/>, the data's own figure.</remarks>
+        public int Minutes
+        {
+            get => this.IsAging ? this.BaseMinutes : Calibration.Scale(this.BaseMinutes, Calibration.MachineFactor(this.MachineId, this.OutputId));
+            init => this.BaseMinutes = value;
+        }
 
-        /// <summary>Whole days one run takes, for machines that finish overnight.</summary>
-        public int Days { get; init; }
+        /// <summary>Whole days one run takes, for machines that finish overnight, allowing for how long runs really take.</summary>
+        public int Days
+        {
+            get => this.IsAging ? this.BaseDays : Calibration.ScaleDays(this.BaseDays, Calibration.MachineFactor(this.MachineId, this.OutputId));
+            init => this.BaseDays = value;
+        }
+
+        /// <summary>The minutes one run takes by the game's data, ready-time modifiers included.</summary>
+        public int BaseMinutes { get; private set; }
+
+        /// <summary>The days one run takes by the game's data.</summary>
+        public int BaseDays { get; private set; }
 
         /// <summary>Whether the yield varies, so the UI can mark the figure as a floor rather than a promise.</summary>
         public bool HasVariableYield => this.MaxOutputCount > this.OutputCount;

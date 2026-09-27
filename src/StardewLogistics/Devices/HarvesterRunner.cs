@@ -438,17 +438,15 @@ namespace StardewLogistics.Devices
             if (soil.crop != null)
                 soil.destroyCrop(showAnimation: false); // a dead one
 
-            // Fertilizer first, while the soil will still take it. The job's Speed-Gro replaces any other kind --
-            // soil only holds one -- which the plan counted on.
+            // Fertilizer first, while the soil will still take it. Where soil holds one, the job's Speed-Gro replaces
+            // any other kind but a Speed-Gro already there, which the plan counted on; where a mod lets fertilizers
+            // stack, it's added to what's there.
             string existing = CropMath.FertilizerOf(soil);
-            if (order.FertilizerId != null && existing != null && !CropMath.IsSpeedGro(existing))
-                soil.fertilizer.Value = null;
-
-            if (order.FertilizerId != null && !soil.HasFertilizer() && soil.CanApplyFertilizer(order.FertilizerId))
+            if (order.FertilizerId != null && !CropMath.HasFertilizer(existing, order.FertilizerId))
             {
                 Item fertilizer = order.Buffer?.Take(order.FertilizerId, 1).FirstOrDefault()
                     ?? network.ExtractById(order.FertilizerId, 1).FirstOrDefault();
-                if (fertilizer != null && !soil.plant(order.FertilizerId, Game1.player, isFertilizer: true))
+                if (fertilizer != null && !CropMath.LayFertilizer(soil, order.FertilizerId, replace: !CropMath.HasSpeedGro(existing)))
                 {
                     if (order.Buffer != null)
                         order.Buffer.Add(fertilizer);
@@ -499,30 +497,22 @@ namespace StardewLogistics.Devices
 
         /// <summary>Lays the planned fertilizer on empty soil, from storage.</summary>
         /// <remarks>
-        /// Soil holds one fertilizer, so a different one already there -- Speed-Gro an autocrafting job laid, say --
-        /// is replaced: otherwise the tile quietly keeps the wrong one and grows at the wrong speed.
+        /// Nothing happens if the soil already has it -- alone, or among others where a mod lets fertilizers stack.
+        /// Otherwise it's laid by the soil's own rules: added where the soil takes another, and where it holds only
+        /// one, in place of a different one already there -- Speed-Gro an autocrafting job laid, say -- or the tile
+        /// would quietly keep the wrong one and grow at the wrong speed.
         /// </remarks>
         private void Fertilize(HoeDirt soil, TilePlan plan, StorageNetwork network)
         {
-            if (plan.FertilizerId == null)
-                return;
-
-            string existing = CropMath.FertilizerOf(soil);
-            if (CropMath.SameFertilizer(existing, plan.FertilizerId))
+            if (plan.FertilizerId == null || CropMath.HasFertilizer(CropMath.FertilizerOf(soil), plan.FertilizerId))
                 return;
 
             Item fertilizer = network.ExtractById(plan.FertilizerId, 1).FirstOrDefault();
             if (fertilizer == null)
                 return;
 
-            if (existing != null)
-                soil.fertilizer.Value = null;
-
-            if (!soil.CanApplyFertilizer(plan.FertilizerId) || !soil.plant(plan.FertilizerId, Game1.player, isFertilizer: true))
-            {
-                soil.fertilizer.Value = existing;
+            if (!CropMath.LayFertilizer(soil, plan.FertilizerId, replace: true))
                 network.Insert(fertilizer);
-            }
         }
 
         /// <summary>Plants the planned seed on empty soil, if it should be and there's time for it to grow.</summary>

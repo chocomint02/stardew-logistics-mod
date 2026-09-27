@@ -5,6 +5,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewLogistics.Framework;
 using StardewLogistics.Network;
+using StardewModdingAPI;
 using StardewValley;
 using StardewValley.Menus;
 using SObject = StardewValley.Object;
@@ -78,6 +79,7 @@ namespace StardewLogistics.Menus
 
             foreach (ClickableComponent tab in this.TabButtons)
             {
+                this.Fx.Control(b, tab.bounds, inset: 6);
                 bool active = this.Tab.ToString() == tab.name;
                 Utility.drawTextWithShadow(
                     b,
@@ -95,17 +97,8 @@ namespace StardewLogistics.Menus
             if (!this.TabHasSearch)
                 return;
 
+            // The box draws its own placeholder, fading it out as it takes focus.
             this.SearchBox.Draw(b);
-            if (string.IsNullOrEmpty(this.SearchBox.Text) && !this.SearchBox.Selected)
-            {
-                Utility.drawTextWithShadow(
-                    b,
-                    this.Translations.Get("ui.search-hint"),
-                    Game1.smallFont,
-                    new Vector2(this.SearchBox.X + 20, this.SearchBox.Y + 10),
-                    Game1.textColor * 0.45f
-                );
-            }
 
             this.DrawFilterButton(b, this.SortButton, this.Translations.Get("ui.sort-label", new
             {
@@ -113,13 +106,17 @@ namespace StardewLogistics.Menus
             }), active: false);
 
             // The second slot is "deposit everything" while browsing stock, and "show craftable only"
-            // while browsing recipes.
-            if (this.Tab == TerminalTab.Craft)
+            // while browsing what the network can make.
+            if (this.Tab is TerminalTab.Craft or TerminalTab.Auto)
+            {
                 this.CraftableOnlyButton.draw(b, this.CraftableOnly ? Color.White : Color.White * 0.5f, 0.9f);
+                this.Fx.Control(b, this.CraftableOnlyButton.bounds, inset: 0);
+            }
             else if (this.Tab == TerminalTab.Items)
+            {
                 this.DepositAllButton.draw(b);
-            // Neither control means anything on the Auto tab, so the slot is left empty rather than showing a
-            // button that does nothing when clicked.
+                this.Fx.Control(b, this.DepositAllButton.bounds, inset: 0);
+            }
 
             this.DrawFilterButton(b, this.TypeFilterButton, this.GetFilterButtonLabel("type"), this.Filter.Category != null);
             this.DrawFilterButton(b, this.ModFilterButton, this.GetFilterButtonLabel("mod"), this.Filter.Mod != null);
@@ -142,6 +139,8 @@ namespace StardewLogistics.Menus
                 3f,
                 drawShadow: false
             );
+
+            this.Fx.Control(b, button.bounds, inset: 6);
 
             // A long mod name scrolls within the button rather than spilling past its edge or the caret.
             Marquee.Draw(b, label, Game1.smallFont, new Vector2(button.bounds.X + 14, button.bounds.Y + 10), button.bounds.Width - 40, Game1.textColor);
@@ -246,6 +245,9 @@ namespace StardewLogistics.Menus
                 summary += this.Translations.Get("ui.summary-filtered", new { shown = NumberFormat.Full(this.VisibleStock.Count) });
 
             Utility.drawTextWithShadow(b, summary, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 6), Game1.textColor);
+
+            // What clicking does, under the grid rather than in every tooltip.
+            Marquee.DrawWrapped(b, this.Translations.Get("ui.items-hint"), Game1.smallFont, new Vector2(grid.X, grid.Bottom + 38), grid.Width, Game1.textColor * 0.6f, maxLines: 2);
         }
 
 
@@ -520,6 +522,28 @@ namespace StardewLogistics.Menus
                     Utility.drawTextWithShadow(b, line, Game1.smallFont, new Vector2(grid.X + 16, y), Game1.textColor);
                 y += 32;
             }
+
+            // What's been learned about how long things really take here, and what shipping really pays.
+            if (Calibration.Enabled)
+            {
+                y += 16;
+                List<string> learned = Calibration.Describe(StockId.GetDisplayName);
+                int bottom = this.GetContentBounds().Bottom - 24;
+                if (learned.Count == 0)
+                    Marquee.Draw(b, this.Translations.Get("network.calibration-none", new { count = Calibration.ObservationCount }), Game1.smallFont, new Vector2(grid.X + 16, y), grid.Width - 32, Game1.textColor * 0.6f);
+                else
+                {
+                    Utility.drawTextWithShadow(b, this.Translations.Get("network.calibration"), Game1.smallFont, new Vector2(grid.X + 16, y), Game1.textColor);
+                    y += 32;
+                    foreach (string line in learned)
+                    {
+                        if (y > bottom)
+                            break;
+                        Marquee.Draw(b, line, Game1.smallFont, new Vector2(grid.X + 32, y), grid.Width - 48, Game1.textColor * 0.8f);
+                        y += 32;
+                    }
+                }
+            }
         }
 
 
@@ -541,6 +565,7 @@ namespace StardewLogistics.Menus
             foreach ((Rectangle bounds, string label) in new[] { (minus, "-"), (plus, "+") })
             {
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, bounds);
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
             }

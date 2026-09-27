@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using StardewModdingAPI.Utilities;
 
 namespace StardewLogistics.Framework
@@ -30,6 +32,10 @@ namespace StardewLogistics.Framework
         /*********
         ** Convenience
         *********/
+        /// <summary>Whether to learn from this save how long machines and crops really take and what shipping really pays, and plan by that.</summary>
+        /// <remarks>Covers mods that change timing or prices in code rather than data. Off, plans go by the game's data alone.</remarks>
+        public bool AdaptiveCalibration { get; set; } = true;
+
         /// <summary>Whether to teach the player every logistics recipe, rather than gating them behind progression.</summary>
         public bool UnlockAllRecipes { get; set; } = true;
 
@@ -48,6 +54,12 @@ namespace StardewLogistics.Framework
         /// <summary>How fast menu animations play, as a percentage of normal; zero turns them off.</summary>
         public int AnimationSpeed { get; set; } = 100;
 
+        /// <summary>The income graph's tier colours, lowest first, as "#RRGGBB".</summary>
+        public List<string> IncomeTierColours { get; set; } = MoneyColours.DefaultTiers.Select(MoneyColours.ToHex).ToList();
+
+        /// <summary>Colours chosen for particular income sources on the graph, by name, as "#RRGGBB".</summary>
+        public Dictionary<string, string> IncomeSourceColours { get; set; } = new();
+
         /// <summary>Clamps every setting to a usable range, so a hand-edited config can't break the mod.</summary>
         public void Normalise()
         {
@@ -58,6 +70,19 @@ namespace StardewLogistics.Framework
             this.OpenTerminalKey ??= new KeybindList();
             this.OpenWirelessTerminalKey ??= KeybindList.Parse("B");
             this.AnimationSpeed = Clamp(this.AnimationSpeed, 0, 300);
+
+            // A colour for each tier; a missing or unreadable one goes back to its default.
+            this.IncomeTierColours ??= new List<string>();
+            for (int i = 0; i < MoneyColours.DefaultTiers.Length; i++)
+            {
+                if (i >= this.IncomeTierColours.Count)
+                    this.IncomeTierColours.Add(MoneyColours.ToHex(MoneyColours.DefaultTiers[i]));
+                else if (!MoneyColours.TryParseHex(this.IncomeTierColours[i], out _))
+                    this.IncomeTierColours[i] = MoneyColours.ToHex(MoneyColours.DefaultTiers[i]);
+            }
+            if (this.IncomeTierColours.Count > MoneyColours.DefaultTiers.Length)
+                this.IncomeTierColours.RemoveRange(MoneyColours.DefaultTiers.Length, this.IncomeTierColours.Count - MoneyColours.DefaultTiers.Length);
+            this.IncomeSourceColours ??= new Dictionary<string, string>();
             if (!Menus.UiTheme.IsKnown(this.Theme))
                 this.Theme = Menus.UiTheme.Vanilla;
         }
@@ -65,7 +90,9 @@ namespace StardewLogistics.Framework
         /// <summary>Puts the appearance settings into effect.</summary>
         public void ApplyAppearance()
         {
+            Calibration.Enabled = this.AdaptiveCalibration;
             Menus.UiTheme.Current = this.Theme;
+            MoneyColours.Configure(this.IncomeTierColours, this.IncomeSourceColours);
             Menus.UiAnimation.SpeedPercent = this.AnimationSpeed;
         }
 

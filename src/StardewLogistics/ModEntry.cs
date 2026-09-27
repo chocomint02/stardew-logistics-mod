@@ -51,6 +51,9 @@ namespace StardewLogistics
             this.Config.Normalise();
             this.Config.ApplyAppearance();
 
+            // Learning how long things really take here: it finds recipes to compare runs against.
+            Calibration.Initialise(helper.Data, (machineId, outputId) => this.MachineRecipes?.GetRecipesFor(outputId).FirstOrDefault(recipe => string.Equals(recipe.MachineId, machineId, StringComparison.OrdinalIgnoreCase)));
+
             // The terminal's Settings tab changes appearance too, and saves it here.
             TerminalMenu.SaveConfig = config => this.Helper.WriteConfig(config);
 
@@ -71,6 +74,7 @@ namespace StardewLogistics
             this.Harvesters = new HarvesterRunner(this.Networks, helper.Translation);
             SoilPatches.Apply(harmony, this.Harvesters.IsProtected);
             AccessorySlot.Apply(harmony, helper.Translation, () => this.Config.OpenWirelessTerminalKey.ToString());
+            TooltipFx.Apply(harmony);
 
             // Growing crops feed autocrafting, and reserved ones go to their job when harvested.
             this.Jobs.Forecast = this.Harvesters.Forecast;
@@ -102,6 +106,7 @@ namespace StardewLogistics
             // Jobs carry on across a reload: written as the game saves, read back when it loads.
             this.JobStore = new JobStore(helper.Data, this.Jobs, this.MachineRecipes);
             helper.Events.GameLoop.Saving += (_, _) => this.JobStore.Save();
+            helper.Events.GameLoop.Saving += (_, _) => Calibration.Save();
 
             new ConsoleCommands(this.MachineRecipes, this.CraftingRecipes, this.Networks, this.Config, this.Jobs)
                 .Register(helper.ConsoleCommands);
@@ -185,12 +190,24 @@ namespace StardewLogistics
             api.AddBoolOption(this.ModManifest, () => this.Config.EnableMachineAutomation, value => this.Config.EnableMachineAutomation = value, () => i18n.Get("config.machines.name"), () => i18n.Get("config.machines.tooltip"));
 
             api.AddSectionTitle(this.ModManifest, () => i18n.Get("config.section.general"));
+            api.AddBoolOption(this.ModManifest, () => this.Config.AdaptiveCalibration, value => this.Config.AdaptiveCalibration = value, () => i18n.Get("config.calibration.name"), () => i18n.Get("config.calibration.tooltip"));
             api.AddBoolOption(this.ModManifest, () => this.Config.UnlockAllRecipes, value => this.Config.UnlockAllRecipes = value, () => i18n.Get("config.recipes.name"), () => i18n.Get("config.recipes.tooltip"));
             api.AddKeybindList(this.ModManifest, () => this.Config.OpenTerminalKey, value => this.Config.OpenTerminalKey = value, () => i18n.Get("config.terminal-key.name"), () => i18n.Get("config.terminal-key.tooltip"));
             api.AddKeybindList(this.ModManifest, () => this.Config.OpenWirelessTerminalKey, value => this.Config.OpenWirelessTerminalKey = value, () => i18n.Get("config.wireless-key.name"), () => i18n.Get("config.wireless-key.tooltip"));
 
             api.AddSectionTitle(this.ModManifest, () => i18n.Get("config.section.appearance"));
             new ThemePicker(() => this.Config, i18n).Register(api, this.ModManifest);
+            for (int tier = 0; tier < MoneyColours.DefaultTiers.Length; tier++)
+            {
+                int index = tier;
+                api.AddTextOption(
+                    this.ModManifest,
+                    () => this.Config.IncomeTierColours[index],
+                    value => this.Config.IncomeTierColours[index] = value,
+                    () => i18n.Get("config.tier-colour.name", new { tier = index + 1 }),
+                    () => i18n.Get("config.tier-colour.tooltip")
+                );
+            }
             api.AddNumberOption(this.ModManifest, () => this.Config.AnimationSpeed, value => this.Config.AnimationSpeed = value, () => i18n.Get("config.animation-speed.name"), () => i18n.Get("config.animation-speed.tooltip"), 0, 300, 10, value => value == 0 ? i18n.Get("config.animation-speed.off") : value + "%");
         }
 
@@ -203,6 +220,7 @@ namespace StardewLogistics
             // rather than at startup.
             this.MachineRecipes.Rebuild();
             this.Ledger.Load();
+            Calibration.Load();
 
             // Before the scheduler's first pass, or it would take the jobs' buffers for leftovers and empty them.
             this.JobStore.Load();
@@ -213,6 +231,9 @@ namespace StardewLogistics
         {
             this.Networks.InvalidateAll();
             this.UnlockRecipes();
+
+            // How much the crops grew overnight, before anything is harvested or planted.
+            Calibration.AfterNight();
 
             // Crops grew overnight: harvest what's ready and plant for the new day first thing. Then top up
             // stock, with whatever the harvest brought in.
@@ -233,7 +254,10 @@ namespace StardewLogistics
         private void OnDayEnding(object sender, DayEndingEventArgs e)
         {
             if (Context.IsMainPlayer)
+            {
                 this.Harvesters.BeforeNight();
+                Calibration.BeforeNight();
+            }
 
             // What's in the shipping bins, before the night sells it.
             this.Ledger.BeforeNight();
@@ -247,6 +271,8 @@ namespace StardewLogistics
             // Jobs belong to the save that queued them; carried into the next save they'd drive its machines.
             this.Jobs.Reset();
             DeviceAnimations.Reset();
+            Calibration.Reset();
+            MachinePaces.Reset();
             this.Stock.Reset();
             this.Ledger.Reset();
             this.Sync.Reset();

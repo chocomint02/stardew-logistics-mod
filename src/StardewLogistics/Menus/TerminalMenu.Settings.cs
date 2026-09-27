@@ -89,6 +89,7 @@ namespace StardewLogistics.Menus
             foreach ((Rectangle bounds, string label) in new[] { (minus, "-"), (plus, "+") })
             {
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, bounds);
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
             }
@@ -107,6 +108,7 @@ namespace StardewLogistics.Menus
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, chosen ? Color.White : Color.White * 0.7f, 3f, drawShadow: false);
                 if (chosen)
                     DrawOutline(b, bounds, Color.Gold);
+                this.Fx.Control(b, bounds, inset: 6);
 
                 Rectangle swatch = new(bounds.X + 10, bounds.Y + 8, 44, bounds.Height - 16);
                 UiTheme.DrawSwatch(b, scheme, swatch);
@@ -157,6 +159,7 @@ namespace StardewLogistics.Menus
                 if (!bounds.Contains(x, y) || string.Equals(scheme, this.Config.Theme, StringComparison.OrdinalIgnoreCase))
                     continue;
 
+                this.CaptureSchemeChange();
                 this.Config.Theme = scheme;
                 this.SaveAppearance();
                 UiTheme.Restyle(this.SearchBox);

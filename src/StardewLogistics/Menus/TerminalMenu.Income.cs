@@ -109,7 +109,7 @@ namespace StardewLogistics.Menus
                 series.Add(new GraphSeries
                 {
                     Name = group.Key,
-                    Colour = MoneyColours.ForSource(index++),
+                    Colour = MoneyColours.ForSource(group.Key, index++),
                     Icon = group.First().Icon,
                     Daily = IncomeForecast.Project(group, days),
                     PerDay = group.Sum(source => source.PerDay),
@@ -141,8 +141,8 @@ namespace StardewLogistics.Menus
             string otherName = this.Translations.Get("income.series-other");
             return new List<GraphSeries>
             {
-                new() { Name = shippingName, Colour = MoneyColours.ForSource(2), Daily = shipping, PerDay = shipping.Average(), Hidden = this.HiddenSources.Contains(shippingName) },
-                new() { Name = otherName, Colour = MoneyColours.ForSource(1), Daily = other, PerDay = other.Average(), Hidden = this.HiddenSources.Contains(otherName) }
+                new() { Name = shippingName, Colour = MoneyColours.ForSource(shippingName, 2), Daily = shipping, PerDay = shipping.Average(), Hidden = this.HiddenSources.Contains(shippingName) },
+                new() { Name = otherName, Colour = MoneyColours.ForSource(otherName, 1), Daily = other, PerDay = other.Average(), Hidden = this.HiddenSources.Contains(otherName) }
             };
         }
 
@@ -234,6 +234,13 @@ namespace StardewLogistics.Menus
         /// <summary>Handles a click on the Income tab.</summary>
         private void ReceiveClickOnIncome(int x, int y)
         {
+            // An open colour picker takes the click: a colour, Default, or anywhere else to close it.
+            if (this.PickingColour != null)
+            {
+                this.ClickColourPicker(x, y);
+                return;
+            }
+
             foreach ((Rectangle bounds, IncomeView view) in this.GetIncomeViewButtons())
             {
                 if (!bounds.Contains(x, y))
@@ -258,6 +265,7 @@ namespace StardewLogistics.Menus
                 if (!bounds.Contains(x, y))
                     continue;
 
+                this.HotspotBounds = bounds;
                 this.DoIncomeAction(action, value);
                 return;
             }
@@ -277,6 +285,7 @@ namespace StardewLogistics.Menus
                     this.RestartGraphAnimation();
                     break;
                 case "by-source":
+                    this.CheckboxToggledAt["by-source"] = DateTime.UtcNow;
                     this.IncomeBySource = !this.IncomeBySource;
                     this.RestartGraphAnimation();
                     break;
@@ -284,6 +293,12 @@ namespace StardewLogistics.Menus
                     this.IncomeLogScale = !this.IncomeLogScale;
                     this.RestartGraphAnimation();
                     break;
+                case "pick-colour":
+                    this.PickingColour = (string)value;
+                    this.PickerOpenedAt = DateTime.UtcNow;
+                    this.PickerAnchor = this.HotspotBounds;
+                    Game1.playSound("shwip");
+                    return;
                 case "toggle-source":
                     string name = (string)value;
                     if (!this.HiddenSources.Remove(name))
@@ -304,13 +319,16 @@ namespace StardewLogistics.Menus
                     Game1.playSound("trashcan");
                     return;
                 case "gold-on-hand":
+                    this.CheckboxToggledAt["gold-on-hand"] = DateTime.UtcNow;
                     this.Expenses.CountGoldOnHand = !this.Expenses.CountGoldOnHand;
                     this.Expenses.Save();
                     break;
                 case "ledger-day":
                     int day = (int)value;
-                    if (!this.ExpandedLedgerDays.Remove(day))
+                    bool expanding = !this.ExpandedLedgerDays.Remove(day);
+                    if (expanding)
                         this.ExpandedLedgerDays.Add(day);
+                    this.LedgerToggles[day] = (DateTime.UtcNow, expanding);
                     break;
             }
 
@@ -342,6 +360,9 @@ namespace StardewLogistics.Menus
         /// <summary>Sets the hover text for the Income tab.</summary>
         private void PerformHoverOnIncome(int x, int y)
         {
+            if (this.PickingColour != null)
+                return;
+
             foreach ((Rectangle bounds, string action, object value) in this.IncomeHotspots)
             {
                 if (!bounds.Contains(x, y))
@@ -350,6 +371,7 @@ namespace StardewLogistics.Menus
                 this.HoverText = action switch
                 {
                     "toggle-source" => this.DescribeSource((string)value),
+                    "pick-colour" => this.Translations.Get("income.pick-colour-hint"),
                     "by-source" => this.Translations.Get("income.by-source-hint"),
                     "scale" => this.Translations.Get("income.scale-hint"),
                     "gold-on-hand" => this.Translations.Get("expense.gold-on-hand-hint"),
@@ -436,7 +458,10 @@ namespace StardewLogistics.Menus
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), highlight.X, highlight.Y, highlight.Width, highlight.Height, Color.Wheat, 3f, drawShadow: false);
 
             foreach ((Rectangle bounds, IncomeView view) in this.GetIncomeViewButtons())
+            {
+                this.Fx.Control(b, bounds);
                 DrawPlainButton(b, bounds, this.Translations.Get("income.view-" + view.ToString().ToLowerInvariant()), active: false, drawBox: false);
+            }
 
             // The headline figures, on the header's search row, coloured by how good they are.
             if (this.Network != null)
@@ -460,6 +485,9 @@ namespace StardewLogistics.Menus
                 this.DrawCentredMessage(b, grid, this.NotConnectedText);
                 return;
             }
+
+            if (this.IncomeMode is not (IncomeView.Forecast or IncomeView.History))
+                this.PickingColour = null;
 
             // The view itself slides in and fades up, as a tab does; the headline figures above it stay put.
             float transition = UiAnimation.EaseOut(UiAnimation.Progress(this.IncomeViewChangedAt, TabTransitionMs));
@@ -490,6 +518,8 @@ namespace StardewLogistics.Menus
 
             if (transition < 1f)
                 this.DrawPanelOver(b, viewArea, 1f - transition);
+
+            this.DrawColourPicker(b);
         }
 
         /// <summary>Where the active view's highlight is drawn: gliding from the last view to this one.</summary>
@@ -519,6 +549,7 @@ namespace StardewLogistics.Menus
         private void DrawIncomeButton(SpriteBatch b, Rectangle bounds, string label, bool active, string action, object value = null)
         {
             DrawPlainButton(b, bounds, label, active);
+            this.Fx.Control(b, bounds);
             this.IncomeHotspots.Add((bounds, action, value));
         }
 
@@ -571,7 +602,7 @@ namespace StardewLogistics.Menus
             int bySourceWidth = MeasureButton(bySource) + 10;
             Rectangle toggle = new(x, y, bySourceWidth, 40);
             this.DrawIncomeButton(b, toggle, "", this.IncomeBySource, "by-source");
-            b.Draw(Game1.mouseCursors, new Rectangle(toggle.X + 8, toggle.Center.Y - 14, 28, 28), this.IncomeBySource ? OptionsCheckbox.sourceRectChecked : OptionsCheckbox.sourceRectUnchecked, Color.White);
+            this.DrawCheckbox(b, new Rectangle(toggle.X + 8, toggle.Center.Y - 14, 28, 28), this.IncomeBySource, "by-source");
             Utility.drawTextWithShadow(b, bySource, Game1.smallFont, new Vector2(toggle.X + 44, toggle.Y + 6), Game1.textColor);
 
             string hint = this.Translations.Get(history ? "income.history-hint" : "income.forecast-hint");
@@ -651,6 +682,14 @@ namespace StardewLogistics.Menus
             int barWidth = Math.Max(1, (int)(slot * 0.72f));
             float Height(double value) => (float)(Scale(value) * plot.Height * progress);
 
+            // The cursor: the day under it lights up and the rest dim a little, a guide line gliding to it; over the
+            // legend, the source or tier under it stands out and the rest fade back. All eased in and out.
+            int hoverDay = plot.Contains(Game1.getMouseX(), Game1.getMouseY()) ? Math.Clamp((int)((Game1.getMouseX() - plot.X) / slot), 0, days - 1) : -1;
+            this.UpdateGraphFocus(plot, slot, hoverDay);
+            float DayAlpha(int day) => 1f - (0.35f * this.DayFocus * (1f - this.DayGlowOf(day)));
+            float SeriesAlpha(string name) => this.LegendFocusSource == null || name == this.LegendFocusSource ? 1f : 1f - (0.7f * this.LegendFocus);
+            float TierAlpha(double value, double[] steps) => this.LegendFocusTier < 0 || MoneyColours.Tier(value, steps) == this.LegendFocusTier ? 1f : 1f - (0.7f * this.LegendFocus);
+
             // Lines: the running total, one per source when broken down. They draw across as the graph comes in.
             if (this.IncomeCumulative)
             {
@@ -659,10 +698,22 @@ namespace StardewLogistics.Menus
                 if (this.IncomeBySource)
                 {
                     for (int s = 0; s < series.Count; s++)
-                        this.DrawSeriesLine(b, plot, values[s], Scale, slot, reach, _ => series[s].Colour);
+                        this.DrawSeriesLine(b, plot, values[s], Scale, slot, reach, _ => series[s].Colour * SeriesAlpha(series[s].Name));
                 }
                 else
-                    this.DrawSeriesLine(b, plot, totals, Scale, slot, reach, value => MoneyColours.ForWorth(value));
+                    this.DrawSeriesLine(b, plot, totals, Scale, slot, reach, value => MoneyColours.ForWorth(value) * TierAlpha(value, MoneyColours.WorthSteps));
+
+                // The guide, and a dot riding the line where it crosses: the focused source's, or the total.
+                this.DrawGuide(b, plot);
+                int focused = this.LegendFocusSource != null ? series.FindIndex(entry => entry.Name == this.LegendFocusSource) : -1;
+                double[] line = this.IncomeBySource && focused >= 0 ? values[focused] : this.IncomeBySource && series.Count == 1 ? values[0] : totals;
+                if (!this.IncomeBySource || focused >= 0 || series.Count == 1)
+                {
+                    float at = Math.Clamp(((this.GuideX - plot.X) / slot) - 0.5f, 0, Math.Min(reach, days - 1));
+                    int low = (int)at;
+                    double value = line[low] + ((line[Math.Min(low + 1, days - 1)] - line[low]) * (at - low));
+                    this.DrawPulse(b, new Vector2(this.GuideX, plot.Bottom - (float)(Scale(value) * plot.Height)));
+                }
                 return;
             }
 
@@ -686,16 +737,28 @@ namespace StardewLogistics.Menus
                         below += value;
                         if (to - from <= 0)
                             continue;
-                        b.Draw(Game1.staminaRect, new Rectangle(barX, (int)(plot.Bottom - to), barWidth, Math.Max(1, (int)Math.Ceiling(to - from))), series[s].Colour);
+                        b.Draw(Game1.staminaRect, new Rectangle(barX, (int)(plot.Bottom - to), barWidth, Math.Max(1, (int)Math.Ceiling(to - from))), series[s].Colour * (DayAlpha(day) * SeriesAlpha(series[s].Name)));
                     }
                 }
                 else
                 {
                     float height = Height(totals[day]);
                     if (height > 0)
-                        b.Draw(Game1.staminaRect, new Rectangle(barX, (int)(plot.Bottom - height), barWidth, (int)Math.Ceiling(height)), MoneyColours.ForDaily(totals[day]));
+                        b.Draw(Game1.staminaRect, new Rectangle(barX, (int)(plot.Bottom - height), barWidth, (int)Math.Ceiling(height)), MoneyColours.ForDaily(totals[day]) * (DayAlpha(day) * TierAlpha(totals[day], MoneyColours.DailySteps)));
+                }
+
+                // The hovered bar brightens, and a little cap marks its top.
+                float glow = this.DayGlowOf(day);
+                float barTop = Height(totals[day]);
+                if (glow > 0f && barTop > 0)
+                {
+                    b.Draw(Game1.staminaRect, new Rectangle(barX, (int)(plot.Bottom - barTop), barWidth, (int)Math.Ceiling(barTop)), Color.White * (0.18f * glow));
+                    int capWidth = barWidth + (int)(6 * glow);
+                    b.Draw(Game1.staminaRect, new Rectangle(barX + (barWidth / 2) - (capWidth / 2), (int)(plot.Bottom - barTop) - 3, capWidth, 3), Game1.textColor * (0.7f * glow));
                 }
             }
+
+            this.DrawGuide(b, plot);
         }
 
         /// <summary>Shades the plot by season, each band named at its top.</summary>
@@ -784,17 +847,29 @@ namespace StardewLogistics.Menus
                 Utility.drawTextWithShadow(b, this.Translations.Get("income.legend-tiers"), Game1.smallFont, new Vector2(legend.X, y), Game1.textColor);
                 y += 36;
                 double[] steps = this.IncomeCumulative ? MoneyColours.WorthSteps : MoneyColours.DailySteps;
+                int hoveredTier = -1;
                 for (int tier = 0; tier < MoneyColours.Tiers.Length; tier++)
                 {
-                    b.Draw(Game1.staminaRect, new Rectangle(legend.X, y + 6, 20, 20), MoneyColours.Tiers[tier]);
+                    // Each tier's row picks out its days on the graph, and changes its colour when clicked.
+                    Rectangle tierRow = new(legend.X, y, legend.Width, 32);
+                    this.IncomeHotspots.Add((tierRow, "pick-colour", "tier:" + tier));
+                    this.Fx.Control(b, tierRow, inset: 0);
+                    if (tierRow.Contains(Game1.getMouseX(), Game1.getMouseY()))
+                        hoveredTier = tier;
+                    this.DrawSwatch(b, new Rectangle(legend.X, y + 4, 24, 24), MoneyColours.Tiers[tier], hidden: false, this.Fx.GlowOf(tierRow));
                     string label = tier == 0
                         ? this.Translations.Get("income.tier-under", new { gold = Selling.Gold(steps[0]) })
                         : this.Translations.Get("income.tier-over", new { gold = Selling.Gold(steps[tier - 1]) });
                     Marquee.Draw(b, label, Game1.smallFont, new Vector2(legend.X + 30, y + 2), legend.Width - 30, Game1.textColor * 0.85f);
                     y += 34;
                 }
+                this.LegendHoverTier = hoveredTier;
+                this.LegendHoverSource = null;
                 return;
             }
+
+            this.LegendHoverTier = -1;
+            this.LegendHoverSource = null;
 
             Utility.drawTextWithShadow(b, this.Translations.Get("income.legend-sources"), Game1.smallFont, new Vector2(legend.X, y), Game1.textColor);
             y += 36;
@@ -813,22 +888,19 @@ namespace StardewLogistics.Menus
                     break;
                 }
 
+                // The swatch changes the source's colour; the rest of the row shows or hides it. The swatch is
+                // listed first, so it wins where they overlap.
                 Rectangle row = new(legend.X, y, legend.Width, 32);
+                Rectangle swatch = new(row.X, row.Y + 4, 24, 24);
+                this.IncomeHotspots.Add((swatch, "pick-colour", "source:" + entry.Name));
                 this.IncomeHotspots.Add((row, "toggle-source", entry.Name));
-                if (row.Contains(Game1.getMouseX(), Game1.getMouseY()))
-                    b.Draw(Game1.staminaRect, row, Color.Wheat * 0.4f);
+                this.Fx.Control(b, row, inset: 0);
+                if (row.Contains(Game1.getMouseX(), Game1.getMouseY()) && !entry.Hidden)
+                    this.LegendHoverSource = entry.Name;
 
                 // A filled swatch when shown, an outline when hidden.
-                Rectangle swatch = new(row.X + 2, row.Y + 6, 20, 20);
-                if (entry.Hidden)
-                {
-                    b.Draw(Game1.staminaRect, new Rectangle(swatch.X, swatch.Y, swatch.Width, 2), entry.Colour);
-                    b.Draw(Game1.staminaRect, new Rectangle(swatch.X, swatch.Bottom - 2, swatch.Width, 2), entry.Colour);
-                    b.Draw(Game1.staminaRect, new Rectangle(swatch.X, swatch.Y, 2, swatch.Height), entry.Colour);
-                    b.Draw(Game1.staminaRect, new Rectangle(swatch.Right - 2, swatch.Y, 2, swatch.Height), entry.Colour);
-                }
-                else
-                    b.Draw(Game1.staminaRect, swatch, entry.Colour);
+                this.DrawSwatch(b, swatch, entry.Colour, entry.Hidden, this.Fx.GlowOf(swatch));
+                this.Fx.Control(b, swatch, inset: 0);
 
                 Color text = entry.Hidden ? Game1.textColor * 0.4f : Game1.textColor;
                 if (entry.Icon != null)
@@ -847,50 +919,37 @@ namespace StardewLogistics.Menus
             Rectangle left = new(grid.X, grid.Y, half, grid.Height);
             Rectangle right = new(grid.X + half + 24, grid.Y, half, grid.Height);
 
-            // What's being saved for.
+            // What's being saved for. Rows slide in as they're added and fade away as they're removed, the rest
+            // gliding into place.
             this.DrawListHeader(b, left, this.Translations.Get("expense.planned"), "add-expense");
-            int y = left.Y + 52;
-            foreach (PlannedExpense expense in plan.Expenses.ToList())
+            Dictionary<string, int> seen = new();
+            List<(string Key, ExpenseRow Data)> planned = new();
+            foreach (PlannedExpense expense in plan.Expenses)
             {
-                if (y > left.Bottom - 36)
-                    break;
-
-                Rectangle remove = new(left.Right - 36, y, 32, 32);
-                this.DrawRemoveButton(b, remove, "remove-expense", expense);
-                string amount = Selling.Gold(expense.Amount);
-                Vector2 amountSize = Game1.smallFont.MeasureString(amount);
-                Utility.drawTextWithShadow(b, amount, Game1.smallFont, new Vector2(remove.X - 10 - amountSize.X, y + 2), Game1.textColor);
-                Marquee.Draw(b, expense.Name, Game1.smallFont, new Vector2(left.X + 4, y + 2), (int)(remove.X - 20 - amountSize.X - left.X), Game1.textColor);
-                y += 38;
+                // Identical expenses are told apart by which one they are, so removing one doesn't disturb the others.
+                string baseKey = $"{expense.Name}|{expense.Amount}";
+                seen[baseKey] = seen.TryGetValue(baseKey, out int count) ? count + 1 : 0;
+                planned.Add(($"{baseKey}|{seen[baseKey]}", new ExpenseRow(expense.Name, Selling.Gold(expense.Amount), null, expense)));
             }
+            this.DrawExpenseRows(b, left, this.ExpenseRows, planned, "remove-expense");
             if (plan.Expenses.Count == 0)
-                Marquee.Draw(b, this.Translations.Get("expense.none"), Game1.smallFont, new Vector2(left.X + 4, y), left.Width - 8, Game1.textColor * 0.5f);
+                Marquee.DrawWrapped(b, this.Translations.Get("expense.none"), Game1.smallFont, new Vector2(left.X + 4, left.Y + 52), left.Width - 8, Game1.textColor * (0.5f * this.ExpenseRows.EmptyAlpha), maxLines: 3);
 
             // What inputs cost.
             this.DrawListHeader(b, right, this.Translations.Get("expense.costs"), "add-cost");
-            y = right.Y + 52;
-            foreach ((string itemId, long cost) in plan.ItemCosts.OrderBy(pair => StockId.GetDisplayName(pair.Key)).ToList())
-            {
-                if (y > right.Bottom - 36)
-                    break;
-
-                Rectangle remove = new(right.Right - 36, y, 32, 32);
-                this.DrawRemoveButton(b, remove, "remove-cost", itemId);
-                string amount = this.Translations.Get("expense.each", new { gold = Selling.Gold(cost) });
-                Vector2 amountSize = Game1.smallFont.MeasureString(amount);
-                Utility.drawTextWithShadow(b, amount, Game1.smallFont, new Vector2(remove.X - 10 - amountSize.X, y + 2), Game1.textColor);
-                ItemIcon.Draw(b, this.GetJobIcon(itemId, 0), new Rectangle(right.X + 2, y, 30, 30), 1f, showQuality: false);
-                Marquee.Draw(b, StockId.GetDisplayName(itemId), Game1.smallFont, new Vector2(right.X + 40, y + 2), (int)(remove.X - 50 - amountSize.X - right.X), Game1.textColor);
-                y += 38;
-            }
+            List<(string Key, ExpenseRow Data)> costs = plan.ItemCosts
+                .OrderBy(pair => StockId.GetDisplayName(pair.Key))
+                .Select(pair => (pair.Key, new ExpenseRow(StockId.GetDisplayName(pair.Key), this.Translations.Get("expense.each", new { gold = Selling.Gold(pair.Value) }), pair.Key, pair.Key)))
+                .ToList();
+            this.DrawExpenseRows(b, right, this.CostRows, costs, "remove-cost");
             if (plan.ItemCosts.Count == 0)
-                Marquee.Draw(b, this.Translations.Get("expense.no-costs"), Game1.smallFont, new Vector2(right.X + 4, y), right.Width - 8, Game1.textColor * 0.5f);
+                Marquee.DrawWrapped(b, this.Translations.Get("expense.no-costs"), Game1.smallFont, new Vector2(right.X + 4, right.Y + 52), right.Width - 8, Game1.textColor * (0.5f * this.CostRows.EmptyAlpha), maxLines: 3);
 
             // Below: the total, whether gold on hand counts, and when it'll all be paid for.
             int line = grid.Bottom + 4;
             Rectangle check = new(grid.X, line, MeasureButton(this.Translations.Get("expense.gold-on-hand", new { gold = Selling.Gold(Game1.player.Money) })) + 20, 40);
             this.DrawIncomeButton(b, check, "", plan.CountGoldOnHand, "gold-on-hand");
-            b.Draw(Game1.mouseCursors, new Rectangle(check.X + 8, check.Center.Y - 14, 28, 28), plan.CountGoldOnHand ? OptionsCheckbox.sourceRectChecked : OptionsCheckbox.sourceRectUnchecked, Color.White);
+            this.DrawCheckbox(b, new Rectangle(check.X + 8, check.Center.Y - 14, 28, 28), plan.CountGoldOnHand, "gold-on-hand");
             Utility.drawTextWithShadow(b, this.Translations.Get("expense.gold-on-hand", new { gold = Selling.Gold(Game1.player.Money) }), Game1.smallFont, new Vector2(check.X + 44, check.Y + 6), Game1.textColor);
 
             string outlook;
@@ -919,6 +978,48 @@ namespace StardewLogistics.Menus
             Marquee.DrawWrapped(b, outlook, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 52), grid.Width, colour);
         }
 
+        /// <summary>Draws a list of expenses or costs, each row where it's gliding to, new ones sliding in and removed ones fading away.</summary>
+        private void DrawExpenseRows(SpriteBatch b, Rectangle area, AnimatedRows<ExpenseRow> rows, List<(string Key, ExpenseRow Data)> current, string removeAction)
+        {
+            const int rowHeight = 38;
+            int top = area.Y + 52;
+            List<(ExpenseRow Data, float Y, float Alpha, float Slide, bool Leaving)> laid = rows.Layout(current, rowHeight);
+            if (laid.Count == 0 || !UiBatch.Push(b, new Rectangle(area.X, top - 4, area.Width, area.Bottom - top), Vector2.Zero))
+                return;
+
+            try
+            {
+                foreach ((ExpenseRow data, float y, float alpha, float slide, bool leaving) in laid)
+                {
+                    int rowY = top + (int)Math.Round(y);
+                    if (rowY > area.Bottom - 36 || alpha <= 0f)
+                        continue;
+                    int dx = (int)slide;
+
+                    // A row being removed can't be clicked again as it goes.
+                    Rectangle remove = new(area.Right - 36, rowY, 32, 32);
+                    if (leaving)
+                        b.Draw(Game1.mouseCursors, new Rectangle(remove.X + dx, remove.Y, remove.Width, remove.Height), new Rectangle(337, 494, 12, 12), Color.White * (0.7f * alpha));
+                    else
+                        this.DrawRemoveButton(b, remove, removeAction, data.Value, alpha);
+
+                    int nameX = area.X + 4 + dx;
+                    if (data.ItemId != null)
+                    {
+                        ItemIcon.Draw(b, this.GetJobIcon(data.ItemId, 0), new Rectangle(area.X + 2 + dx, rowY, 30, 30), alpha, showQuality: false);
+                        nameX += 36;
+                    }
+                    Vector2 amountSize = Game1.smallFont.MeasureString(data.Amount);
+                    Utility.drawTextWithShadow(b, data.Amount, Game1.smallFont, new Vector2(remove.X - 10 - amountSize.X + dx, rowY + 2), Game1.textColor * alpha, shadowIntensity: alpha);
+                    Marquee.Draw(b, data.Name, Game1.smallFont, new Vector2(nameX, rowY + 2), (int)(remove.X - 20 - amountSize.X - nameX), Game1.textColor * alpha);
+                }
+            }
+            finally
+            {
+                UiBatch.Pop(b);
+            }
+        }
+
         /// <summary>A list's heading, with its Add button.</summary>
         private void DrawListHeader(SpriteBatch b, Rectangle area, string title, string addAction)
         {
@@ -931,10 +1032,31 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>A small remove button.</summary>
-        private void DrawRemoveButton(SpriteBatch b, Rectangle bounds, string action, object value)
+        private void DrawRemoveButton(SpriteBatch b, Rectangle bounds, string action, object value, float alpha = 1f)
         {
             this.IncomeHotspots.Add((bounds, action, value));
-            b.Draw(Game1.mouseCursors, bounds, new Rectangle(337, 494, 12, 12), Color.White * (bounds.Contains(Game1.getMouseX(), Game1.getMouseY()) ? 1f : 0.7f));
+
+            // Grows a little and brightens under the cursor, with a soft glow behind it.
+            float glow = this.Fx.GlowOf(bounds);
+            if (glow > 0f)
+            {
+                Rectangle halo = UiAnimation.Scale(bounds, 1.1f + (0.2f * glow));
+                b.Draw(UiFx.SoftDisc, halo, UiTheme.Bad * (0.25f * glow * alpha));
+            }
+            b.Draw(Game1.mouseCursors, UiAnimation.Scale(bounds, 1f + (0.12f * glow)), new Rectangle(337, 494, 12, 12), Color.White * ((0.7f + (0.3f * glow)) * alpha));
+            this.Fx.Control(b, bounds, inset: 0);
+        }
+
+        /// <summary>A checkbox, popping when it's switched.</summary>
+        private void DrawCheckbox(SpriteBatch b, Rectangle box, bool ticked, string key)
+        {
+            if (this.CheckboxToggledAt.TryGetValue(key, out DateTime at))
+            {
+                float t = UiAnimation.Progress(at, 260);
+                if (t < 1f)
+                    box = UiAnimation.Scale(box, 0.75f + (0.25f * UiAnimation.EaseOutBack(t)));
+            }
+            b.Draw(Game1.mouseCursors, box, ticked ? OptionsCheckbox.sourceRectChecked : OptionsCheckbox.sourceRectUnchecked, Color.White);
         }
 
         /// <summary>Draws the ledger: a line per day, opened to show what was shipped.</summary>
@@ -949,15 +1071,20 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            // Rows are drawn at their animated heights: a day's items open out and fold away, and the rows below
+            // move to make room.
             int visible = grid.Height / LedgerLineHeight;
-            for (int i = 0; i < visible; i++)
+            List<(LedgerDay Day, LedgerItem Item, float Open)> drawn = this.GetLedgerDrawLines();
+            float top = grid.Y;
+            for (int index = this.ScrollOffset; index < drawn.Count; index++)
             {
-                int index = this.ScrollOffset + i;
-                if (index >= lines.Count)
+                (LedgerDay day, LedgerItem item, float open) = drawn[index];
+                float height = item == null ? LedgerLineHeight : LedgerLineHeight * open;
+                if (top + Math.Max(height, 1) > grid.Bottom + 1)
                     break;
 
-                (LedgerDay day, LedgerItem item) = lines[index];
-                int y = grid.Y + (i * LedgerLineHeight);
+                int y = (int)top;
+                top += height;
 
                 if (item == null)
                 {
@@ -966,8 +1093,7 @@ namespace StardewLogistics.Menus
                     this.IncomeHotspots.Add((row, "ledger-day", day.TotalDays));
                     b.Draw(Game1.staminaRect, row, (row.Contains(Game1.getMouseX(), Game1.getMouseY()) ? Color.Wheat : new Color(60, 44, 32)) * 0.12f);
 
-                    string arrow = this.ExpandedLedgerDays.Contains(day.TotalDays) ? "-" : "+";
-                    Utility.drawTextWithShadow(b, arrow, Game1.smallFont, new Vector2(row.X + 8, y + 4), Game1.textColor);
+                    DrawChevron(b, new Vector2(row.X + 16, y + 18), this.LedgerDayOpenness(day), Game1.textColor);
                     Utility.drawTextWithShadow(b, ShippingLedger.FormatDate(day), Game1.smallFont, new Vector2(row.X + 32, y + 4), Game1.textColor);
 
                     Vector2 position = new(row.X + 300, y + 4);
@@ -979,16 +1105,30 @@ namespace StardewLogistics.Menus
                     string total = Selling.Gold(day.Total);
                     Vector2 totalSize = Game1.smallFont.MeasureString(total);
                     Utility.drawTextWithShadow(b, total, Game1.smallFont, new Vector2(row.Right - totalSize.X - 8, y + 4), MoneyColours.ForDaily(day.Total));
+                    continue;
                 }
-                else
+
+                if (open <= 0f)
+                    continue;
+
+                // An item shipped that day, clipped to the height it has so far, sliding in as it fades up.
+                bool clipped = open < 1f;
+                if (clipped && !UiBatch.Push(b, new Rectangle(grid.X, y, grid.Width, (int)Math.Ceiling(height)), Vector2.Zero))
+                    continue;
+                try
                 {
-                    // An item shipped that day.
+                    int slide = (int)((1f - open) * -12);
                     Item icon = this.GetJobIcon(item.ItemId, item.Quality);
-                    ItemIcon.Draw(b, icon, new Rectangle(grid.X + 40, y + 2, 32, 32));
-                    Marquee.Draw(b, $"{NumberFormat.Full(item.Count)}x {item.Name}", Game1.smallFont, new Vector2(grid.X + 82, y + 4), 440, Game1.textColor * 0.85f);
+                    ItemIcon.Draw(b, icon, new Rectangle(grid.X + 40, y + 2 + slide, 32, 32), open);
+                    Marquee.Draw(b, $"{NumberFormat.Full(item.Count)}x {item.Name}", Game1.smallFont, new Vector2(grid.X + 82, y + 4 + slide), 440, Game1.textColor * (0.85f * open));
                     string gold = Selling.Gold(item.Gold);
                     Vector2 size = Game1.smallFont.MeasureString(gold);
-                    Utility.drawTextWithShadow(b, gold, Game1.smallFont, new Vector2(grid.Right - 24 - size.X, y + 4), Game1.textColor * 0.85f);
+                    Utility.drawTextWithShadow(b, gold, Game1.smallFont, new Vector2(grid.Right - 24 - size.X, y + 4 + slide), Game1.textColor * (0.85f * open), shadowIntensity: open);
+                }
+                finally
+                {
+                    if (clipped)
+                        UiBatch.Pop(b);
                 }
             }
 
@@ -1013,7 +1153,313 @@ namespace StardewLogistics.Menus
                 Vector2 bestLine = DrawPart(b, this.Translations.Get("ledger.best-label"), new Vector2(grid.X, grid.Bottom + 40), Game1.textColor);
                 DrawPart(b, $"{ShippingLedger.FormatDate(best)}, {Selling.Gold(best.Total)}", bestLine, MoneyColours.ForDaily(best.Total));
             }
-            Marquee.DrawWrapped(b, this.Translations.Get("ledger.hint"), Game1.smallFont, new Vector2(grid.X, grid.Bottom + 72), grid.Width, Game1.textColor * 0.55f, maxLines: 1);
+            Marquee.DrawWrapped(b, this.Translations.Get("ledger.hint"), Game1.smallFont, new Vector2(grid.X, grid.Bottom + 72), grid.Width, Game1.textColor * 0.55f, maxLines: 2);
+        }
+
+        /*********
+        ** Income tab: cursor effects, colours and animated lists
+        *********/
+        /// <summary>A row of the expense planner: its name, amount, item if it's an input cost, and what removing it removes.</summary>
+        private record ExpenseRow(string Name, string Amount, string ItemId, object Value);
+
+        /// <summary>How much the graph is focused on a day under the cursor, and on a legend entry, each eased from 0 to 1.</summary>
+        private float DayFocus;
+        private float LegendFocus;
+
+        /// <summary>The legend entry under the cursor this frame: a source by name, or a tier.</summary>
+        private string LegendHoverSource;
+        private int LegendHoverTier = -1;
+
+        /// <summary>The legend entry last focused, kept while the focus fades so it fades out as it came in.</summary>
+        private string LegendFocusSource;
+        private int LegendFocusTier = -1;
+
+        /// <summary>Where the guide line is, gliding to the hovered day.</summary>
+        private float GuideX = -1;
+
+        /// <summary>The highlight on each day's bar.</summary>
+        private readonly HoverScales DayGlow = new();
+
+        /// <summary>The bounds of the hotspot last clicked, for hanging the colour picker from.</summary>
+        private Rectangle HotspotBounds;
+
+        /// <summary>What the colour picker is choosing for ("tier:2", "source:Keg"), when it opened, and where from.</summary>
+        private string PickingColour;
+        private DateTime PickerOpenedAt;
+        private Rectangle PickerAnchor;
+
+        /// <summary>When each checkbox was last switched, so its tick pops.</summary>
+        private readonly Dictionary<string, DateTime> CheckboxToggledAt = new();
+
+        /// <summary>The planned expenses and input costs, animated as they're added and removed.</summary>
+        private readonly AnimatedRows<ExpenseRow> ExpenseRows = new();
+        private readonly AnimatedRows<ExpenseRow> CostRows = new();
+
+        /// <summary>Eases the graph's focus towards what the cursor's on, and the guide line towards the hovered day.</summary>
+        private void UpdateGraphFocus(Rectangle plot, float slot, int hoverDay)
+        {
+            float seconds = (float)(Game1.currentGameTime?.ElapsedGameTime.TotalSeconds ?? 0.016);
+            float ease = UiAnimation.Enabled ? 1f - (float)Math.Exp(-seconds * 14 * UiAnimation.SpeedFactor) : 1f;
+
+            this.DayFocus = MathHelper.Lerp(this.DayFocus, hoverDay >= 0 ? 1f : 0f, ease);
+            if (hoverDay >= 0)
+            {
+                float target = plot.X + ((hoverDay + 0.5f) * slot);
+                this.GuideX = this.GuideX < plot.X || this.GuideX > plot.Right || this.DayFocus < 0.05f ? target : MathHelper.Lerp(this.GuideX, target, Math.Min(1f, ease * 1.6f));
+            }
+            this.DayGlow.Hover(hoverDay >= 0 ? hoverDay : null);
+            if (Game1.currentGameTime != null)
+                this.DayGlow.Update(Game1.currentGameTime);
+
+            bool legend = this.LegendHoverSource != null || this.LegendHoverTier >= 0;
+            if (legend)
+            {
+                this.LegendFocusSource = this.LegendHoverSource;
+                this.LegendFocusTier = this.LegendHoverTier;
+            }
+            this.LegendFocus = MathHelper.Lerp(this.LegendFocus, legend ? 1f : 0f, ease);
+            if (!legend && this.LegendFocus < 0.01f)
+            {
+                this.LegendFocusSource = null;
+                this.LegendFocusTier = -1;
+            }
+        }
+
+        /// <summary>How lit a day's bar is under the cursor, from 0 to 1.</summary>
+        private float DayGlowOf(int day) => (this.DayGlow.Get(day) - 1f) / (HoverScales.MaxScale - 1f);
+
+        /// <summary>The line down the plot at the hovered day, fading in and out with the focus.</summary>
+        private void DrawGuide(SpriteBatch b, Rectangle plot)
+        {
+            if (this.GuideX < plot.X || this.GuideX > plot.Right || this.DayFocus <= 0.01f)
+                return;
+            b.Draw(Game1.staminaRect, new Rectangle((int)this.GuideX - 1, plot.Y, 2, plot.Height), Game1.textColor * (0.3f * this.DayFocus));
+        }
+
+        /// <summary>A dot on a point, with a ring pulsing out from it.</summary>
+        private void DrawPulse(SpriteBatch b, Vector2 point)
+        {
+            if (this.DayFocus <= 0.01f)
+                return;
+
+            float wave = UiAnimation.Enabled ? (float)((DateTime.UtcNow.TimeOfDay.TotalSeconds * UiAnimation.SpeedFactor % 1.4) / 1.4) : 1f;
+            float ring = 7 + (13 * UiAnimation.EaseOut(wave));
+            b.Draw(UiFx.SoftDisc, new Rectangle((int)(point.X - ring), (int)(point.Y - ring), (int)(ring * 2), (int)(ring * 2)), Game1.textColor * (0.3f * (1f - wave) * this.DayFocus));
+            b.Draw(UiFx.SoftDisc, new Rectangle((int)point.X - 7, (int)point.Y - 7, 14, 14), Game1.textColor * this.DayFocus);
+            b.Draw(UiFx.SoftDisc, new Rectangle((int)point.X - 4, (int)point.Y - 4, 8, 8), Color.White * this.DayFocus);
+        }
+
+        /// <summary>A legend swatch: filled when shown, outlined when hidden, growing a little under the cursor.</summary>
+        private void DrawSwatch(SpriteBatch b, Rectangle area, Color colour, bool hidden, float glow)
+        {
+            Rectangle swatch = UiAnimation.Scale(new Rectangle(area.X + 2, area.Y + 2, area.Width - 4, area.Height - 4), 1f + (0.15f * glow));
+            if (hidden)
+                DrawRing(b, swatch, colour, 2);
+            else
+            {
+                b.Draw(Game1.staminaRect, swatch, colour);
+                if (glow > 0f)
+                    DrawRing(b, swatch, Game1.textColor * (0.6f * glow), 2);
+            }
+        }
+
+        /// <summary>A rectangle's outline.</summary>
+        private static void DrawRing(SpriteBatch b, Rectangle area, Color colour, int thickness)
+        {
+            b.Draw(Game1.staminaRect, new Rectangle(area.X, area.Y, area.Width, thickness), colour);
+            b.Draw(Game1.staminaRect, new Rectangle(area.X, area.Bottom - thickness, area.Width, thickness), colour);
+            b.Draw(Game1.staminaRect, new Rectangle(area.X, area.Y, thickness, area.Height), colour);
+            b.Draw(Game1.staminaRect, new Rectangle(area.Right - thickness, area.Y, thickness, area.Height), colour);
+        }
+
+        /// <summary>Where the colour picker is: beside what it's for, within the window.</summary>
+        private Rectangle GetPickerBounds()
+        {
+            const int cell = 32;
+            const int gap = 8;
+            int width = (6 * cell) + (7 * gap) + 16;
+            int height = (4 * cell) + (5 * gap) + 16 + 48;
+            int x = Math.Max(this.xPositionOnScreen + 16, this.PickerAnchor.X - width - 8);
+            int y = Math.Clamp(this.PickerAnchor.Y - 16, this.yPositionOnScreen + 16, this.yPositionOnScreen + this.height - height - 16);
+            return new Rectangle(x, y, width, height);
+        }
+
+        /// <summary>The picker's colour cells and its Default button.</summary>
+        private (List<(Rectangle Bounds, Color Colour)> Cells, Rectangle Default) GetPickerLayout()
+        {
+            const int cell = 32;
+            const int gap = 8;
+            Rectangle box = this.GetPickerBounds();
+            List<(Rectangle, Color)> cells = new();
+            for (int i = 0; i < MoneyColours.Choices.Length; i++)
+                cells.Add((new Rectangle(box.X + 8 + gap + ((i % 6) * (cell + gap)), box.Y + 8 + gap + ((i / 6) * (cell + gap)), cell, cell), MoneyColours.Choices[i]));
+            return (cells, new Rectangle(box.X + 16, box.Bottom - 56, box.Width - 32, 40));
+        }
+
+        /// <summary>The colour the picker's target has now, if the player has chosen one.</summary>
+        private Color? PickedNow()
+        {
+            if (this.PickingColour?.StartsWith("tier:") == true && int.TryParse(this.PickingColour.Substring(5), out int tier) && tier >= 0 && tier < MoneyColours.Tiers.Length)
+                return MoneyColours.Tiers[tier];
+            if (this.PickingColour?.StartsWith("source:") == true && this.Config.IncomeSourceColours.TryGetValue(this.PickingColour.Substring(7), out string hex) && MoneyColours.TryParseHex(hex, out Color colour))
+                return colour;
+            return null;
+        }
+
+        /// <summary>Draws the colour picker, popping out beside what it's for.</summary>
+        private void DrawColourPicker(SpriteBatch b)
+        {
+            if (this.PickingColour == null)
+                return;
+
+            Rectangle box = this.GetPickerBounds();
+            float t = UiAnimation.Progress(this.PickerOpenedAt, 200);
+            float pop = UiAnimation.EaseOutBack(t);
+            bool growing = t < 1f && UiBatch.Push(b, null, UiBatch.ScaleAbout(new Vector2(box.Right, Math.Clamp(this.PickerAnchor.Center.Y, box.Y, box.Bottom)), 0.85f + (0.15f * pop), Vector2.Zero));
+            try
+            {
+                drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), box.X, box.Y, box.Width, box.Height, Color.White, 1f, drawShadow: true);
+                (List<(Rectangle Bounds, Color Colour)> cells, Rectangle reset) = this.GetPickerLayout();
+                Color? current = this.PickedNow();
+                foreach ((Rectangle bounds, Color colour) in cells)
+                {
+                    float glow = this.Fx.GlowOf(bounds);
+                    Rectangle swatch = UiAnimation.Scale(bounds, 1f + (0.14f * glow));
+                    DrawRing(b, new Rectangle(swatch.X - 2, swatch.Y - 2, swatch.Width + 4, swatch.Height + 4), Game1.textColor * (0.3f + (0.5f * glow)), 2);
+                    b.Draw(Game1.staminaRect, swatch, colour);
+                    if (current == colour)
+                        DrawRing(b, new Rectangle(swatch.X - 5, swatch.Y - 5, swatch.Width + 10, swatch.Height + 10), Color.Gold, 2);
+                    this.Fx.Control(b, bounds, inset: 0);
+                }
+
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), reset.X, reset.Y, reset.Width, reset.Height, Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, reset);
+                string label = this.Translations.Get("income.colour-default");
+                Vector2 size = Game1.smallFont.MeasureString(label);
+                Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(reset.Center.X - (size.X / 2), reset.Center.Y - (size.Y / 2)), Game1.textColor);
+            }
+            finally
+            {
+                if (growing)
+                    UiBatch.Pop(b);
+            }
+        }
+
+        /// <summary>Handles a click while the colour picker is open.</summary>
+        private void ClickColourPicker(int x, int y)
+        {
+            (List<(Rectangle Bounds, Color Colour)> cells, Rectangle reset) = this.GetPickerLayout();
+            if (reset.Contains(x, y))
+            {
+                this.ApplyColour(null);
+                return;
+            }
+
+            foreach ((Rectangle bounds, Color colour) in cells)
+            {
+                if (bounds.Contains(x, y))
+                {
+                    this.ApplyColour(colour);
+                    return;
+                }
+            }
+
+            // Anywhere else closes it.
+            this.PickingColour = null;
+            Game1.playSound("shwip");
+        }
+
+        /// <summary>Sets the picker's target to a colour, or back to its default, and saves it.</summary>
+        private void ApplyColour(Color? colour)
+        {
+            string target = this.PickingColour;
+            this.PickingColour = null;
+            if (target == null)
+                return;
+
+            if (target.StartsWith("tier:") && int.TryParse(target.Substring(5), out int tier) && tier >= 0 && tier < MoneyColours.DefaultTiers.Length)
+            {
+                this.Config.Normalise();
+                this.Config.IncomeTierColours[tier] = MoneyColours.ToHex(colour ?? MoneyColours.DefaultTiers[tier]);
+            }
+            else if (target.StartsWith("source:"))
+            {
+                string name = target.Substring(7);
+                if (colour is Color chosen)
+                    this.Config.IncomeSourceColours[name] = MoneyColours.ToHex(chosen);
+                else
+                    this.Config.IncomeSourceColours.Remove(name);
+            }
+
+            this.SaveAppearance();
+            Game1.playSound("drumkit6");
+        }
+
+        /// <summary>When each ledger day was last opened or closed, and which, for animating it.</summary>
+        private readonly Dictionary<int, (DateTime At, bool Expanding)> LedgerToggles = new();
+
+        /// <summary>How long a day's items take to open or close, and the gap between one item starting and the next, at normal speed.</summary>
+        private const double LedgerToggleMs = 220;
+        private const double LedgerStaggerMs = 22;
+
+        /// <summary>The ledger as it's drawn: each day, with the items of days that are open or still closing, and how open each item is.</summary>
+        private List<(LedgerDay Day, LedgerItem Item, float Open)> GetLedgerDrawLines()
+        {
+            List<(LedgerDay, LedgerItem, float)> lines = new();
+            foreach (LedgerDay day in (this.Jobs?.Ledger?.Days ?? Array.Empty<LedgerDay>()).OrderByDescending(day => day.TotalDays))
+            {
+                lines.Add((day, null, 1f));
+
+                bool expanded = this.ExpandedLedgerDays.Contains(day.TotalDays);
+                bool toggling = this.LedgerToggles.TryGetValue(day.TotalDays, out (DateTime At, bool Expanding) toggle);
+                if (!expanded && !toggling)
+                    continue;
+
+                bool finished = true;
+                for (int k = 0; k < day.Items.Count; k++)
+                {
+                    float open = 1f;
+                    if (toggling)
+                    {
+                        // Items open top to bottom, and fold away bottom to top.
+                        int order = toggle.Expanding ? k : day.Items.Count - 1 - k;
+                        double delay = Math.Min(order, 8) * LedgerStaggerMs / Math.Max(0.01, UiAnimation.SpeedFactor);
+                        float t = UiAnimation.EaseOut(UiAnimation.Progress(toggle.At.AddMilliseconds(delay), LedgerToggleMs));
+                        open = toggle.Expanding ? t : 1f - t;
+                        if (t < 1f)
+                            finished = false;
+                    }
+                    lines.Add((day, day.Items[k], open));
+                }
+
+                if (toggling && finished)
+                    this.LedgerToggles.Remove(day.TotalDays);
+            }
+            return lines;
+        }
+
+        /// <summary>How open a ledger day is, from 0 (closed) to 1 (open), part way while it's opening or closing.</summary>
+        private float LedgerDayOpenness(LedgerDay day)
+        {
+            bool expanded = this.ExpandedLedgerDays.Contains(day.TotalDays);
+            if (!this.LedgerToggles.TryGetValue(day.TotalDays, out (DateTime At, bool Expanding) toggle))
+                return expanded ? 1f : 0f;
+
+            float t = UiAnimation.EaseOut(UiAnimation.Progress(toggle.At, LedgerToggleMs));
+            return toggle.Expanding ? t : 1f - t;
+        }
+
+        /// <summary>Draws a small chevron, pointing right when closed and turning to point down as it opens.</summary>
+        private static void DrawChevron(SpriteBatch b, Vector2 centre, float open, Color colour)
+        {
+            float angle = open * MathHelper.PiOver2;
+            Vector2 Turn(Vector2 point) => centre + new Vector2(
+                (point.X * (float)Math.Cos(angle)) - (point.Y * (float)Math.Sin(angle)),
+                (point.X * (float)Math.Sin(angle)) + (point.Y * (float)Math.Cos(angle)));
+
+            Vector2 tip = Turn(new Vector2(3, 0));
+            DrawLine(b, Turn(new Vector2(-3, -6)), tip, colour, 3);
+            DrawLine(b, Turn(new Vector2(-3, 6)), tip, colour, 3);
         }
 
         /// <summary>The ledger as lines: each day, newest first, with its items under it when opened.</summary>

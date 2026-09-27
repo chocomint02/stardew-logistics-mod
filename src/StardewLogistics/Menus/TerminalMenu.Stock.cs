@@ -111,6 +111,7 @@ namespace StardewLogistics.Menus
                 foreach ((Rectangle bounds, string label) in new[] { (minus, "-"), (plus, "+") })
                 {
                     drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
+                    this.Fx.Control(b, bounds);
                     Vector2 size = Game1.smallFont.MeasureString(label);
                     Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
                 }
@@ -122,6 +123,7 @@ namespace StardewLogistics.Menus
 
                 Rectangle remove = GetStockRemoveBounds(grid, y);
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), remove.X, remove.Y, remove.Width, remove.Height, Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, remove);
                 string removeLabel = this.Translations.Get("stock.remove");
                 Vector2 removeSize = Game1.smallFont.MeasureString(removeLabel);
                 Utility.drawTextWithShadow(b, removeLabel, Game1.smallFont, new Vector2(remove.Center.X - (removeSize.X / 2), remove.Center.Y - (removeSize.Y / 2)), Game1.textColor);

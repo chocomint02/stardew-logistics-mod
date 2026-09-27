@@ -48,6 +48,7 @@ namespace StardewLogistics.Framework
             commands.Add("logistics_craft", "Queues an autocrafting job. Usage: logistics_craft <item id> <count> [max machines]", this.QueueJob);
             commands.Add("logistics_jobs", "Lists autocrafting jobs and their progress.", this.ListJobs);
             commands.Add("logistics_cancel", "Cancels a job. Usage: logistics_cancel <job id>", this.CancelJob);
+            commands.Add("logistics_calibration", "Shows what's been learned about how long machines and crops really take, and what shipping really pays. Usage: logistics_calibration [reset]", this.ShowCalibration);
         }
 
 
@@ -201,7 +202,7 @@ namespace StardewLogistics.Framework
             output.AppendLine($"  steps: {plan.StepCount}   worst-case time: {FormatTime(plan.WorstCaseMinutes, 0)}");
             output.AppendLine(plan.IsSatisfied
                 ? "  status: can be completed from stock"
-                : "  status: SHORT OF " + string.Join(", ", plan.Shortfalls.Select(cost => $"{cost.Count}x {GetName(cost.ItemId)}")));
+                : "  status: MISSING " + string.Join(", ", plan.Shortfalls.Select(cost => $"{cost.Count}x {GetName(cost.ItemId)}")));
 
             if (plan.HitDepthLimit)
                 output.AppendLine($"  note: hit the depth limit of {this.Config.MaxCraftDepth}; some branches were left unresolved.");
@@ -275,6 +276,28 @@ namespace StardewLogistics.Framework
             Log.Debug(output.ToString());
         }
 
+        /// <summary>Shows or clears what's been learned about timings and prices.</summary>
+        private void ShowCalibration(string command, string[] args)
+        {
+            if (args.Length > 0 && args[0].Equals("reset", StringComparison.OrdinalIgnoreCase))
+            {
+                Calibration.Reset();
+                Log.Debug("Forgot everything learned about timings and prices; plans go by the game's data until more is seen.");
+                return;
+            }
+
+            if (!Calibration.Enabled)
+            {
+                Log.Debug("Adaptive timing and prices is switched off in the config.");
+                return;
+            }
+
+            List<string> lines = Calibration.Describe(GetName);
+            Log.Debug(lines.Count == 0
+                ? $"Timings and prices match the game's data ({Calibration.ObservationCount} observations)."
+                : "Learned from this save:" + Environment.NewLine + "  " + string.Join(Environment.NewLine + "  ", lines));
+        }
+
         /// <summary>Cancels a job.</summary>
         private void CancelJob(string command, string[] args)
         {
@@ -335,6 +358,7 @@ namespace StardewLogistics.Framework
                         + ", not on the network)",
                     MissingReason.DepthLimit => " (hit the depth limit)",
                     MissingReason.RecipeLoop => " (recipe loops back on itself)",
+                    MissingReason.OnlyFromItself => " (not in storage, and only made from one of itself)",
                     MissingReason.NotAnItem => " (recipe asks for a category, not an item)",
                     _ => ""
                 };

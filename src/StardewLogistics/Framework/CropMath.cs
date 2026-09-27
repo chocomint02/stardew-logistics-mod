@@ -69,7 +69,9 @@ namespace StardewLogistics.Framework
                 soil.crop = crop;
                 soil.applySpeedIncreases(Game1.player);
 
-                return crop.phaseDays.Where(days => days > 0 && days < GrownMarker).Sum();
+                // The game's own speed-ups are in the phases now; how fast crops really grow here is learned.
+                int days = crop.phaseDays.Where(days => days > 0 && days < GrownMarker).Sum();
+                return Calibration.CropDays(HarvestItemId(seedId), days);
             }
             catch
             {
@@ -115,7 +117,18 @@ namespace StardewLogistics.Framework
 
         /// <summary>Days until a growing crop can be harvested, assuming it's watered every day.</summary>
         /// <returns>Zero if it's ready now, or <c>null</c> for a crop that won't be ready (dead, or not really a crop).</returns>
+        /// <remarks>Allows for how fast crops have been seen to grow in this save; see <see cref="Calibration"/>.</remarks>
         public static int? DaysUntilHarvest(HoeDirt soil)
+        {
+            int? days = RawDaysUntilHarvest(soil);
+            string harvest = soil?.crop?.indexOfHarvest.Value;
+            return days is > 0 && !string.IsNullOrEmpty(harvest)
+                ? Calibration.CropDays(ItemRegistry.QualifyItemId(harvest) ?? harvest, days.Value)
+                : days;
+        }
+
+        /// <summary>Days until a growing crop can be harvested by the game's own count, a day's growth a night.</summary>
+        public static int? RawDaysUntilHarvest(HoeDirt soil)
         {
             Crop crop = soil?.crop;
             if (crop == null || crop.dead.Value)
@@ -223,6 +236,143 @@ namespace StardewLogistics.Framework
         {
             string id = string.IsNullOrEmpty(fertilizerId) ? null : ItemRegistry.QualifyItemId(fertilizerId);
             return id != null && SpeedGro.Contains(id, StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>The fertilizers in some soil: one, or several where a mod lets them stack.</summary>
+        public static IReadOnlyList<string> FertilizersOf(HoeDirt soil) => SplitFertilizers(FertilizerOf(soil));
+
+        /// <summary>The fertilizers a soil's fertilizer field holds.</summary>
+        /// <remarks>
+        /// The game keeps one fertilizer ID in the field. Mods that let fertilizers stack keep a list in the same
+        /// field instead -- "(O)465|(O)369" -- since it's the one that saves and syncs. A value that isn't itself an
+        /// item is split on the usual separators, keeping the parts that are items, so any such mod reads right.
+        /// </remarks>
+        public static List<string> SplitFertilizers(string raw)
+        {
+            List<string> found = new();
+            if (string.IsNullOrWhiteSpace(raw) || raw == "0")
+                return found;
+
+            if (IsItem(raw))
+            {
+                found.Add(raw);
+                return found;
+            }
+
+            foreach (char separator in Separators)
+            {
+                if (!raw.Contains(separator))
+                    continue;
+
+                foreach (string part in raw.Split(separator, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (IsItem(part.Trim()))
+                        found.Add(part.Trim());
+                }
+
+                // Remember how the world writes a stack, to write one the same way when working out growth times.
+                if (found.Count > 1)
+                    StackSeparator = separator;
+                return found;
+            }
+            return found;
+        }
+
+        /// <summary>The separators a mod might put between stacked fertilizers.</summary>
+        private static readonly char[] Separators = { '|', ',', ';', ' ' };
+
+        /// <summary>The separator stacked fertilizer has been seen written with in this game; '|' until one's seen.</summary>
+        private static char StackSeparator = '|';
+
+        /// <summary>Whether a soil's fertilizer field includes a fertilizer.</summary>
+        public static bool HasFertilizer(string raw, string fertilizerId) => fertilizerId != null && SplitFertilizers(raw).Any(id => SameFertilizer(id, fertilizerId));
+
+        /// <summary>Whether a soil's fertilizer field includes any Speed-Gro.</summary>
+        public static bool HasSpeedGro(string raw) => SplitFertilizers(raw).Any(IsSpeedGro);
+
+        /// <summary>Lays a fertilizer on soil the way a player would, under whatever rules the game -- and any mod -- sets.</summary>
+        /// <param name="soil">The soil.</param>
+        /// <param name="fertilizerId">The fertilizer.</param>
+        /// <param name="replace">Whether to take off what's there when the soil won't take another, as the game only allows one.</param>
+        /// <returns>Whether the soil has the fertilizer now.</returns>
+        /// <remarks>
+        /// The soil is asked first whether it takes this fertilizer as it is, and it's laid through the game's own
+        /// planting: a mod that lets fertilizers stack, or be laid after sprouting, says yes and adds it its own way.
+        /// Only where the soil won't take it is what's there removed first, and put back if even that doesn't work.
+        /// </remarks>
+        public static bool LayFertilizer(HoeDirt soil, string fertilizerId, bool replace)
+        {
+            if (soil == null || string.IsNullOrEmpty(fertilizerId))
+                return false;
+            if (HasFertilizer(FertilizerOf(soil), fertilizerId))
+                return true;
+
+            try
+            {
+                if (soil.CanApplyFertilizer(fertilizerId))
+                    return soil.plant(fertilizerId, Game1.player, isFertilizer: true);
+
+                if (!replace || !soil.HasFertilizer())
+                    return false;
+
+                string existing = soil.fertilizer.Value;
+                soil.fertilizer.Value = null;
+                if (soil.CanApplyFertilizer(fertilizerId) && soil.plant(fertilizerId, Game1.player, isFertilizer: true))
+                    return true;
+
+                soil.fertilizer.Value = existing;
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>The fertilizer field a tile would have once a fertilizer is laid on it, for working out growth time.</summary>
+        /// <param name="existing">The tile's fertilizer field now.</param>
+        /// <param name="added">The fertilizer to lay, or <c>null</c> for none.</param>
+        /// <param name="location">The tile's location.</param>
+        /// <param name="tile">The tile.</param>
+        /// <param name="keepSpeedGro">Whether a Speed-Gro already there stays rather than being replaced, where the soil takes only one.</param>
+        /// <remarks>
+        /// Where the soil takes another fertilizer (a mod letting them stack), both, written the way stacked
+        /// fertilizer has been seen written in this game; otherwise the new one in place of the old. Only an
+        /// estimate: once planted, the crop's own growth is read from the crop itself.
+        /// </remarks>
+        public static string FertilizerAfterLaying(string existing, string added, GameLocation location, Vector2 tile, bool keepSpeedGro = false)
+        {
+            if (string.IsNullOrEmpty(added) || HasFertilizer(existing, added))
+                return existing;
+            if (SplitFertilizers(existing).Count == 0)
+                return added;
+
+            try
+            {
+                HoeDirt probe = new(0, location);
+                probe.fertilizer.Value = existing;
+                if (probe.CanApplyFertilizer(added))
+                    return existing + StackSeparator + added;
+            }
+            catch
+            {
+                // Treat it as taking one.
+            }
+
+            return keepSpeedGro && HasSpeedGro(existing) ? existing : added;
+        }
+
+        /// <summary>Whether an ID names an item.</summary>
+        private static bool IsItem(string id)
+        {
+            try
+            {
+                return ItemRegistry.GetData(ItemRegistry.QualifyItemId(id)) != null;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>The fertilizer in some soil, or <c>null</c> if it has none.</summary>

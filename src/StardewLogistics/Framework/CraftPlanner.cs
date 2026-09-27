@@ -327,11 +327,13 @@ namespace StardewLogistics.Framework
                 int yield = CropMath.GuaranteedYield(seed);
                 int wanted = (int)Math.Ceiling(needed / (double)yield);
 
-                // Soil holds one fertilizer. With Speed-Gro chosen it replaces whatever else a tile has -- Basic
-                // Fertilizer does nothing for growth time -- but a tile that already has a Speed-Gro keeps it.
+                // With Speed-Gro chosen it's laid where a tile doesn't have it: added to what's there where a mod
+                // lets fertilizers stack, and otherwise replacing whatever else a tile has -- Basic Fertilizer does
+                // nothing for growth time -- unless it already has a Speed-Gro, which it keeps.
                 var tiles = this.FreeTiles
-                    .Select(tile => (Tile: tile, AddsFertilizer: this.Fertilizer != null && !CropMath.IsSpeedGro(tile.Fertilizer)))
-                    .Select(entry => (entry.Tile, entry.AddsFertilizer, Days: this.GrowDays(seed, entry.AddsFertilizer ? this.Fertilizer : entry.Tile.Fertilizer, entry.Tile)))
+                    .Select(tile => (Tile: tile, After: CropMath.FertilizerAfterLaying(tile.Fertilizer, this.Fertilizer, tile.Location, tile.Tile, keepSpeedGro: true)))
+                    .Select(entry => (entry.Tile, AddsFertilizer: this.Fertilizer != null && !CropMath.HasFertilizer(entry.Tile.Fertilizer, this.Fertilizer) && CropMath.HasFertilizer(entry.After, this.Fertilizer), entry.After))
+                    .Select(entry => (entry.Tile, entry.AddsFertilizer, Days: this.GrowDays(seed, entry.After, entry.Tile)))
                     .Where(entry => entry.Days != null)
                     .OrderBy(entry => entry.Days)
                     .Take(wanted)
@@ -389,36 +391,119 @@ namespace StardewLogistics.Framework
                 : null;
         }
 
-        /// <summary>Fills in a node with whichever recipe can make the item, crafting preferred over processing.</summary>
+        /// <summary>Fills in a node with the best way to make the item: a crafting recipe, a machine, or either.</summary>
         /// <returns>Whether a producer was found.</returns>
+        /// <remarks>
+        /// Some things can be both crafted and made in a machine: an Iron Bar transmuted from copper bars at the
+        /// workbench, or smelted from ore in a furnace. Where both are possible each is planned in turn, from the
+        /// same starting point, and the better kept: the player's own choice first (a machine, or
+        /// <see cref="CraftChoice"/>); then whichever can actually be supplied; and failing that, whichever falls
+        /// shorter. Where both can be supplied, the whole branch counts, not just its last step -- transmuting an
+        /// Iron Bar is instant, but the Copper Bars it takes need smelting first: the one with less machine time
+        /// wins, then the one taking less value from storage, then crafting. The other's claims on storage, crops
+        /// and tiles are undone.
+        /// </remarks>
         private bool TryPlanProduction(PlanNode node, string itemId, int remaining, Ledger ledger, HashSet<string> inProgress, int depth, IReadOnlyDictionary<string, string> preferred, CraftPlan plan, out MissingReason reason)
         {
-            reason = MissingReason.NoRecipe;
-
-            // Crafting is instant and needs no machine, so it wins when both are possible.
+            // A recipe that takes in what it makes, or something further up the chain still being made, can't add
+            // to the supply: it's left out, and the item planned another way or taken from storage.
             RecipeEntry craft = this.Crafting?.FindByOutput(itemId);
-            if (craft != null)
+            MissingReason craftLoop = craft != null ? LoopKind(CraftInputs(craft), itemId, inProgress) : MissingReason.None;
+            if (craftLoop != MissingReason.None)
+                craft = null;
+            bool hasMachines = this.Machines?.GetRecipesFor(itemId).Any(recipe => LoopKind(MachineInputs(recipe), itemId, inProgress) == MissingReason.None) == true;
+
+            if (craft == null)
             {
-                int perBatch = Math.Max(1, craft.Recipe.numberProducedPerCraft);
-                int batches = (int)Math.Ceiling(remaining / (double)perBatch);
+                bool made = this.TryPlanProcessing(node, itemId, remaining, ledger, inProgress, depth, preferred, plan, out reason);
+                if (!made && craftLoop != MissingReason.None && reason is MissingReason.NotEnoughStock or MissingReason.NoRecipe)
+                    reason = craftLoop;
+                return made;
+            }
+            if (!hasMachines)
+            {
+                reason = MissingReason.NoRecipe;
+                return this.PlanCrafting(node, craft, itemId, remaining, ledger, inProgress, depth, preferred, plan);
+            }
 
-                node.Kind = PlanStepKind.Craft;
-                node.CraftRecipe = craft.Recipe;
-                node.Batches = batches;
-                node.ToProduce = remaining;
+            // Both ways. Plan crafting first, and note where that leaves everything.
+            PlannerState before = this.Capture(ledger, plan);
+            PlanNode crafted = Blank(node);
+            this.PlanCrafting(crafted, craft, itemId, remaining, ledger, inProgress, depth, preferred, plan);
+            PlannerState afterCrafting = this.Capture(ledger, plan);
 
-                foreach (KeyValuePair<string, int> ingredient in craft.Recipe.recipeList)
-                    AddChild(node, this.Resolve(NormaliseIngredient(ingredient.Key), ingredient.Value * batches, ledger, inProgress, depth + 1, preferred, plan));
+            // Then processing, from the same start.
+            this.Restore(before, ledger, plan);
+            PlanNode processed = Blank(node);
+            bool canProcess = this.TryPlanProcessing(processed, itemId, remaining, ledger, inProgress, depth, preferred, plan, out MissingReason processReason);
 
-                ledger.Give(itemId, (batches * perBatch) - remaining);
+            string choice = preferred != null && preferred.TryGetValue(itemId, out string chosen) ? chosen : null;
+            bool craftChosen = string.Equals(choice, CraftChoice, StringComparison.OrdinalIgnoreCase);
+            bool useProcessing = canProcess && !craftChosen && (
+                choice != null
+                || (!crafted.IsSatisfied && processed.IsSatisfied)
+                || (crafted.IsSatisfied && processed.IsSatisfied && Cheaper(processed, crafted))
+                || (!crafted.IsSatisfied && !processed.IsSatisfied && TotalMissing(processed) < TotalMissing(crafted)));
+
+            reason = processReason;
+            if (useProcessing)
+            {
+                CopyProduction(processed, node);
+                node.CanCraftInstead = true;
                 return true;
             }
 
-            IReadOnlyList<MachineRecipe> known = this.Machines?.GetRecipesFor(itemId) ?? Array.Empty<MachineRecipe>();
-            if (known.Count == 0)
+            // Crafting it is: put back where crafting left things, and offer the machines on the network that could
+            // do it instead.
+            IReadOnlyList<MachineRecipe> machines = canProcess ? processed.Alternatives : new List<MachineRecipe>();
+            this.Restore(afterCrafting, ledger, plan);
+            CopyProduction(crafted, node);
+            node.Alternatives = machines;
+            return true;
+        }
+
+        /// <summary>The choice a player makes to have something crafted rather than made in a machine.</summary>
+        public const string CraftChoice = "craft";
+
+        /// <summary>Plans an item made at the workbench.</summary>
+        private bool PlanCrafting(PlanNode node, RecipeEntry craft, string itemId, int remaining, Ledger ledger, HashSet<string> inProgress, int depth, IReadOnlyDictionary<string, string> preferred, CraftPlan plan)
+        {
+            int perBatch = Math.Max(1, craft.Recipe.numberProducedPerCraft);
+            int batches = (int)Math.Ceiling(remaining / (double)perBatch);
+
+            node.Kind = PlanStepKind.Craft;
+            node.CraftRecipe = craft.Recipe;
+            node.Batches = batches;
+            node.ToProduce = remaining;
+
+            foreach (KeyValuePair<string, int> ingredient in craft.Recipe.recipeList)
+                AddChild(node, this.Resolve(NormaliseIngredient(ingredient.Key), ingredient.Value * batches, ledger, inProgress, depth + 1, preferred, plan));
+
+            ledger.Give(itemId, (batches * perBatch) - remaining);
+            return true;
+        }
+
+        /// <summary>Plans an item made in a machine.</summary>
+        private bool TryPlanProcessing(PlanNode node, string itemId, int remaining, Ledger ledger, HashSet<string> inProgress, int depth, IReadOnlyDictionary<string, string> preferred, CraftPlan plan, out MissingReason reason)
+        {
+            reason = MissingReason.NoRecipe;
+
+            IReadOnlyList<MachineRecipe> all = this.Machines?.GetRecipesFor(itemId) ?? Array.Empty<MachineRecipe>();
+            if (all.Count == 0)
             {
                 // Nothing produces it, and the player has no recipe either, so it can only come from stock.
                 reason = MissingReason.NotEnoughStock;
+                return false;
+            }
+
+            // Leave out machines that would need one of what they're making -- a Crystalarium copying a gem -- or
+            // something further up the chain. If that's all of them, storage has to supply it.
+            List<MachineRecipe> known = all.Where(recipe => LoopKind(MachineInputs(recipe), itemId, inProgress) == MissingReason.None).ToList();
+            if (known.Count == 0)
+            {
+                reason = all.Any(recipe => LoopKind(MachineInputs(recipe), itemId, inProgress) == MissingReason.OnlyFromItself)
+                    ? MissingReason.OnlyFromItself
+                    : MissingReason.RecipeLoop;
                 return false;
             }
 
@@ -490,6 +575,77 @@ namespace StardewLogistics.Framework
             ledger.Give(itemId, assignments.Sum(assignment => assignment.Output) - remaining);
             return true;
         }
+
+        /// <summary>A node for trying one way of making something: the same item, need and stock, with nothing under it yet.</summary>
+        private static PlanNode Blank(PlanNode node)
+        {
+            PlanNode blank = new()
+            {
+                ItemId = node.ItemId,
+                RequiredQuality = node.RequiredQuality,
+                DisplayName = node.DisplayName,
+                Requested = node.Requested,
+                Depth = node.Depth,
+                FromStock = node.FromStock,
+                StockParts = node.StockParts,
+                FromHarvest = node.FromHarvest,
+                HarvestDays = node.HarvestDays
+            };
+            blank.Harvests.AddRange(node.Harvests);
+            return blank;
+        }
+
+        /// <summary>Copies the way of making something that was chosen onto the node that asked.</summary>
+        private static void CopyProduction(PlanNode from, PlanNode to)
+        {
+            to.Kind = from.Kind;
+            to.CraftRecipe = from.CraftRecipe;
+            to.Batches = from.Batches;
+            to.ToProduce = from.ToProduce;
+            to.MinutesPerBatch = from.MinutesPerBatch;
+            to.DaysPerBatch = from.DaysPerBatch;
+            to.Alternatives = from.Alternatives;
+            to.Assignments.AddRange(from.Assignments);
+            to.Children.AddRange(from.Children);
+        }
+
+        /// <summary>Whether one way of making something costs less than another: less machine time, then less value taken from storage.</summary>
+        private static bool Cheaper(PlanNode candidate, PlanNode other)
+        {
+            int candidateTime = BranchMinutes(candidate);
+            int otherTime = BranchMinutes(other);
+            if (candidateTime != otherTime)
+                return candidateTime < otherTime;
+
+            return BranchValue(candidate) < BranchValue(other);
+        }
+
+        /// <summary>The machine time a branch takes, every step counted as if on one machine.</summary>
+        private static int BranchMinutes(PlanNode node) => node.Walk().Where(each => each.Kind == PlanStepKind.Process).Sum(each => each.SequentialMinutes);
+
+        /// <summary>The value of what a branch takes from storage.</summary>
+        private static long BranchValue(PlanNode node) => node.Walk().Sum(each => (long)each.FromStock * GetPrice(each.ItemId));
+
+        /// <summary>How many things a branch of a plan can't supply, all told.</summary>
+        private static int TotalMissing(PlanNode node) => node.Walk().Sum(each => each.Missing);
+
+        /// <summary>Everything planning a branch changes: what storage has left, the crops and tiles still free.</summary>
+        private PlannerState Capture(Ledger ledger, CraftPlan plan)
+        {
+            return new PlannerState(ledger.Copy(), this.Incoming.ToList(), this.FreeTiles.ToList(), plan.HitDepthLimit);
+        }
+
+        /// <summary>Puts back what planning a branch changed.</summary>
+        private void Restore(PlannerState state, Ledger ledger, CraftPlan plan)
+        {
+            ledger.CopyFrom(state.Ledger);
+            this.Incoming = state.Incoming.ToList();
+            this.FreeTiles = state.FreeTiles.ToList();
+            plan.HitDepthLimit = state.HitDepthLimit;
+        }
+
+        /// <summary>A snapshot of what planning changes.</summary>
+        private sealed record PlannerState(Ledger Ledger, List<IncomingCrop> Incoming, List<FreeTile> FreeTiles, bool HitDepthLimit);
 
         /// <summary>Shares a step's runs between the recipes that can do it: different machines, and different inputs.</summary>
         /// <remarks>
@@ -765,9 +921,36 @@ namespace StardewLogistics.Framework
             if (!IsMakeable(itemId))
                 return false;
 
-            return this.Crafting?.FindByOutput(itemId) != null
-                || (this.Machines?.GetRecipesFor(itemId).Any(recipe => this.CountUsable == null || this.CountUsable(recipe) > 0) ?? false);
+            RecipeEntry craft = this.Crafting?.FindByOutput(itemId);
+            return (craft != null && LoopKind(CraftInputs(craft), itemId, null) == MissingReason.None)
+                || (this.Machines?.GetRecipesFor(itemId).Any(recipe => (this.CountUsable == null || this.CountUsable(recipe) > 0) && LoopKind(MachineInputs(recipe), itemId, null) == MissingReason.None) ?? false);
         }
+
+        /// <summary>Whether a way of making something would loop: taking in the item itself, or something further up the chain that's still being made.</summary>
+        /// <param name="inputs">What the way of making it takes in.</param>
+        /// <param name="itemId">What it makes.</param>
+        /// <param name="inProgress">What's being made further up the chain, if planning.</param>
+        /// <returns><see cref="MissingReason.OnlyFromItself"/> if it takes in the item itself, <see cref="MissingReason.RecipeLoop"/> if something further up, otherwise <see cref="MissingReason.None"/>.</returns>
+        private static MissingReason LoopKind(IEnumerable<string> inputs, string itemId, HashSet<string> inProgress)
+        {
+            MissingReason kind = MissingReason.None;
+            foreach (string input in inputs)
+            {
+                if (string.IsNullOrEmpty(input))
+                    continue;
+                if (string.Equals(input, itemId, StringComparison.OrdinalIgnoreCase) || string.Equals(StockId.BaseId(input), StockId.BaseId(itemId), StringComparison.OrdinalIgnoreCase))
+                    return MissingReason.OnlyFromItself;
+                if (inProgress != null && inProgress.Contains(input))
+                    kind = MissingReason.RecipeLoop;
+            }
+            return kind;
+        }
+
+        /// <summary>What a crafting recipe takes in, as item IDs.</summary>
+        private static IEnumerable<string> CraftInputs(RecipeEntry craft) => craft.Recipe.recipeList.Keys.Select(NormaliseIngredient);
+
+        /// <summary>What a machine recipe takes in, as item IDs.</summary>
+        private static IEnumerable<string> MachineInputs(MachineRecipe recipe) => recipe.GetAllInputs().Select(input => input.ItemId);
 
         /// <summary>What a recipe's main input costs per item it makes, used to spend cheap ingredients before rare ones.</summary>
         /// <remarks>
@@ -855,6 +1038,26 @@ namespace StardewLogistics.Framework
 
             /// <summary>An item for each stock ID, to match category and tag specs against.</summary>
             private readonly Dictionary<string, Item> Samples = new(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>A copy, for trying one way of making something and undoing it.</summary>
+            public Ledger Copy()
+            {
+                Ledger copy = new(null);
+                copy.CopyFrom(this);
+                return copy;
+            }
+
+            /// <summary>Makes this ledger match another.</summary>
+            public void CopyFrom(Ledger other)
+            {
+                this.Available.Clear();
+                foreach ((string id, SortedDictionary<int, long> counts) in other.Available)
+                    this.Available[id] = new SortedDictionary<int, long>(counts);
+
+                this.Samples.Clear();
+                foreach ((string id, Item sample) in other.Samples)
+                    this.Samples[id] = sample;
+            }
 
             public Ledger(IReadOnlyList<IFilterableEntry> stock)
             {

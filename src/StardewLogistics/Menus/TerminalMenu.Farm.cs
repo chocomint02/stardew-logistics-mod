@@ -124,6 +124,7 @@ namespace StardewLogistics.Menus
                 Marquee.Draw(b, summary, Game1.smallFont, new Vector2(textX, y + 48), textWidth, Game1.textColor * 0.65f);
 
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), view.X, view.Y, view.Width, view.Height, Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, view);
                 string label = this.Translations.Get("farm.view");
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(view.Center.X - (size.X / 2), view.Center.Y - (size.Y / 2)), Game1.textColor);
