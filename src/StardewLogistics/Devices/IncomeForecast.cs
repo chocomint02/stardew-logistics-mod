@@ -217,8 +217,9 @@ namespace StardewLogistics.Devices
             if (cycle <= 0)
                 return null;
 
-            // Finished and waiting to be collected: a one-off batch has earned what it will.
-            double first = machine.readyForHarvest.Value ? 0 : ToDays(Math.Max(0, machine.MinutesUntilReady));
+            // As long as runs have really been taking here, and as fast as this one's timer really runs down.
+            cycle *= Calibration.MachineFactor(machine.QualifiedItemId, StockId.Of(held), location, node.Tile);
+            double first = machine.readyForHarvest.Value ? 0 : ToDays((int)Math.Round(Math.Max(0, machine.MinutesUntilReady) * Calibration.SpeedFactor(machine.QualifiedItemId, location, node.Tile)));
             if (machine.readyForHarvest.Value && !repeats && completions <= 1)
                 return null;
 
@@ -293,6 +294,7 @@ namespace StardewLogistics.Devices
                 cycle = ObservedDays(held, tapper.MinutesUntilReady);
             if (cycle <= 0)
                 return null;
+            cycle *= Calibration.MachineFactor(tapper.QualifiedItemId, StockId.Of(held), node.Location, node.Tile);
 
             return new IncomeSource
             {

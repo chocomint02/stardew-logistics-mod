@@ -21,6 +21,12 @@ namespace StardewLogistics.Menus
     /// </remarks>
     internal class SellMenu : IClickableMenu
     {
+        /// <summary>The tooltip, growing in as it appears and shrinking away as it goes.</summary>
+        private readonly TooltipPresenter Tooltips = new();
+
+        /// <summary>Hover highlights and click ripples on the menu's controls.</summary>
+        private readonly UiFx Fx = new();
+
         /*********
         ** Fields
         *********/
@@ -204,6 +210,7 @@ namespace StardewLogistics.Menus
             foreach ((Rectangle bounds, int delta, bool max) in this.StepButtons)
             {
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, max ? Color.Wheat : Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, bounds);
                 string label = max
                     ? (delta > 0 ? "+" : "-") + this.Translations.Get("sell.max")
                     : (delta > 0 ? "+" : "") + delta.ToString(CultureInfo.InvariantCulture);
@@ -229,6 +236,9 @@ namespace StardewLogistics.Menus
             bool canShip = this.HasBin && this.Quantity > 0;
             drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), this.CancelButton.X, this.CancelButton.Y, this.CancelButton.Width, this.CancelButton.Height, Color.White, 2f, drawShadow: false);
             UiTheme.DrawButton(b, new Rectangle(this.ShipButton.X, this.ShipButton.Y, this.ShipButton.Width, this.ShipButton.Height), canShip ? Color.LightGreen : Color.Gray, 2f);
+            this.Fx.Control(b, this.CancelButton);
+            if (canShip)
+                this.Fx.Control(b, this.ShipButton);
             foreach ((Rectangle bounds, string key, bool enabled) in new[] { (this.CancelButton, "sell.cancel", true), (this.ShipButton, "sell.ship", canShip) })
             {
                 string label = this.Translations.Get(key);
@@ -237,8 +247,8 @@ namespace StardewLogistics.Menus
             }
 
             base.draw(b);
-            if (!string.IsNullOrEmpty(this.HoverText))
-                drawHoverText(b, Game1.parseText(this.HoverText, Game1.smallFont, 480), Game1.smallFont);
+            string hover = this.HoverText;
+            this.Tooltips.Draw(b, string.IsNullOrEmpty(hover) ? null : batch => TooltipFx.Around(batch, () => drawHoverText(batch, Game1.parseText(hover, Game1.smallFont, 480), Game1.smallFont)));
             this.drawMouse(b);
         }
 

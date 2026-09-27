@@ -46,6 +46,9 @@ namespace StardewLogistics.Framework
         /// <summary>The recipe graph looped back on itself.</summary>
         RecipeLoop,
 
+        /// <summary>The only ways to make it take one of itself in, like a Crystalarium copying a gem, so storage has to supply it.</summary>
+        OnlyFromItself,
+
         /// <summary>The recipe asked for a category rather than a specific item.</summary>
         NotAnItem,
 
@@ -139,7 +142,15 @@ namespace StardewLogistics.Framework
         public MachineRecipe MachineRecipe => this.Assignments.Count > 0 ? this.Assignments[0].Recipe : null;
 
         /// <summary>Other machines that could do the same job, offered to the player as alternatives.</summary>
+        /// <remarks>On a crafting step, the machines that could make it instead.</remarks>
         public IReadOnlyList<MachineRecipe> Alternatives { get; set; } = new List<MachineRecipe>();
+
+        /// <summary>Whether a crafting recipe makes this too, so the player can choose it over a machine.</summary>
+        public bool CanCraftInstead { get; set; }
+
+        /// <summary>Whether the player could pick another way to make this step: another machine, or crafting.</summary>
+        public bool HasChoice => (this.Kind == PlanStepKind.Process && (this.Alternatives.Count > 1 || this.CanCraftInstead))
+            || (this.Kind == PlanStepKind.Craft && this.Alternatives.Count > 0);
 
         /// <summary>How many times the recipe runs.</summary>
         public int Batches { get; set; }
@@ -234,6 +245,7 @@ namespace StardewLogistics.Framework
                         MissingReason.CantGrowInTime => "can't grow in time on automation tiles",
                         MissingReason.NoMachineAvailable => first.Alternatives.Count > 0 ? $"no {first.Alternatives[0].MachineName} on the network" : "no machine on the network",
                         MissingReason.RecipeLoop => "recipe loops back on itself",
+                        MissingReason.OnlyFromItself => "none stored, and only made from one of itself",
                         MissingReason.DepthLimit => "too many steps",
                         _ => null
                     };

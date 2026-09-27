@@ -18,11 +18,11 @@ No other mods are required.
 
 ## Contents
 
+- [Installation](#installation)
 - [Getting started](#getting-started)
 - [Items](#items)
 - [The terminal](#the-terminal)
 - [Storage](#storage)
-- [Crafting](#crafting)
 - [Autocrafting](#autocrafting)
 - [Minimum stock](#minimum-stock)
 - [Auto-Harvester](#auto-harvester)
@@ -36,6 +36,19 @@ No other mods are required.
 - [Known limitations](#known-limitations)
 - [Building](#building)
 - [Project layout](#project-layout)
+
+---
+
+## Installation
+
+1. Install [SMAPI](https://smapi.io/) 4.0 or later.
+2. Download [`StardewLogistics-0.1.0.zip`](release/StardewLogistics-0.1.0.zip) (open it and choose
+   **Download raw file**).
+3. Unzip it into your game's `Mods` folder, so the mod is at `Mods/StardewLogistics`.
+4. Launch the game through SMAPI.
+
+To update, delete the old `Mods/StardewLogistics` folder and unzip the new one in its place. Your settings are in
+`config.json` inside that folder: copy it out first to keep them.
 
 ---
 
@@ -77,13 +90,12 @@ All recipes are learned immediately while `UnlockAllRecipes` is on (default).
 
 The Storage Terminal shows the **Items**, **Farm**, **Storage**, **Network**, **Shipping**, **Income** and
 **Settings** tabs.
-The Crafting Terminal and Wireless Terminal add **Craft**, **Auto**, **Jobs** and **Stock**.
+The Crafting Terminal and Wireless Terminal add **Craft**, **Jobs** and **Stock**.
 
 | Tab | Purpose |
 |---|---|
 | Items | Browse, withdraw and deposit network storage. |
-| Craft | Craft recipes from network storage. |
-| Auto | Plan and queue autocrafting jobs. |
+| Craft | Plan and queue autocrafting jobs for anything the network can make. |
 | Jobs | Monitor, speed up and cancel running jobs. |
 | Stock | Manage minimum-stock rules. |
 | Farm | View Auto-Harvesters on the network and a live view of their fields. |
@@ -100,7 +112,15 @@ The Crafting Terminal and Wireless Terminal add **Craft**, **Auto**, **Jobs** an
   Ember. Applies to every window the mod opens, including its tooltips, text boxes and the inventory shown inside
   them. Other game menus are unaffected.
 - **Animations:** switching tabs or Income views slides and fades the new content in, and the active highlight
-  glides across. Grid icons grow slightly when hovered, as in the inventory. Speed is adjustable (0–300%), or off.
+  glides across. Grid icons grow slightly when hovered, as in the inventory. Buttons, tabs and legend entries
+  in every window the mod opens (the terminal, the autocrafting planner, the harvester and its plan, the wireless
+  devices, and the sell, bulk-craft and expense windows) light up under the cursor with a soft wash and an
+  underline, and a click sends a ripple across the control. The
+  terminal fades in and out, ledger days fold open, letters typed into the search box pop into place (and
+  deleted ones float away) with a gliding caret, tooltips grow out from the cursor as they appear, shrink back as they go, and resize smoothly
+  when the cursor moves from one thing to another, their frames
+  carrying a soft streak of light travelling round the border, a new color scheme fades in over the old one, and planned expenses slide in and fade away as they're added
+  and removed. Speed is adjustable (0–300%), or off.
 - **Devices** play a boot sequence when placed, then run: terminals scroll stock or fill a crafting grid, the
   transmitter sends rings out and the receiver takes them in, and the Auto-Harvester's sprout sways under its grow
   light. Data pulses flow along cables. These follow the same speed setting; at 0% devices show their still sprite.
@@ -118,7 +138,7 @@ blueberry        name contains "blueberry"
 #wine            context tag
 @fish            category
 ~ridgeside       source mod
->500  <=2000     quantity (on the Craft tab: craftable batches)
+>500  <=2000     quantity held
 !stone           negate any term
 ```
 
@@ -134,7 +154,8 @@ unnamespaced IDs report as "Unknown".
 - Chests another player has open are skipped until they're closed.
 - **Items tab:** click to take a stack, right-click to take one, shift-click to fill your bag. Click an item in
   your bag to store it; shift-click to store every stack of it. **Deposit All** stores everything except tools.
-- Counts are abbreviated in the grid (`12.3K`, `4.5M`); hover for the exact number.
+- Counts are abbreviated in the grid (`12.3K`, `4.5M`). Hover an item for its description; what clicking does
+  is written under the grid.
 
 ### Priorities and filters
 
@@ -161,22 +182,16 @@ removed, its inputs or finished output returns to storage instead of being lost.
 
 ---
 
-## Crafting
-
-The **Craft** tab lists every recipe you know, crafted from network storage.
-
-- Recipes you can't afford are dimmed. Hover a recipe to see each ingredient's have/need count.
-- Click crafts one, shift-click crafts five, right-click opens a quantity dialog.
-- The quantity box accepts arithmetic expressions: `10*2`, `(3+4)*6`.
-- Crafted items go into storage; anything that doesn't fit goes to your bag.
-
----
-
 ## Autocrafting
 
-The **Auto** tab lists everything the network can make: known crafting recipes, plus the output of every
+The **Craft** tab lists everything the network can make: known crafting recipes, plus the output of every
 machine connected to the network. A blue corner marks machine-made items; a green corner marks crops grown on
-automation tiles. Dimmed items are short of materials.
+automation tiles. Dimmed items have missing ingredients; the hammer button shows only what the network can
+make right now.
+
+Hover an item for its description and what it's made from, each ingredient with a have/need count against
+storage: a crafting recipe's ingredients, the machine and inputs for a machine-made item (the ways storage can
+supply first), or the seeds for a crop.
 
 Selecting an item opens the planner, which shows the complete production tree before anything starts.
 
@@ -185,7 +200,14 @@ Selecting an item opens the planner, which shows the complete production tree be
 - **Multi-step chains.** Ingredients are drawn from storage first, then crafted or processed as needed, down to
   `MaxCraftDepth` steps.
 - **Machine choice.** When several machines can make a step (e.g. Furnace and Heavy Furnace), the work is
-  split between them to minimize time. Clicking on a step allows you to manually configure what machine(S) are used.
+  split between them to minimize time. Clicking on a step allows you to manually configure what machine(s) are used.
+- **Crafting or a machine.** Where an item can be both crafted and made in a machine (an Iron Bar transmuted or
+  smelted), both are planned. The one that can be supplied is used; if both can, the one with less machine time
+  across its whole chain, then the one using less valuable stock. Steps with a choice carry a swap icon: click
+  one to pick another machine, or crafting, yourself.
+- **No self-feeding recipes.** A recipe or machine that takes in what it makes (a Crystalarium copying a gem), or
+  something further up the same chain, is never planned. The item is made another way if there is one, and
+  otherwise taken from storage, noted as missing: "only made from one of itself".
 - **Max machines.** Limits how many machines each step may occupy. Defaults to every available machine.
 - **Ingredient alternatives.** Recipes that accept more than one input (eg. Duck Mayonnaise from a Duck Egg or a
   Golden Duck Egg) consider every option.
@@ -208,8 +230,12 @@ Selecting an item opens the planner, which shows the complete production tree be
 - **Crops.** Crops growing under Auto-Harvesters count as incoming stock and are reserved by the job. If a crop
   isn't stored or growing, the planner reserves free **automation tiles** and plants it, optionally with a chosen
   Speed-Gro.
+- **Diagram.** The **Diagram** tab draws the plan as a flowchart, raw materials on the left and the finished item
+  on the right, with links showing what goes into what. Drag to move it, scroll to zoom around the cursor, and
+  click a step to change how it's made, as in the list. **Fit** frames the whole plan. Cards pop in column by column,
+  links draw themselves in and packets flow along them; when the plan changes, cards glide to their new places.
 - **Summary.** Total time (including crop growth), value of the finished items, and gold per day.
-- **Shortfalls** name the missing item and why: not in storage, no machine on the network, no free automation
+- **Missing ingredients** are named with the reason: not in storage, no machine on the network, no free automation
   tiles, or no time left in the season to grow it.
 
 ### Jobs
@@ -234,7 +260,7 @@ Queued jobs appear on the **Jobs** tab with progress, time remaining, value and 
 
 ## Minimum stock
 
-Keeps at least a set amount of an item in storage. Open an item on the **Auto** tab, set the quantity and
+Keeps at least a set amount of an item in storage. Open an item on the **Craft** tab, set the quantity and
 options, and select **Keep Stocked**.
 
 - Checked every 10 in-game minutes. When stock plus pending production falls below the minimum, a job is
@@ -349,7 +375,12 @@ Projected income from everything on the network that's producing:
 
 Graph options: **Daily** bars or **Running Total** line; **7 / 28 / 112 Days**; **Linear / Log** scale;
 **By Source** stacks each producer in its own color, with a legend to show or hide individual sources. The graph
-is shaded by season. Hover for daily figures.
+is shaded by season. Hover for daily figures: the hovered day lights up, a guide line follows the cursor, and on
+the running total a marker rides the line. Hovering a legend entry picks out that source or tier in the graph.
+
+**Colors:** click a legend swatch (a tier's row, or a source's color square) to choose its color from a palette,
+or reset it with **Default**. Choices are saved to the config: tier colors as `IncomeTierColours` (also editable
+in Generic Mod Config Menu) and source colors by name as `IncomeSourceColours`.
 
 ### History
 
@@ -401,6 +432,9 @@ Edit `config.json`, or use [Generic Mod Config Menu](https://www.nexusmods.com/s
 | `OpenWirelessTerminalKey` | `B` | Opens the equipped Wireless Terminal. |
 | `Theme` | `Vanilla` | Window colour scheme; see [Appearance](#appearance) for the names. |
 | `AnimationSpeed` | `100` | Menu, device and cable animation speed in percent (0–300); `0` turns animations off. |
+| `IncomeTierColours` | brown, green, blue, purple, gold | The Income graph's five tier colors, lowest first, as `#RRGGBB`. |
+| `IncomeSourceColours` | *(none)* | Colors chosen for particular income sources, by name, as `#RRGGBB`. |
+| `AdaptiveCalibration` | `true` | Learn how long machines and crops really take and what shipping pays, and plan by that. |
 
 ---
 
@@ -417,6 +451,7 @@ For troubleshooting, in the SMAPI console:
 | `logistics_craft <item id> <count> [max machines]` | Queue an autocrafting job. |
 | `logistics_jobs` | List jobs and their progress. |
 | `logistics_cancel <job id>` | Cancel a job. |
+| `logistics_calibration [reset]` | Show, or clear, what's been learned about timings and prices. |
 
 ---
 
@@ -429,6 +464,53 @@ For troubleshooting, in the SMAPI console:
 - **Automate is not supported.** 
 - Modded machines and crops defined through the game's 1.6 data formats should be supported.
 
+### Mods that change machines, crops or fertilizer
+
+- **Machines added or changed in data** (tiered machines, new rules, different times, amounts or quality, including
+  through Extra Machine Config) are indexed like any other: each is its own machine with its own recipes.
+- **Autocrafting jobs load machines through the game's own loading**, the way a Hopper does: the machine is offered
+  the job's reserved items and takes what a run needs. Anything a mod changes about loading (how many items a run
+  takes, fuel, the product, its quality, how long it takes) applies as if the player had loaded it. A machine that
+  takes a bigger batch counts as several runs. If the game won't load a machine, or starts it making something the
+  plan didn't ask for, the items go back and the job loads the machine directly, with the product the game's
+  machine code makes from the actual input.
+- **Machines that differ from others of their kind** (upgraded one by one, or several combined into one) are
+  planned by how each actually works: before planning, a stand-in copy of each machine (same kind, same data) is
+  loaded with sample inputs through the game's own loading, off in an empty location, and its timer and batch size
+  are read off. Step times are then worked out on the network's actual machines, fastest first, and jobs use the
+  fastest machines first. Measured once per machine and recipe, and again if the machine's data changes.
+- **Fertilizer** is treated as a set. Where a mod lets fertilizers stack in one tile, the harvester checks whether the
+  planned one is among them, and lays fertilizer through the game's own rules, so the mod adds it its own way; it's
+  only replaced where the soil takes one, as in the base game. Growth times for stacked fertilizer come from the
+  game's own speed-up code.
+
+### Mods that change timing or prices
+
+Plans, jobs, the harvester and forecasts are worked out from the game's data, so anything another mod changes in
+that data (machine times and ready-time modifiers, crop phases, prices) is picked up as it is. Prices come from the
+game's own `sellToStorePrice`, and crop times from the game's own speed-up code, so mods patching those are included
+too.
+
+For mods that change behaviour in code instead, the mod measures what actually happens in the save (**Adaptive
+timing and prices**, on by default) and plans by that. No mod is special-cased.
+
+| Watched | Compared with | Adjusts |
+|---|---|---|
+| What the game sets a machine's timer to when it starts | The machine's data | Planned run times, and the timer jobs set |
+| How fast a machine's timer runs down | The clock | Planned run times and forecasts |
+| A watered crop's growth overnight | The game's one day | Crop days for plans, the harvester and forecasts |
+| What the shipping bin paid overnight | Its contents at the game's prices | Sale values, the sell window and forecasts |
+
+- Every networked machine is timed from start to finish; each crop is compared between evening and morning.
+- Each figure keeps its last 9 observations and uses their median, so a one-off (Fairy Dust, a crop that missed its
+  water) doesn't skew it. Within 4% of the game's figure counts as no change.
+- Specific figures (this machine making this item, this crop) are used first; with none yet, the machine's, then
+  all machines' or all crops', stand in, since a speed-up mod usually applies to everything.
+- Machines are also learned one by one, so machines upgraded or combined individually by other mods each keep
+  their own figures; a machine's own figures come before its kind's.
+- Learned figures are saved with the game, shared with farmhands, and shown on the **Network** tab.
+  `logistics_calibration` prints them; `logistics_calibration reset` clears them.
+
 ---
 
 ## Known limitations
@@ -439,7 +521,7 @@ For troubleshooting, in the SMAPI console:
 
 ## Building
 
-There is no prebuilt release. Build against your own copy of the game:
+To build it yourself instead of using the release zip, build against your own copy of the game:
 
 ```bash
 cd src/StardewLogistics
@@ -448,7 +530,8 @@ dotnet build -c Release
 
 [`Pathoschild.Stardew.ModBuildConfig`](https://github.com/Pathoschild/SMAPI/blob/develop/docs/technical/mod-build-config.md)
 locates the game folder and deploys the mod to `Mods/StardewLogistics`. For a non-standard install location,
-set `GamePath` in the `.csproj` or a `stardewvalley.targets` file.
+set `GamePath` in the `.csproj` or a `stardewvalley.targets` file. A Release build also writes the release zip,
+`StardewLogistics <version>.zip`, to `bin/Release/net6.0`.
 
 Spritesheets are generated by the scripts in `tools/` (Python 3, standard library only); run them from the
 repository root. `make_sprites.py` draws the devices and their animation frames, `make_cable_floor.py` the cable
@@ -480,6 +563,7 @@ src/StardewLogistics/
     MachineRecipeIndex.cs      machine recipes resolved through the game's own machine rules
     MachineAllocator.cs        machine budget per step
     CropMath.cs                growth time, season windows, yields
+    Calibration.cs             learns real timings and prices from the save
     HarvesterSettings.cs       Auto-Harvester area and plan
     HarvesterPlanCheck.cs      plan validation
     StockId.cs                 item identity including flavour

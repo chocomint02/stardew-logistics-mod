@@ -267,8 +267,12 @@ namespace StardewLogistics.Menus
 
             // Storage or the bin, on a row of its own.
             (Rectangle storageButton, Rectangle binButton) = this.GetBinViewButtons();
-            DrawPlainButton(b, storageButton, this.Translations.Get("shipping.view-storage"), !this.ShowingBin);
-            DrawPlainButton(b, binButton, this.Translations.Get("shipping.view-bin"), this.ShowingBin);
+            DrawPlainButton(b, storageButton, null, !this.ShowingBin);
+            DrawPlainButton(b, binButton, null, this.ShowingBin);
+            this.Fx.Control(b, storageButton);
+            this.Fx.Control(b, binButton);
+            DrawPlainButton(b, storageButton, this.Translations.Get("shipping.view-storage"), !this.ShowingBin, drawBox: false);
+            DrawPlainButton(b, binButton, this.Translations.Get("shipping.view-bin"), this.ShowingBin, drawBox: false);
 
             // The bin: what it holds, or that there isn't one.
             string bin = summary.HasBin

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -14,7 +16,8 @@ namespace StardewLogistics.Integrations
     /// <remarks>
     /// The game has no spare equipment slot, so this one is drawn and clicked through patches on
     /// <see cref="InventoryPage"/>. It sits at the foot of the ring column, under the Boots: the only spot in the
-    /// equipment block clear of the funds and date text. It's drawn before the page, so a long farmer name --
+    /// equipment block clear of the funds and date text -- or, where another mod has put something there, the first
+    /// free place among the other equipment slots (see <see cref="GetSlotBounds"/>). It's drawn before the page, so a long farmer name --
     /// centred under the portrait, on the same row -- stays readable over it. What's in it is kept in a global inventory
     /// named for the player: global inventories save with the farm and sync to every player, so a farmhand's
     /// terminal survives the session and the host can see it.
@@ -78,13 +81,92 @@ namespace StardewLogistics.Integrations
                 slot[0] = item;
         }
 
-        /// <summary>The slot's bounds: the ring column, one row below the Boots.</summary>
-        /// <remarks>Worked out the way the page places its own equipment slots, so it lines up with them exactly.</remarks>
+        /// <summary>Where the slot goes on each page, worked out once per page.</summary>
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<InventoryPage, object> SlotByPage = new();
+
+        /// <summary>The slot's bounds on a page.</summary>
+        /// <remarks>
+        /// Normally at the foot of the ring column, under the Boots, lined up with the page's own slots. Mods that
+        /// rearrange the equipment -- Wear More Rings puts the clothes in that column, Boots included -- can leave
+        /// something else there, so the first of a few places that nothing on the page occupies is used instead:
+        /// the last free cell of the grid the equipment slots make, so it still sits among them; failing that, a
+        /// column added to that grid beside its top row, next to the first rings. It always stays inside the page.
+        /// </remarks>
         private static Rectangle GetSlotBounds(InventoryPage page)
         {
-            int x = page.xPositionOnScreen + 48;
-            int y = page.yPositionOnScreen + IClickableMenu.borderWidth + IClickableMenu.spaceToClearTopBorder + 4 + 448 - 12;
-            return new Rectangle(x, y, 64, 64);
+            if (SlotByPage.TryGetValue(page, out object cached))
+                return (Rectangle)cached;
+
+            Rectangle slot = ChooseSlot(page);
+            SlotByPage.AddOrUpdate(page, slot);
+            return slot;
+        }
+
+        /// <summary>Picks the first free place for the slot on a page.</summary>
+        private static Rectangle ChooseSlot(InventoryPage page)
+        {
+            List<Rectangle> taken = new();
+            void Take(ClickableComponent component)
+            {
+                if (component != null && component.bounds.Width > 0)
+                    taken.Add(component.bounds);
+            }
+
+            foreach (ClickableComponent icon in page.equipmentIcons ?? new List<ClickableComponent>())
+                Take(icon);
+            foreach (ClickableComponent slot in page.inventory?.inventory ?? new List<ClickableComponent>())
+                Take(slot);
+            foreach (ClickableComponent component in page.allClickableComponents ?? new List<ClickableComponent>())
+                Take(component);
+            Take(page.organizeButton);
+            Take(page.trashCan);
+
+            List<(string Name, Rectangle Bounds)> candidates = new()
+            {
+                ("under the Boots", new Rectangle(page.xPositionOnScreen + 48, page.yPositionOnScreen + IClickableMenu.borderWidth + IClickableMenu.spaceToClearTopBorder + 4 + 448 - 12, 64, 64))
+            };
+
+            // Inside the page, on the grid the equipment slots make. First the last cell of it nothing fills -- with
+            // Wear More Rings, the foot of the ring columns until trinkets take it -- then a column added beside the
+            // top row, next to the first rings.
+            List<ClickableComponent> equipment = (page.equipmentIcons ?? new List<ClickableComponent>()).Where(icon => icon?.bounds.Width > 0).ToList();
+            if (equipment.Count > 0)
+            {
+                Rectangle panel = new(page.xPositionOnScreen, page.yPositionOnScreen, page.width, page.height);
+                List<int> columns = equipment.Select(icon => icon.bounds.X).Distinct().OrderBy(x => x).ToList();
+                List<int> rows = equipment.Select(icon => icon.bounds.Y).Distinct().OrderBy(y => y).ToList();
+                Rectangle? lastFree = null;
+                foreach (int y in rows)
+                {
+                    foreach (int x in columns)
+                    {
+                        Rectangle cell = new(x, y, 64, 64);
+                        if (panel.Contains(cell) && !taken.Any(other => other.Intersects(cell)))
+                            lastFree = cell;
+                    }
+                }
+                if (lastFree is Rectangle free)
+                    candidates.Add(("at the end of the equipment slots", free));
+
+                int step = columns.Count > 1 ? columns[^1] - columns[^2] : 64;
+                candidates.Add(("beside the first row of rings", new Rectangle(columns[^1] + Math.Max(64, step), rows[0], 64, 64)));
+            }
+
+            Rectangle screen = new(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height);
+            Rectangle inside = new(page.xPositionOnScreen, page.yPositionOnScreen, page.width, page.height);
+            foreach ((string name, Rectangle bounds) in candidates)
+            {
+                if (!screen.Contains(bounds) || !inside.Contains(bounds) || taken.Any(other => other.Intersects(bounds)))
+                    continue;
+
+                if (name != candidates[0].Name)
+                    Log.Trace($"The Wireless Terminal slot's usual place is taken (another mod rearranging the equipment?); it's {name} instead.");
+                return bounds;
+            }
+
+            // Nowhere is free: the usual place, drawn over whatever's there.
+            Log.Trace("No free place was found for the Wireless Terminal slot; it's in its usual place.");
+            return candidates[0].Bounds;
         }
 
         /// <summary>Whether an item is a Wireless Terminal.</summary>
@@ -128,10 +210,10 @@ namespace StardewLogistics.Integrations
                     if (terminal != null)
                     {
                         string text = Translations.Get("accessory.equipped", new { key = HotkeyName(), channel = Network.NetworkNode.GetChannel(terminal as StardewValley.Object) });
-                        IClickableMenu.drawToolTip(b, text, terminal.DisplayName, terminal);
+                        Menus.TooltipFx.Around(b, () => IClickableMenu.drawToolTip(b, text, terminal.DisplayName, terminal));
                     }
                     else
-                        IClickableMenu.drawHoverText(b, Game1.parseText(Translations.Get("accessory.empty", new { key = HotkeyName() }), Game1.smallFont, 400), Game1.smallFont);
+                        Menus.TooltipFx.Around(b, () => IClickableMenu.drawHoverText(b, Game1.parseText(Translations.Get("accessory.empty", new { key = HotkeyName() }), Game1.smallFont, 400), Game1.smallFont));
                 }
             }
             catch (Exception ex)

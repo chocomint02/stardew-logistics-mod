@@ -82,6 +82,10 @@ namespace StardewLogistics.Devices
         /*********
         ** Public methods
         *********/
+        /// <summary>What the shipping bin held at the game's own prices, and the farm's earnings, as the day ended.</summary>
+        private long BinAtGamePrices;
+        private long EarnedBeforeNight = -1;
+
         public ShippingLedger(IDataHelper data)
         {
             this.Data = data;
@@ -115,6 +119,10 @@ namespace StardewLogistics.Devices
         /// <summary>Notes what's in the shipping bins at the end of the day, before the game sells it.</summary>
         public void BeforeNight()
         {
+            // For learning what shipping really pays: the bin at the game's own prices, and the earnings before it.
+            this.BinAtGamePrices = GetBinContents().Sum(item => (long)(Selling.RawUnitPrice(item) ?? 0) * item.Stack);
+            this.EarnedBeforeNight = Earned();
+
             LedgerDay day = new()
             {
                 TotalDays = Game1.Date.TotalDays,
@@ -148,6 +156,11 @@ namespace StardewLogistics.Devices
 
             long earned = Earned();
             long delta = Math.Max(0, earned - Math.Max(0, this.State.EarnedBaseline));
+
+            // Only the night's shipping is paid between the bin being noted and now.
+            if (this.EarnedBeforeNight >= 0)
+                Calibration.ObserveShipping(this.BinAtGamePrices, earned - this.EarnedBeforeNight);
+            this.EarnedBeforeNight = -1;
             this.Pending.Other = Math.Max(0, delta - this.Pending.Shipping);
             this.State.EarnedBaseline = earned;
 

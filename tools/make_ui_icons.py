@@ -10,7 +10,7 @@ Layout is a single 64x16 row, so sprite index n is simply (n * 16, 0):
     0  hammer   toggle: show craftable only
     1  sort     (spare) a sort order
     2  deposit  deposit everything
-    3  spare
+    3  swap     a plan step that can be made another way; plain white, tinted with the colour scheme's text colour
 
 Usage:
     python tools/make_ui_icons.py [--preview]
@@ -82,9 +82,26 @@ def deposit():
     return outlined(s)
 
 
+def swap():
+    """Two arrows passing each other: this can be made another way. White, so it takes the scheme's text colour."""
+    s = Canvas(TILE, TILE)
+    white = (255, 255, 255, 255)
+    # Right-pointing arrow on top.
+    s.rect(2, 4, 9, 5, white)
+    s.rect(10, 2, 10, 7, white)
+    s.rect(11, 3, 11, 6, white)
+    s.rect(12, 4, 12, 5, white)
+    # Left-pointing arrow below.
+    s.rect(6, 10, 13, 11, white)
+    s.rect(5, 8, 5, 13, white)
+    s.rect(4, 9, 4, 12, white)
+    s.rect(3, 10, 3, 11, white)
+    return s
+
+
 if __name__ == "__main__":
     sheet = Canvas(TILE * 4, TILE)
-    for i, icon in enumerate((hammer(), sort(), deposit())):
+    for i, icon in enumerate((hammer(), sort(), deposit(), swap())):
         sheet.paste(icon, i * TILE, 0)
     write_png(SHEET_PATH, sheet)
     print("wrote", os.path.relpath(SHEET_PATH, ROOT))

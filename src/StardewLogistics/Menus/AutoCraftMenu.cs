@@ -35,12 +35,22 @@ namespace StardewLogistics.Menus
         Fertilizer
     }
 
-    internal class AutoCraftMenu : IClickableMenu
+    internal partial class AutoCraftMenu : IClickableMenu
     {
+        /// <summary>The tooltip, growing in as it appears and shrinking away as it goes.</summary>
+        private readonly TooltipPresenter Tooltips = new();
+
+        /// <summary>Hover highlights and click ripples on the menu's controls.</summary>
+        private readonly UiFx Fx = new();
+
         /*********
         ** Fields
         *********/
         private const int MenuWidth = 1000;
+
+        /// <summary>The largest the window grows to on a big screen.</summary>
+        private const int MaxMenuWidth = 1360;
+        private const int MaxMenuHeight = 920;
         private const int RowHeight = 40;
 
         /// <summary>How long a split icon shows each substitute when there are several.</summary>
@@ -168,8 +178,9 @@ namespace StardewLogistics.Menus
             this.Translations = translations;
             this.OnClose = onClose;
 
-            this.width = MenuWidth;
-            this.height = Math.Min(760, Game1.uiViewport.Height - 80);
+            // As big as the screen comfortably allows, so the diagram has room: never smaller than the list needs.
+            this.width = Math.Clamp(Game1.uiViewport.Width - 96, MenuWidth, MaxMenuWidth);
+            this.height = Math.Clamp(Game1.uiViewport.Height - 64, Math.Min(760, Game1.uiViewport.Height - 80), MaxMenuHeight);
             this.xPositionOnScreen = (Game1.uiViewport.Width - this.width) / 2;
             this.yPositionOnScreen = (Game1.uiViewport.Height - this.height) / 2;
 
@@ -214,6 +225,7 @@ namespace StardewLogistics.Menus
         {
             base.update(time);
             this.RowHover.Update(time);
+            this.UpdateDiagram(time);
 
             if (this.QuantityBox.Text != this.LastText)
             {
@@ -233,6 +245,7 @@ namespace StardewLogistics.Menus
             {
                 if (this.Dropdown.ReceiveLeftClick(x, y, out object chosen))
                 {
+                    // A machine, or crafting at the workbench instead.
                     if (chosen is string machineId && this.PendingMachineChoice != null)
                     {
                         this.Preferences[this.PendingMachineChoice.ItemId] = machineId;
@@ -247,6 +260,15 @@ namespace StardewLogistics.Menus
             {
                 this.exitThisMenu();
                 return;
+            }
+
+            foreach ((Rectangle bounds, PlanView view) in this.GetViewTabs())
+            {
+                if (bounds.Contains(x, y))
+                {
+                    this.SwitchView(view);
+                    return;
+                }
             }
 
             foreach ((Rectangle bounds, StepAction action, int delta) in this.StepButtons)
@@ -296,34 +318,17 @@ namespace StardewLogistics.Menus
             if (clickedBox)
                 return;
 
-            // A processing step with more than one capable machine can be reassigned.
-            PlanNode row = this.GetRowAt(x, y);
-
-            // A harvest row opens the field it's growing in, or will be planted in.
-            if (row?.Harvests.Count > 0)
+            // A step clicked in the list: another machine, crafting instead, or the field a crop grows in.
+            if (this.View == PlanView.Diagram)
             {
-                IncomingCrop crop = row.Harvests[0];
-                HarvesterPlanMenu.OpenFieldView(this.Jobs.NetworkManager, this.Translations, crop.Location, crop.HarvesterTile, this.Jobs.GetReservation);
-                return;
+                if (this.PressDiagram(x, y))
+                    return;
             }
-            if (row?.Plantings.Count > 0)
+            else
             {
-                PlannedPlanting planting = row.Plantings[0];
-                HarvesterPlanMenu.OpenFieldView(this.Jobs.NetworkManager, this.Translations, planting.Location, planting.HarvesterTile, this.Jobs.GetReservation);
-                return;
-            }
-
-            if (row is { Kind: PlanStepKind.Process } && row.Alternatives.Count > 1)
-            {
-                this.PendingMachineChoice = row;
-                this.Dropdown.Open(
-                    row.Alternatives
-                        .GroupBy(option => option.MachineId)
-                        .Select(group => (Label: $"{group.First().MachineName}  ({group.First().OutputCount} per {FormatTime(group.First().Minutes, group.First().Days)})", Value: (object)group.Key)),
-                    this.GetRowBounds(this.Rows.IndexOf(row) - this.Scroll)
-                );
-                Game1.playSound("shwip");
-                return;
+                PlanNode row = this.GetRowAt(x, y);
+                if (row != null && this.ActivateStep(row, this.GetRowBounds(this.Rows.IndexOf(row) - this.Scroll)))
+                    return;
             }
 
             if (this.StartButton != null && this.StartButton.containsPoint(x, y))
@@ -332,11 +337,82 @@ namespace StardewLogistics.Menus
                 this.KeepStocked();
         }
 
+        /// <summary>Acts on a step clicked in the list or the diagram.</summary>
+        /// <param name="row">The step.</param>
+        /// <param name="anchor">Where on screen it was clicked, for hanging a dropdown from.</param>
+        /// <returns>Whether the step did something.</returns>
+        private bool ActivateStep(PlanNode row, Rectangle anchor)
+        {
+            // A harvest step opens the field it's growing in, or will be planted in.
+            if (row?.Harvests.Count > 0)
+            {
+                IncomingCrop crop = row.Harvests[0];
+                HarvesterPlanMenu.OpenFieldView(this.Jobs.NetworkManager, this.Translations, crop.Location, crop.HarvesterTile, this.Jobs.GetReservation);
+                return true;
+            }
+            if (row?.Plantings.Count > 0)
+            {
+                PlannedPlanting planting = row.Plantings[0];
+                HarvesterPlanMenu.OpenFieldView(this.Jobs.NetworkManager, this.Translations, planting.Location, planting.HarvesterTile, this.Jobs.GetReservation);
+                return true;
+            }
+
+            if (row?.HasChoice == true)
+            {
+                this.PendingMachineChoice = row;
+                // The machines that can do it, and crafting at the workbench where a recipe makes it too, each saying
+                // what it uses.
+                List<(string Label, object Value)> choices = row.Alternatives
+                    .GroupBy(option => option.MachineId)
+                    .Select(group =>
+                    {
+                        MachineRecipe option = group.First();
+                        return (Label: $"{option.MachineName}: {option.DescribeInputs(GetName)}  ·  {FormatTime(option.Minutes, option.Days)}", Value: (object)group.Key);
+                    })
+                    .ToList();
+                if (row.CanCraftInstead || row.Kind == PlanStepKind.Craft)
+                {
+                    CraftingRecipe craft = row.CraftRecipe ?? this.Crafting.FindByOutput(row.ItemId)?.Recipe;
+                    string inputs = craft == null ? "" : string.Join(" + ", craft.recipeList.Select(pair => $"{pair.Value}x {GetName(ItemRegistry.QualifyItemId(pair.Key) ?? pair.Key)}"));
+                    choices.Insert(0, (this.Translations.Get("auto.craft-choice", new { inputs }), CraftPlanner.CraftChoice));
+                }
+
+                this.Dropdown.Open(choices, anchor);
+                Game1.playSound("shwip");
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <inheritdoc />
+        public override void leftClickHeld(int x, int y)
+        {
+            base.leftClickHeld(x, y);
+            if (this.View == PlanView.Diagram)
+                this.DragDiagram(x, y);
+        }
+
+        /// <inheritdoc />
+        public override void releaseLeftClick(int x, int y)
+        {
+            base.releaseLeftClick(x, y);
+            if (this.View == PlanView.Diagram)
+                this.ReleaseDiagram(x, y);
+        }
+
         /// <inheritdoc />
         public override void receiveScrollWheelAction(int direction)
         {
             if (this.Dropdown.ReceiveScroll(direction))
                 return;
+
+            if (this.View == PlanView.Diagram)
+            {
+                if (this.GetCanvas().Contains(Game1.getMouseX(), Game1.getMouseY()))
+                    this.ZoomDiagram(direction);
+                return;
+            }
 
             int visible = this.GetVisibleRows();
             this.Scroll = Math.Clamp(this.Scroll + (direction > 0 ? -1 : 1), 0, Math.Max(0, this.Rows.Count - visible));
@@ -398,6 +474,12 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            if (this.View == PlanView.Diagram)
+            {
+                this.HoverText = this.DescribeCard(x, y);
+                return;
+            }
+
             PlanNode row = this.GetRowAt(x, y);
             if (row?.Substitutes.Count > 0)
                 this.HoverText = this.Translations.Get("auto.substitutes", new { items = string.Join(", ", row.Substitutes.Select(GetName)) });
@@ -405,8 +487,8 @@ namespace StardewLogistics.Menus
                 this.HoverText = this.Translations.Get("auto.grow-hint", new { count = row.Plantings.Count });
             else if (row?.Harvests.Count > 0)
                 this.HoverText = this.Translations.Get("auto.harvest-hint", new { count = row.Harvests.Count });
-            else if (row is { Kind: PlanStepKind.Process } && row.Alternatives.Count > 1)
-                this.HoverText = this.Translations.Get("auto.change-machine");
+            else if (row?.HasChoice == true)
+                this.HoverText = this.Translations.Get(row.CanCraftInstead || row.Kind == PlanStepKind.Craft ? "auto.change-method" : "auto.change-machine");
         }
 
         /// <inheritdoc />
@@ -439,7 +521,8 @@ namespace StardewLogistics.Menus
                 drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White, 1f, drawShadow: true);
 
                 this.DrawHeader(b);
-                this.DrawTree(b);
+                this.DrawViewTabs(b);
+                this.DrawPlanView(b);
                 this.DrawFooter(b);
 
                 this.upperRightCloseButton?.draw(b);
@@ -451,9 +534,8 @@ namespace StardewLogistics.Menus
                     UiBatch.Pop(b);
             }
 
-            if (!string.IsNullOrEmpty(this.HoverText))
-                drawHoverText(b, this.HoverText, Game1.smallFont);
-
+            string hover = this.HoverText;
+            this.Tooltips.Draw(b, string.IsNullOrEmpty(hover) ? null : batch => TooltipFx.Around(batch, () => drawHoverText(batch, hover, Game1.smallFont)));
             this.drawMouse(b);
         }
 
@@ -497,8 +579,9 @@ namespace StardewLogistics.Menus
                 : this.MachinesAvailable;
 
             this.Allocations.Clear();
+            this.PacesByRecipe.Clear();
             foreach (PlanNode node in processing)
-                this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable);
+                this.Allocations[node] = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable, this.GetPaces);
 
             // Speed-Gro only matters when the plan plants something; once chosen it stays, so it can be switched off.
             this.ShowFertilizer = this.FertilizerId != null || this.Rows.Any(node => node.Plantings.Count > 0);
@@ -648,7 +731,7 @@ namespace StardewLogistics.Menus
         private Dictionary<MachineAssignment, int> GetAllocation(PlanNode node)
         {
             if (!this.Allocations.TryGetValue(node, out Dictionary<MachineAssignment, int> allocation))
-                this.Allocations[node] = allocation = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable);
+                this.Allocations[node] = allocation = MachineAllocator.Allocate(node, this.MaxMachines, this.CountUsable, this.GetPaces);
 
             return allocation;
         }
@@ -661,8 +744,20 @@ namespace StardewLogistics.Menus
         /// <summary>How long a processing step takes under the current allocation.</summary>
         private int GetStepMinutes(PlanNode node)
         {
-            return MachineAllocator.StepMinutes(node, this.GetAllocation(node), this.UseFairyDust ? this.Dusted : null);
+            return MachineAllocator.StepMinutes(node, this.GetAllocation(node), this.UseFairyDust ? this.Dusted : null, this.GetPaces);
         }
+
+        /// <summary>How fast each machine on the network works through a recipe, fastest first, worked out once per plan.</summary>
+        /// <remarks>Machines of a kind needn't work alike: one may be upgraded, or several combined into one (see <see cref="MachinePaces"/>).</remarks>
+        private IReadOnlyList<MachinePace> GetPaces(MachineRecipe recipe)
+        {
+            if (!this.PacesByRecipe.TryGetValue(recipe.Key, out List<MachinePace> paces))
+                this.PacesByRecipe[recipe.Key] = paces = MachinePaces.For(this.Network, recipe);
+            return paces;
+        }
+
+        /// <summary>Each recipe's machine paces, for the plan as it stands.</summary>
+        private readonly Dictionary<string, List<MachinePace>> PacesByRecipe = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>The whole plan's processing time, with each step spread across its machines.</summary>
         private int GetTotalMinutes()
@@ -815,8 +910,12 @@ namespace StardewLogistics.Menus
         private Rectangle GetRowBounds(int visibleIndex)
         {
             Rectangle tree = this.GetTreeBounds();
-            return new Rectangle(tree.X, tree.Y + (visibleIndex * RowHeight), tree.Width, RowHeight);
+            int scrollbar = this.Rows.Count > this.GetVisibleRows() ? ScrollbarWidth + 6 : 0;
+            return new Rectangle(tree.X, tree.Y + (visibleIndex * RowHeight), tree.Width - scrollbar, RowHeight);
         }
+
+        /// <summary>The width of the plan's scrollbar, when it has more rows than fit.</summary>
+        private const int ScrollbarWidth = 10;
 
         /// <summary>The plan row under a screen position.</summary>
         private PlanNode GetRowAt(int x, int y)
@@ -837,7 +936,7 @@ namespace StardewLogistics.Menus
         private void DrawHeader(SpriteBatch b)
         {
             string title = this.Translations.Get(this.EditingRule != null ? "auto.rule-title" : "auto.title", new { name = this.TargetName });
-            Marquee.Draw(b, title, Game1.dialogueFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 24), this.width - 120, Game1.textColor);
+            Marquee.Draw(b, title, Game1.dialogueFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 24), this.width - 120 - 290, Game1.textColor);
 
             Utility.drawTextWithShadow(b, this.Translations.Get(this.EditingRule != null ? "auto.keep-quantity" : "auto.quantity"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 96), Game1.textColor);
             Utility.drawTextWithShadow(b, this.Translations.Get("auto.machines"), Game1.smallFont, new Vector2(this.xPositionOnScreen + 28, this.yPositionOnScreen + 148), Game1.textColor);
@@ -861,6 +960,7 @@ namespace StardewLogistics.Menus
 
                     bool on = this.FertilizerId != null;
                     UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), on ? Color.Gold : Color.White, 2f);
+                    this.Fx.Control(b, bounds);
                     fertilizerIcon?.drawInMenu(b, new Vector2(bounds.Center.X - 32, bounds.Center.Y - 32), 0.6f, on ? 1f : 0.4f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
 
                     string held = "x" + this.FertilizerAvailable;
@@ -874,6 +974,7 @@ namespace StardewLogistics.Menus
                 if (action == StepAction.FairyDust)
                 {
                     UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), this.UseFairyDust ? Color.Gold : Color.White, 2f);
+                    this.Fx.Control(b, bounds);
                     this.FairyDustIcon ??= ItemRegistry.Create(Devices.JobRunner.FairyDustId);
                     this.FairyDustIcon.drawInMenu(b, new Vector2(bounds.Center.X - 32, bounds.Center.Y - 32), 0.6f, this.UseFairyDust ? 1f : 0.4f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
 
@@ -885,6 +986,7 @@ namespace StardewLogistics.Menus
 
                 bool selected = action == StepAction.Quality && (delta <= 0 ? this.TargetQuality <= 0 : this.TargetQuality == delta);
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, selected ? Color.Wheat : Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, bounds);
 
                 // A quality button shows its star, like the stars on items, rather than a word.
                 if (action == StepAction.Quality && delta > 0)
@@ -974,7 +1076,18 @@ namespace StardewLogistics.Menus
 
                 string detail = this.DescribeStep(node);
                 Vector2 detailSize = Game1.smallFont.MeasureString(detail);
-                float detailX = row.Right - detailSize.X - 16;
+
+                // A step that can be made another way -- another machine, or crafting -- carries the swap icon, so
+                // it's plain that clicking it offers a choice.
+                int caret = 0;
+                if (node.HasChoice)
+                {
+                    // Clear of the panel's border, with the step's details moved over to make room.
+                    caret = 30;
+                    this.Fx.Control(b, row, inset: 2);
+                    this.DrawSwapIcon(b, new Rectangle(row.Right - 38, row.Y + 11, 18, 18), shown * (1f + (0.33f * this.Fx.GlowOf(row))));
+                }
+                float detailX = row.Right - detailSize.X - 16 - caret;
                 Utility.drawTextWithShadow(b, detail, Game1.smallFont, new Vector2(detailX, row.Y + 6), colour * 0.85f, shadowIntensity: shown);
 
                 // And the machine's own icon next to its name, which is the quickest way to tell a Heavy
@@ -990,10 +1103,18 @@ namespace StardewLogistics.Menus
                 Marquee.Draw(b, $"{node.Requested}x {label}", Game1.smallFont, new Vector2(labelX, row.Y + 6), labelRight - labelX, colour);
             }
 
+            // A scrollbar inside the panel's right edge, when there's more than fits: a track, and a thumb as tall as
+            // the part showing.
             if (this.Rows.Count > visible)
             {
-                string more = this.Translations.Get("auto.more-rows", new { count = this.Rows.Count - visible });
-                Utility.drawTextWithShadow(b, more, Game1.tinyFont, new Vector2(tree.X + 12, tree.Bottom - 4), Game1.textColor * 0.6f);
+                Rectangle track = new(tree.Right - ScrollbarWidth - 6, tree.Y + 4, ScrollbarWidth, tree.Height - 8);
+                b.Draw(Game1.staminaRect, track, Game1.textColor * 0.12f);
+
+                int thumbHeight = Math.Max(24, track.Height * visible / this.Rows.Count);
+                int travel = track.Height - thumbHeight;
+                int maxScroll = Math.Max(1, this.Rows.Count - visible);
+                Rectangle thumb = new(track.X, track.Y + (travel * this.Scroll / maxScroll), track.Width, thumbHeight);
+                b.Draw(Game1.staminaRect, thumb, Game1.textColor * 0.45f);
             }
         }
 
@@ -1022,6 +1143,8 @@ namespace StardewLogistics.Menus
                 bool enabled = this.Plan?.IsSatisfied == true;
                 Rectangle bounds = this.StartButton.bounds;
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, enabled ? Color.White : Color.Gray, 3f, drawShadow: false);
+                if (enabled)
+                    this.Fx.Control(b, bounds, inset: 6);
 
                 string label = this.Translations.Get("auto.start");
                 Vector2 size = Game1.smallFont.MeasureString(label);
@@ -1033,6 +1156,7 @@ namespace StardewLogistics.Menus
             {
                 Rectangle bounds = this.KeepButton.bounds;
                 UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), Color.LightGoldenrodYellow, 3f);
+                this.Fx.Control(b, bounds, inset: 6);
 
                 string label = this.Translations.Get(this.EditingRule != null ? "auto.update-rule" : "auto.keep-stocked");
                 Vector2 size = Game1.smallFont.MeasureString(label);

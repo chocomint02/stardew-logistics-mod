@@ -63,6 +63,13 @@ namespace StardewLogistics.Devices
         /// <summary>Collects finished output from one network's machines.</summary>
         private void RunNetwork(StorageNetwork network)
         {
+            // Every machine on a network is timed, whatever happens to its output, for learning how long runs
+            // really take in this save (see Calibration).
+            foreach (NetworkNode node in network.Machines)
+                Calibration.ObserveMachine(node.Object, node.Location ?? network.Location, node.Tile);
+            foreach (NetworkNode node in network.GetNodes(NodeKind.Producer))
+                Calibration.ObserveMachine(node.Object, node.Location ?? network.Location, node.Tile);
+
             // With nowhere to put the output there's no point disturbing the machines.
             if (network.Storages.Count == 0)
                 return;

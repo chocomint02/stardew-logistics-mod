@@ -15,6 +15,9 @@ namespace StardewLogistics.Menus
     /// <summary>Adds an entry to the expense plan: something to save for, or what an input item costs.</summary>
     internal class ExpenseInputMenu : IClickableMenu
     {
+        /// <summary>Hover highlights and click ripples on the menu's controls.</summary>
+        private readonly UiFx Fx = new();
+
         /*********
         ** Fields
         *********/
@@ -193,6 +196,7 @@ namespace StardewLogistics.Menus
             if (this.ForItem)
             {
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), this.NameBounds.X, this.NameBounds.Y, this.NameBounds.Width, this.NameBounds.Height, Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, this.NameBounds);
                 if (this.SelectedItem != null)
                 {
                     ItemIcon.Draw(b, this.SelectedItem, new Rectangle(this.NameBounds.X + 8, this.NameBounds.Y + 6, 32, 32), 1f, showQuality: false);
@@ -229,6 +233,7 @@ namespace StardewLogistics.Menus
                         Rectangle bounds = new(vx, vy, width, 44);
                         this.VendorButtons.Add((bounds, price));
                         drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White, 2f, drawShadow: false);
+                        this.Fx.Control(b, bounds);
                         Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.X + 14, bounds.Y + 10), Game1.textColor);
                         vx += width + 8;
                     }
@@ -239,6 +244,8 @@ namespace StardewLogistics.Menus
             foreach ((Rectangle bounds, string key, Color tint) in new[] { (this.CancelButton, "sell.cancel", Color.White), (this.SaveButton, "expense.save", canSave ? Color.LightGreen : Color.Gray) })
             {
                 UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), tint, 2f);
+                if (tint != Color.Gray)
+                    this.Fx.Control(b, bounds);
                 string label = this.Translations.Get(key);
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);

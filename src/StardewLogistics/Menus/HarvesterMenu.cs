@@ -15,6 +15,9 @@ namespace StardewLogistics.Menus
     /// <summary>An auto-harvester's settings: how big its area is, where it sits, and whether it's shown.</summary>
     internal class HarvesterMenu : IClickableMenu
     {
+        /// <summary>Hover highlights and click ripples on the menu's controls.</summary>
+        private readonly UiFx Fx = new();
+
         /*********
         ** Fields
         *********/
@@ -219,6 +222,7 @@ namespace StardewLogistics.Menus
                 bool active = action == "show" && this.Settings.ShowPreview;
                 float hover = (this.ButtonHover.Get(i) - 1f) / (HoverScales.MaxScale - 1f);
                 UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), active ? Color.LightGreen : Color.Lerp(Color.White, Color.Wheat, hover), 2f);
+                this.Fx.Control(b, bounds);
 
                 string text = action == "show"
                     ? this.Translations.Get(this.Settings.ShowPreview ? "harvester.preview-on" : "harvester.preview-off")

@@ -46,7 +46,8 @@ namespace StardewLogistics.Framework
         /// whichever share currently finishes last. That is the standard greedy for shortening a makespan, and it
         /// means raising the budget always helps the part of the step that is holding it up.
         /// </remarks>
-        public static Dictionary<MachineAssignment, int> Allocate(PlanNode node, int budget, Func<MachineRecipe, int> countMachines)
+        /// <param name="paces">How fast each machine that could run a recipe works, fastest first, where that's known.</param>
+        public static Dictionary<MachineAssignment, int> Allocate(PlanNode node, int budget, Func<MachineRecipe, int> countMachines, Func<MachineRecipe, IReadOnlyList<MachinePace>> paces = null)
         {
             Dictionary<MachineAssignment, int> allocation = new();
             if (node?.Assignments == null || node.Assignments.Count == 0)
@@ -80,7 +81,7 @@ namespace StardewLogistics.Framework
                     if (TypeAllocated(node, assignment, allocation) >= TypeCapacity(node, assignment, countMachines))
                         continue;
 
-                    int time = TimeFor(assignment, allocation[assignment]);
+                    int time = TimeFor(assignment, allocation[assignment], null, paces);
                     if (time > slowestTime)
                     {
                         slowestTime = time;
@@ -103,7 +104,8 @@ namespace StardewLogistics.Framework
         /// <param name="node">The step.</param>
         /// <param name="allocation">Machines per share.</param>
         /// <param name="dusted">Runs per share that Fairy Dust will finish almost at once, if any.</param>
-        public static int StepMinutes(PlanNode node, IReadOnlyDictionary<MachineAssignment, int> allocation, IReadOnlyDictionary<MachineAssignment, int> dusted = null)
+        /// <param name="paces">How fast each machine that could run a recipe works, fastest first, where that's known.</param>
+        public static int StepMinutes(PlanNode node, IReadOnlyDictionary<MachineAssignment, int> allocation, IReadOnlyDictionary<MachineAssignment, int> dusted = null, Func<MachineRecipe, IReadOnlyList<MachinePace>> paces = null)
         {
             if (node?.Assignments == null || node.Assignments.Count == 0)
                 return 0;
@@ -116,7 +118,7 @@ namespace StardewLogistics.Framework
                 int slow = Math.Max(0, assignment.Runs - sped);
 
                 // Dusted runs still take a moment each; the rest take their usual time on what machines there are.
-                int time = slow > 0 ? TimeFor(assignment, machines, slow) : 0;
+                int time = slow > 0 ? TimeFor(assignment, machines, slow, paces) : 0;
                 if (sped > 0)
                     time = Math.Max(time, 10);
 
@@ -162,11 +164,43 @@ namespace StardewLogistics.Framework
         }
 
         /// <summary>How long a share takes on a number of machines.</summary>
-        private static int TimeFor(MachineAssignment assignment, int machines, int? runs = null)
+        /// <remarks>
+        /// With each machine's own pace known -- one may be upgraded, or several combined into one -- the fastest
+        /// of them do the work, each load going to whichever machine would finish it soonest. Otherwise every
+        /// machine is taken to work as the recipe's data says.
+        /// </remarks>
+        private static int TimeFor(MachineAssignment assignment, int machines, int? runs = null, Func<MachineRecipe, IReadOnlyList<MachinePace>> paces = null)
         {
             int count = Math.Max(1, machines);
-            int waves = (int)Math.Ceiling(Math.Max(1, runs ?? assignment.Runs) / (double)count);
+            int total = Math.Max(1, runs ?? assignment.Runs);
+
+            IReadOnlyList<MachinePace> known = paces?.Invoke(assignment.Recipe);
+            if (known is { Count: > 0 })
+                return Makespan(known.Take(count).ToList(), total);
+
+            int waves = (int)Math.Ceiling(total / (double)count);
             return waves * assignment.MinutesPerRun;
+        }
+
+        /// <summary>How long a number of runs takes on particular machines, each load going to whichever finishes it soonest.</summary>
+        private static int Makespan(IReadOnlyList<MachinePace> machines, int runs)
+        {
+            double[] busy = new double[machines.Count];
+            int left = runs;
+            while (left > 0)
+            {
+                int best = 0;
+                for (int i = 1; i < machines.Count; i++)
+                {
+                    if (busy[i] + machines[i].Minutes < busy[best] + machines[best].Minutes)
+                        best = i;
+                }
+
+                busy[best] += machines[best].Minutes;
+                left -= Math.Max(1, machines[best].Runs);
+            }
+
+            return (int)Math.Ceiling(busy.Max());
         }
     }
 }

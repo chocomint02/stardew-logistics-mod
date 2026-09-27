@@ -193,6 +193,7 @@ namespace StardewLogistics.Devices
                         ExpectedMinutes = batch.ExpectedMinutes,
                         MinutesLeft = batch.MinutesLeft,
                         Yield = batch.Yield,
+                        Runs = batch.Runs,
                         Dusted = batch.Dusted,
                         Inputs = batch.Inputs.Select(input => Store(input, items)).Where(index => index >= 0).ToList()
                     }).ToList()
@@ -230,8 +231,8 @@ namespace StardewLogistics.Devices
                 FromStock = recipe.FromStock,
                 OutputCount = recipe.OutputCount,
                 MaxOutputCount = recipe.MaxOutputCount,
-                Minutes = recipe.Minutes,
-                Days = recipe.Days,
+                Minutes = recipe.BaseMinutes,
+                Days = recipe.BaseDays,
                 RecipeExtras = recipe.RecipeExtras
             };
         }
@@ -376,6 +377,7 @@ namespace StardewLogistics.Devices
                     ExpectedMinutes = batch.ExpectedMinutes,
                     MinutesLeft = batch.MinutesLeft,
                     Yield = batch.Yield,
+                    Runs = Math.Max(1, batch.Runs),
                     Dusted = batch.Dusted,
                     Inputs = batch.Inputs.Select(read).Where(item => item != null).ToList()
                 });
@@ -479,6 +481,7 @@ namespace StardewLogistics.Devices
             public int ExpectedMinutes { get; set; }
             public int MinutesLeft { get; set; }
             public int Yield { get; set; }
+            public int Runs { get; set; } = 1;
             public bool Dusted { get; set; }
 
             /// <summary>Indexes into the job's saved items.</summary>

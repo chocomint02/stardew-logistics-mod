@@ -45,6 +45,10 @@ namespace StardewLogistics.Framework
         /// <summary>How many of the output this run will yield.</summary>
         public int Yield { get; init; }
 
+        /// <summary>How many of the step's runs this one is: more than one where the machine took a bigger batch.</summary>
+        /// <remarks>Some mods let one machine process several runs' worth at once -- machines combined into one, say.</remarks>
+        public int Runs { get; init; } = 1;
+
         /// <summary>Whether Fairy Dust has already been used on this run. A cask is the exception: it takes one per quality.</summary>
         public bool Dusted { get; set; }
 
@@ -238,7 +242,7 @@ namespace StardewLogistics.Framework
                 // Runs in flight count for how far along they are, so a week of wine moves the bar day by day
                 // rather than sitting at zero -- and jumps when Fairy Dust hurries it along.
                 double done = this.Steps.Sum(step => step.CompletedBatches + step.InFlight.Sum(batch => batch.ExpectedMinutes > 0
-                    ? Math.Clamp(1 - (batch.MinutesLeft / (double)batch.ExpectedMinutes), 0, 1)
+                    ? batch.Runs * Math.Clamp(1 - (batch.MinutesLeft / (double)batch.ExpectedMinutes), 0, 1)
                     : 0));
 
                 return Math.Clamp(done / total, 0, 1);

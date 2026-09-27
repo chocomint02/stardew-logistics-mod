@@ -185,7 +185,7 @@ namespace StardewLogistics.Multiplayer
             if (!Context.IsMainPlayer || !Context.IsMultiplayer || this.Jobs.Ledger == null)
                 return;
 
-            LedgerMessage message = new() { Data = new LedgerData { Days = this.Jobs.Ledger.Days.ToList() } };
+            LedgerMessage message = new() { Data = new LedgerData { Days = this.Jobs.Ledger.Days.ToList() }, Calibration = Framework.Calibration.Snapshot() };
             this.Helper.Multiplayer.SendMessage(message, MessageTypes.Ledger, new[] { this.ModId }, playerId != null ? new[] { playerId.Value } : null);
         }
 
@@ -368,7 +368,10 @@ namespace StardewLogistics.Multiplayer
                 }
 
                 case MessageTypes.Ledger:
-                    this.RemoteLedger = e.ReadAs<LedgerMessage>().Data;
+                    LedgerMessage ledger = e.ReadAs<LedgerMessage>();
+                    this.RemoteLedger = ledger.Data;
+                    if (ledger.Calibration != null)
+                        Framework.Calibration.Adopt(ledger.Calibration);
                     Revision++;
                     break;
 

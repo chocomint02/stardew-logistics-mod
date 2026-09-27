@@ -35,6 +35,12 @@ namespace StardewLogistics.Menus
 
     internal class HarvesterPlanMenu : IClickableMenu
     {
+        /// <summary>The tooltip, growing in as it appears and shrinking away as it goes.</summary>
+        private readonly TooltipPresenter Tooltips = new();
+
+        /// <summary>Hover highlights and click ripples on the menu's controls.</summary>
+        private readonly UiFx Fx = new();
+
         /*********
         ** Fields
         *********/
@@ -360,8 +366,8 @@ namespace StardewLogistics.Menus
 
             if (this.ConfirmingForce)
                 this.DrawForceConfirmation(b);
-            else if (!string.IsNullOrEmpty(this.HoverText))
-                drawHoverText(b, Game1.parseText(this.HoverText, Game1.smallFont, 520), Game1.smallFont);
+            string hover = this.ConfirmingForce ? null : this.HoverText;
+            this.Tooltips.Draw(b, string.IsNullOrEmpty(hover) ? null : batch => TooltipFx.Around(batch, () => drawHoverText(batch, Game1.parseText(hover, Game1.smallFont, 520), Game1.smallFont)));
             this.drawMouse(b);
         }
 
@@ -406,6 +412,7 @@ namespace StardewLogistics.Menus
             foreach ((Rectangle bounds, string key, Color tint) in new[] { (this.ForceBack, "plan.button-back", Color.White), (this.ForceApply, "plan.button-apply", new Color(255, 120, 110)) })
             {
                 UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), tint, 2f);
+                this.Fx.Control(b, bounds);
                 string label = this.Translations.Get(key);
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
@@ -1014,6 +1021,7 @@ namespace StardewLogistics.Menus
 
                 Rectangle pill = new(row.Right - 110, row.Y + 2, 110, 36);
                 UiTheme.DrawButton(b, new Rectangle(pill.X, pill.Y, pill.Width, pill.Height), replant ? Color.LightGreen : Color.White, 2f);
+                this.Fx.Control(b, row, inset: 0);
                 string state = this.Translations.Get(replant ? "plan.replant-yes" : "plan.replant-no");
                 Vector2 stateSize = Game1.smallFont.MeasureString(state);
                 Utility.drawTextWithShadow(b, state, Game1.smallFont, new Vector2(pill.Center.X - (stateSize.X / 2), pill.Center.Y - (stateSize.Y / 2)), Game1.textColor);
@@ -1149,7 +1157,10 @@ namespace StardewLogistics.Menus
                         float nudge = UiAnimation.Progress(pressed, 200);
                         drawn.X += (int)(Math.Sin(nudge * Math.PI) * 8 * (action == "stage-up" ? 1 : -1));
                     }
-                    b.Draw(Game1.mouseCursors, drawn, arrow, enabled ? Color.White : Color.White * 0.35f);
+                    float glow = enabled ? this.Fx.GlowOf(bounds) : 0f;
+                    b.Draw(Game1.mouseCursors, UiAnimation.Scale(drawn, 1f + (0.15f * glow)), arrow, enabled ? Color.White : Color.White * 0.35f);
+                    if (enabled)
+                        this.Fx.Control(b, bounds, inset: 0);
                     continue;
                 }
 
@@ -1171,11 +1182,13 @@ namespace StardewLogistics.Menus
                     b.Draw(Game1.mouseCursors, box, this.Force ? OptionsCheckbox.sourceRectChecked : OptionsCheckbox.sourceRectUnchecked, Color.White);
                     int textX = area.X + 8 + 36 + 10;
                     Marquee.Draw(b, this.Translations.Get("plan.force"), Game1.smallFont, new Vector2(textX, area.Center.Y - 16), area.Right - textX - 4, Color.Lerp(UiTheme.Bad, Color.White, on));
+                    this.Fx.Control(b, bounds, inset: 0);
                     continue;
                 }
 
                 Color tint = action == "confirm" ? (this.Force ? new Color(255, 120, 110) : Color.LightGreen) : Color.White;
                 UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), tint, 2f);
+                this.Fx.Control(b, bounds);
 
                 // Tab labels go on after the highlight, which glides beneath them.
                 if (action.StartsWith("tab-"))

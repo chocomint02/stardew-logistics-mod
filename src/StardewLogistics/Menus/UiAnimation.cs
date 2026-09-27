@@ -235,8 +235,14 @@ namespace StardewLogistics.Menus
         /// <summary>A transform that scales about a point and then moves, for a window growing into place.</summary>
         public static Matrix ScaleAbout(Vector2 centre, float scale, Vector2 offset)
         {
+            return ScaleAbout(centre, new Vector2(scale, scale), offset);
+        }
+
+        /// <summary>A transform that scales about a point, differently across and down, and then moves.</summary>
+        public static Matrix ScaleAbout(Vector2 centre, Vector2 scale, Vector2 offset)
+        {
             return Matrix.CreateTranslation(-centre.X, -centre.Y, 0)
-                * Matrix.CreateScale(scale, scale, 1)
+                * Matrix.CreateScale(scale.X, scale.Y, 1)
                 * Matrix.CreateTranslation(centre.X + offset.X, centre.Y + offset.Y, 0);
         }
 

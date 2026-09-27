@@ -152,6 +152,31 @@ namespace StardewLogistics.Menus
         /// <summary>A tooltip with colours of its own, shown instead of <see cref="HoverText"/> when set.</summary>
         private RichTooltip HoverTooltip;
 
+        /// <summary>How long the terminal takes to fade in, and out, at normal speed.</summary>
+        private const double FadeInMs = 150;
+        private const double FadeOutMs = 120;
+
+        /// <summary>When the terminal opened, and when it started closing, for fading it in and out.</summary>
+        private readonly DateTime OpenedAt = DateTime.UtcNow;
+        private DateTime? ClosingAt;
+
+        /// <summary>Whether the terminal is fading out, and takes no more input.</summary>
+        private bool IsClosing => this.ClosingAt != null;
+
+        /// <summary>The window drawn off-screen while it fades, and whether it holds this frame's picture yet.</summary>
+        private RenderTarget2D FadeTarget;
+        private bool FadeReady;
+
+        /// <summary>The window as it looked in the previous colour scheme, fading out over the new one, and when the scheme changed.</summary>
+        private RenderTarget2D SchemeTarget;
+        private DateTime SchemeChangedAt = DateTime.MinValue;
+
+        /// <summary>How long a new colour scheme takes to fade in over the old, at normal speed.</summary>
+        private const double SchemeFadeMs = 450;
+
+        /// <summary>The sprite batch the window is drawn off-screen with.</summary>
+        private static SpriteBatch FadeBatch;
+
         /// <summary>How long switching tabs takes to animate at normal speed.</summary>
         private const double TabTransitionMs = 240;
 
@@ -169,6 +194,15 @@ namespace StardewLogistics.Menus
 
         /// <summary>How big each grid icon is drawn, for the hovered one growing like an inventory item.</summary>
         private readonly HoverScales GridHover = new();
+
+        /// <summary>The tooltip, growing in as it appears and shrinking away as it goes.</summary>
+        private readonly TooltipPresenter Tooltips = new();
+
+        /// <summary>The stack under the cursor on the Items tab, if any.</summary>
+        private NetworkItemStack HoverStack;
+
+        /// <summary>Hover highlights and click ripples on the terminal's controls.</summary>
+        private readonly UiFx Fx = new();
 
 
         /*********
@@ -212,12 +246,15 @@ namespace StardewLogistics.Menus
 
             this.SetUpComponents();
 
-            this.SearchBox = new TextBox(UiTheme.TextBoxTexture(), null, Game1.smallFont, UiTheme.TextColour)
+            this.SearchBox = new AnimatedTextBox(UiTheme.TextBoxTexture(), null, Game1.smallFont, UiTheme.TextColour)
             {
+                Placeholder = translations.Get("ui.search-hint"),
                 X = this.SearchBoxLeft,
                 Y = this.yPositionOnScreen + 16 + (2 * TabRowHeight) + 52,
                 Width = this.SearchBoxWidth,
-                Height = 40
+
+                // The game's text box texture is this tall: any shorter cuts off its lower edge.
+                Height = 48
             };
             this.SearchBoxBounds = new ClickableComponent(new Rectangle(this.SearchBox.X, this.SearchBox.Y, this.SearchBox.Width, this.SearchBox.Height), "search");
 
@@ -231,6 +268,22 @@ namespace StardewLogistics.Menus
         public override void update(GameTime time)
         {
             base.update(time);
+
+            // Fading out: once it's gone, the menu goes.
+            if (this.ClosingAt is DateTime closing)
+            {
+                if (UiAnimation.Progress(closing, FadeOutMs) >= 1f)
+                {
+                    this.exitThisMenu(playSound: false);
+                    return;
+                }
+                this.RenderFade();
+                return;
+            }
+
+            if (this.GetVisibility() < 1f)
+                this.RenderFade();
+
             this.GridHover.Update(time);
 
             // TextBox has no "text changed" event, so poll it: re-filtering is a list pass over data we already hold.
@@ -260,13 +313,6 @@ namespace StardewLogistics.Menus
             }
         }
 
-        /// <inheritdoc />
-        protected override void cleanupBeforeExit()
-        {
-            this.ReleaseKeyboard();
-            base.cleanupBeforeExit();
-        }
-
         /// <summary>Hands the keyboard back to the game.</summary>
         /// <remarks>Leaving the search box subscribed would swallow the player's key presses after the menu goes away.</remarks>
         private void ReleaseKeyboard()
@@ -278,6 +324,9 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveLeftClick(int x, int y, bool playSound = true)
         {
+            if (this.IsClosing)
+                return;
+
             // An open dropdown sits above everything else, so it consumes the click either way.
             if (this.Dropdown.IsOpen)
             {
@@ -294,7 +343,7 @@ namespace StardewLogistics.Menus
 
             if (this.upperRightCloseButton?.containsPoint(x, y) == true)
             {
-                this.exitThisMenu();
+                this.BeginClose();
                 return;
             }
 
@@ -330,6 +379,15 @@ namespace StardewLogistics.Menus
 
             if (this.Tab == TerminalTab.Auto)
             {
+                if (this.CraftableOnlyButton.containsPoint(x, y))
+                {
+                    this.CraftableOnly = !this.CraftableOnly;
+                    this.ScrollOffset = 0;
+                    this.ApplyTargetFilter();
+                    Game1.playSound("smallSelect");
+                    return;
+                }
+
                 if (this.HandleSharedHeaderClick(x, y))
                     return;
 
@@ -428,6 +486,9 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveRightClick(int x, int y, bool playSound = true)
         {
+            if (this.IsClosing)
+                return;
+
             if (this.Dropdown.IsOpen)
             {
                 this.Dropdown.Close();
@@ -485,6 +546,9 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveScrollWheelAction(int direction)
         {
+            if (this.IsClosing)
+                return;
+
             if (this.Dropdown.ReceiveScroll(direction))
                 return;
 
@@ -497,6 +561,9 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void receiveKeyPress(Keys key)
         {
+            if (this.IsClosing)
+                return;
+
             // While the player is typing a search, keys belong to the text box rather than the menu.
             if (this.SearchBox.Selected)
             {
@@ -511,7 +578,7 @@ namespace StardewLogistics.Menus
 
             if (Game1.options.doesInputListContain(Game1.options.menuButton, key) || key == Keys.Escape)
             {
-                this.exitThisMenu();
+                this.BeginClose();
                 return;
             }
 
@@ -523,6 +590,8 @@ namespace StardewLogistics.Menus
         {
             this.HoverText = "";
             this.HoverItem = null;
+            if (this.IsClosing)
+                return;
             this.HoverTooltip = null;
             this.GridHover.Hover(null);
 
@@ -541,22 +610,20 @@ namespace StardewLogistics.Menus
 
             this.HoverRecipe = null;
             this.HoverTarget = null;
+            this.HoverStack = null;
             this.HoverX = x;
             this.HoverY = y;
 
             if (this.Tab == TerminalTab.Auto)
             {
-                if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
+                if (this.CraftableOnlyButton.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.craftable-only");
+                else if (this.TypeFilterButton.containsPoint(x, y) || this.ModFilterButton.containsPoint(x, y))
                     this.HoverText = this.Translations.Get("ui.filter-hint");
+                else if (this.TabHasSearch && this.SearchBoxBounds.containsPoint(x, y))
+                    this.HoverText = this.Translations.Get("ui.search-help");
                 else
-                {
                     this.HoverTarget = this.GetTargetAt(x, y);
-                    if (this.HoverTarget != null)
-                    {
-                        this.HoverItem = this.HoverTarget.Sample;
-                        this.HoverText = this.Translations.Get("auto.target-hint", new { count = NumberFormat.Full(this.HoverTarget.Count) });
-                    }
-                }
                 return;
             }
 
@@ -618,8 +685,7 @@ namespace StardewLogistics.Menus
             NetworkItemStack hovered = this.GetStackAt(x, y);
             if (hovered != null)
             {
-                this.HoverItem = hovered.Sample;
-                this.HoverText = this.Translations.Get("ui.stored-count", new { count = NumberFormat.Full(hovered.Count) });
+                this.HoverStack = hovered;
                 return;
             }
 
@@ -642,16 +708,152 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void draw(SpriteBatch b)
         {
-            // Dim the world behind the menu.
-            b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.5f);
+            // Dim the world behind the menu, fading in and out with it.
+            float shown = this.GetVisibility();
+            b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * (0.5f * shown));
+
+            // Fading: the window as drawn off-screen, at the fade's opacity -- nothing yet if the game draws before
+            // the first picture is ready, rather than a flash of the whole window.
+            if (shown < 1f)
+            {
+                if (this.FadeReady && this.FadeTarget is { IsDisposed: false })
+                    b.Draw(this.FadeTarget, new Rectangle(0, 0, this.FadeTarget.Width, this.FadeTarget.Height), Color.White * shown);
+                this.drawMouse(b);
+                return;
+            }
 
             // In the chosen colour scheme, tooltips included.
             using (UiTheme.Apply())
-                this.DrawThemed(b);
+            {
+                this.DrawWindow(b);
+
+                // A new colour scheme: the window as it was fades away over it.
+                float scheme = UiAnimation.Progress(this.SchemeChangedAt, SchemeFadeMs);
+                if (scheme < 1f && this.SchemeTarget is { IsDisposed: false })
+                    b.Draw(this.SchemeTarget, new Rectangle(0, 0, this.SchemeTarget.Width, this.SchemeTarget.Height), Color.White * (1f - UiAnimation.EaseOut(scheme)));
+
+                this.DrawTooltips(b);
+            }
+            this.drawMouse(b);
         }
 
-        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
-        private void DrawThemed(SpriteBatch b)
+        /// <summary>Keeps a picture of the window in the current colour scheme, to fade out over the next one.</summary>
+        /// <remarks>Call before the scheme changes. Clicks are handled as the game updates, so it's safe to draw off-screen here.</remarks>
+        private void CaptureSchemeChange()
+        {
+            if (!UiAnimation.Enabled)
+                return;
+
+            this.SchemeChangedAt = this.RenderWindowTo(ref this.SchemeTarget) ? DateTime.UtcNow : DateTime.MinValue;
+        }
+
+        /// <inheritdoc />
+        protected override void cleanupBeforeExit()
+        {
+            this.FadeTarget?.Dispose();
+            this.FadeTarget = null;
+            this.SchemeTarget?.Dispose();
+            this.SchemeTarget = null;
+            this.ReleaseKeyboard();
+            base.cleanupBeforeExit();
+        }
+
+        /// <summary>Starts fading the terminal out, closing it once it's gone.</summary>
+        private void BeginClose()
+        {
+            if (this.IsClosing)
+                return;
+
+            this.ReleaseKeyboard();
+            this.Dropdown.Close();
+            if (!UiAnimation.Enabled)
+            {
+                this.exitThisMenu();
+                return;
+            }
+
+            Game1.playSound("bigDeSelect");
+            this.ClosingAt = DateTime.UtcNow;
+        }
+
+        /// <summary>How visible the terminal is, from 0 to 1: fading in as it opens and out as it closes.</summary>
+        private float GetVisibility()
+        {
+            if (this.ClosingAt is DateTime closing)
+            {
+                float t = UiAnimation.Progress(closing, FadeOutMs);
+                return 1f - (t * t);
+            }
+
+            float opening = UiAnimation.Progress(this.OpenedAt, FadeInMs);
+            return opening >= 1f ? 1f : UiAnimation.EaseOut(opening);
+        }
+
+        /// <summary>Draws the window into an off-screen picture, for it to be faded as one.</summary>
+        /// <remarks>
+        /// A window is hundreds of separate drawings -- text, icons, slots -- with no one opacity to turn down.
+        /// Drawn into a picture of its own, it can be. This happens as the game updates, before it starts drawing
+        /// the frame, so nothing already on screen is disturbed; and only while fading.
+        /// </remarks>
+        private void RenderFade()
+        {
+            this.FadeReady = this.RenderWindowTo(ref this.FadeTarget);
+        }
+
+        /// <summary>Draws the window, in the current colour scheme, into an off-screen picture the size of the screen.</summary>
+        /// <returns>Whether it was drawn.</returns>
+        private bool RenderWindowTo(ref RenderTarget2D target)
+        {
+            RenderTarget2D picture = target;
+            try
+            {
+                GraphicsDevice device = Game1.graphics.GraphicsDevice;
+                Game1.InUIMode(() =>
+                {
+                    int width = Math.Max(1, Game1.uiViewport.Width);
+                    int height = Math.Max(1, Game1.uiViewport.Height);
+                    if (picture == null || picture.IsDisposed || picture.Width != width || picture.Height != height)
+                    {
+                        picture?.Dispose();
+                        picture = new RenderTarget2D(device, width, height, false, SurfaceFormat.Color, DepthFormat.None);
+                    }
+
+                    FadeBatch ??= new SpriteBatch(device);
+                    RenderTargetBinding[] previous = device.GetRenderTargets();
+                    device.SetRenderTarget(picture);
+                    device.Clear(Color.Transparent);
+                    try
+                    {
+                        FadeBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                        try
+                        {
+                            using (UiTheme.Apply())
+                                this.DrawWindow(FadeBatch);
+                        }
+                        finally
+                        {
+                            FadeBatch.End();
+                        }
+                    }
+                    finally
+                    {
+                        device.SetRenderTargets(previous);
+                    }
+                });
+                target = picture;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // Without the picture the window just appears and disappears, as it did before fading.
+                target = picture;
+                Log.Trace($"Couldn't draw the terminal off-screen: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>Draws the window and everything in it.</summary>
+        private void DrawWindow(SpriteBatch b)
         {
             drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White, 1f, drawShadow: true);
 
@@ -678,17 +880,42 @@ namespace StardewLogistics.Menus
             this.PlayerInventory.draw(b);
             this.upperRightCloseButton?.draw(b);
             this.Dropdown.Draw(b);
+        }
 
-            if (this.HoverTooltip != null)
-                this.HoverTooltip.Draw(b);
-            else if (this.HoverRecipe != null)
-                this.DrawRecipeTooltip(b);
-            else if (this.HoverItem != null)
-                drawToolTip(b, this.HoverText, this.HoverItem.DisplayName, this.HoverItem);
-            else if (!string.IsNullOrEmpty(this.HoverText))
-                drawHoverText(b, this.HoverText, Game1.smallFont);
+        /// <summary>Draws whatever's hovered's tooltip, growing in and shrinking away.</summary>
+        private void DrawTooltips(SpriteBatch b)
+        {
+            this.Tooltips.Draw(b, this.GetTooltipDrawer());
+        }
 
-            this.drawMouse(b);
+        /// <summary>How to draw the tooltip for what's hovered now, or <c>null</c> if nothing is.</summary>
+        /// <remarks>It holds what it shows rather than looking it up, so it can still be drawn as it shrinks away.</remarks>
+        private Action<SpriteBatch> GetTooltipDrawer()
+        {
+            if (this.HoverTooltip is RichTooltip rich)
+                return batch => TooltipFx.Around(batch, () => rich.Draw(batch));
+            if (this.HoverRecipe is RecipeEntry recipe)
+                return batch => TooltipFx.Around(batch, () => RecipeTooltip.Draw(batch, recipe, this.AllStock, this.Translations, Game1.getOldMouseX(), Game1.getOldMouseY()));
+            if (this.HoverTarget is AutoTarget target)
+                return batch => TooltipFx.Around(batch, () => this.DrawTargetTooltip(batch, target));
+
+            // Something in storage: what it is, as the Craft tab shows it, without the ingredients. What clicking
+            // does is written under the grid instead.
+            if (this.HoverStack?.Sample is Item stored)
+                return batch => TooltipFx.Around(batch, () => RecipeTooltip.DrawPanel(batch, stored.DisplayName, stored, stored.getDescription(), Array.Empty<RecipeTooltip.Section>(), null, Game1.getOldMouseX(), Game1.getOldMouseY()));
+
+            string text = this.HoverText;
+            Item item = this.HoverItem;
+            if (item is StardewValley.Object)
+                return batch => TooltipFx.Around(batch, () => drawToolTip(batch, text, item.DisplayName, item));
+
+            // Rings, boots, clothes and tools draw their own description in an item tooltip, whatever text it's
+            // given, and overflow a box sized for that text. They get the terminal's own text under their name.
+            if (item != null)
+                return batch => TooltipFx.Around(batch, () => drawHoverText(batch, Game1.parseText(text ?? "", Game1.smallFont, 480), Game1.smallFont, boldTitleText: item.DisplayName));
+            if (!string.IsNullOrEmpty(text))
+                return batch => TooltipFx.Around(batch, () => drawHoverText(batch, text, Game1.smallFont));
+            return null;
         }
 
         /// <summary>Draws the current tab's content.</summary>
@@ -928,7 +1155,7 @@ namespace StardewLogistics.Menus
             yield return nameof(TerminalTab.Items);
             if (this.CanCraft)
             {
-                yield return nameof(TerminalTab.Craft);
+                // The Craft tab is the autocrafting tab: the old workbench-only Craft tab is retired.
                 yield return nameof(TerminalTab.Auto);
                 yield return nameof(TerminalTab.Jobs);
                 yield return nameof(TerminalTab.Stock);

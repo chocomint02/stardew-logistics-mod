@@ -213,6 +213,94 @@ namespace StardewLogistics.Menus
             this.ApplyTargetFilter();
         }
 
+        /// <summary>Draws the hovered target's tooltip: what it is, and what it's made from.</summary>
+        /// <remarks>
+        /// Something crafted shows as it did on the old Craft tab: the recipe's description and its ingredients,
+        /// counted against storage. Something a machine makes shows the machine and its inputs, the ways storage
+        /// can supply first; a crop shows its seeds; and something only a cask could improve shows itself.
+        /// </remarks>
+        private void DrawTargetTooltip(SpriteBatch b, AutoTarget target)
+        {
+            int mouseX = Game1.getOldMouseX();
+            int mouseY = Game1.getOldMouseY();
+            RecipeEntry craft = target.NeedsMachine || target.IsCrop ? null : this.Recipes.FindByOutput(target.ItemId);
+            if (craft != null)
+            {
+                RecipeTooltip.Draw(b, craft, this.AllStock, this.Translations, mouseX, mouseY);
+                return;
+            }
+
+            List<RecipeTooltip.Section> sections = this.GetTargetSources(target, out int more);
+            string footer = more > 0 ? this.Translations.Get("ui.more-ways", new { count = more }) : null;
+            RecipeTooltip.DrawPanel(b, target.DisplayName, target.Sample, target.Sample?.getDescription(), sections, footer, mouseX, mouseY);
+        }
+
+        /// <summary>What a target is made from, for its tooltip: each way under its own heading.</summary>
+        /// <param name="target">The target.</param>
+        /// <param name="more">How many more ways there are than are listed.</param>
+        private List<RecipeTooltip.Section> GetTargetSources(AutoTarget target, out int more)
+        {
+            const int listed = 2;
+            List<RecipeTooltip.Section> sections = new();
+            more = 0;
+
+            if (target.IsCrop)
+            {
+                List<RecipeTooltip.Line> seeds = CropMath.SeedsFor(target.ItemId)
+                    .Take(3)
+                    .Select(seed => RecipeTooltip.Ingredient(StockId.Create(seed), StockId.GetDisplayName(seed), this.CountInStock(seed), 1))
+                    .ToList();
+                sections.Add(new RecipeTooltip.Section(this.Translations.Get("ui.grown-from"), seeds));
+                return sections;
+            }
+
+            // Machines on this network, and not ones that need one of what they make (a Crystalarium copying a gem).
+            HashSet<string> onNetwork = new(
+                (this.Network?.Machines ?? Enumerable.Empty<Network.NetworkNode>()).Select(node => node.Object?.QualifiedItemId).Where(id => id != null),
+                StringComparer.OrdinalIgnoreCase);
+            string baseId = StockId.BaseId(target.ItemId);
+            List<MachineRecipe> recipes = this.MachineRecipes.GetRecipesFor(target.ItemId)
+                .Where(recipe => !recipe.IsAging && onNetwork.Contains(recipe.MachineId))
+                .Where(recipe => !recipe.GetAllInputs().Any(input => input.ItemId != null && string.Equals(StockId.BaseId(input.ItemId), baseId, StringComparison.OrdinalIgnoreCase)))
+                .GroupBy(recipe => $"{recipe.MachineId}|{recipe.InputId}", StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .OrderByDescending(recipe => recipe.GetAllInputs().All(input => this.CountInStock(input.ItemId) >= input.Count))
+                .ToList();
+
+            foreach (MachineRecipe recipe in recipes.Take(listed))
+            {
+                List<RecipeTooltip.Line> inputs = recipe.GetAllInputs()
+                    .Where(input => input.ItemId != null)
+                    .Select(input => RecipeTooltip.Ingredient(StockId.Create(input.ItemId), StockId.GetDisplayName(input.ItemId), this.CountInStock(input.ItemId), input.Count))
+                    .ToList();
+                sections.Add(new RecipeTooltip.Section(this.Translations.Get("ui.made-in", new { machine = recipe.MachineName }), inputs));
+            }
+            more = Math.Max(0, recipes.Count - listed);
+
+            if (sections.Count == 0 && this.MachineRecipes.CanAge(target.ItemId))
+            {
+                List<RecipeTooltip.Line> aged = new() { RecipeTooltip.Ingredient(target.Sample, target.DisplayName, this.CountInStock(target.ItemId), 1) };
+                sections.Add(new RecipeTooltip.Section(this.Translations.Get("ui.aged-from"), aged));
+            }
+
+            return sections;
+        }
+
+        /// <summary>How many of an item, or of anything matching a category or tag, storage holds.</summary>
+        private long CountInStock(string id)
+        {
+            if (string.IsNullOrEmpty(id))
+                return 0;
+
+            long total = 0;
+            foreach (NetworkItemStack entry in this.AllStock)
+            {
+                if (entry.Sample != null && StockId.Matches(entry.Sample, id))
+                    total += entry.Count;
+            }
+            return total;
+        }
+
         /// <summary>Works out which targets the network could actually make one of right now.</summary>
         /// <remarks>
         /// This costs one plan per target, which is why it runs on the refresh timer rather than per frame. The
@@ -259,6 +347,10 @@ namespace StardewLogistics.Menus
 
             if (!this.Filter.IsEmpty)
                 query = query.Where(target => this.Filter.Matches(target));
+
+            // The hammer: only what the network could make one of right now.
+            if (this.CraftableOnly)
+                query = query.Where(target => target.CanMake);
 
             query = this.Sort switch
             {
@@ -378,8 +470,9 @@ namespace StardewLogistics.Menus
                 Game1.textColor
             );
             // Two lines rather than one clipped one: the legend never fitted beside the instruction.
-            DrawClipped(b, this.Translations.Get("auto.tab-hint"), new Vector2(grid.X, grid.Bottom + 38), grid.Width, Game1.textColor * 0.6f);
-            DrawClipped(b, this.Translations.Get("auto.tab-legend"), new Vector2(grid.X, grid.Bottom + 70), grid.Width, Game1.textColor * 0.6f);
+            // The hint scrolls if it runs long; the legend takes a second line, which the space above the inventory has room for.
+            Marquee.DrawWrapped(b, this.Translations.Get("auto.tab-hint"), Game1.smallFont, new Vector2(grid.X, grid.Bottom + 38), grid.Width, Game1.textColor * 0.6f, maxLines: 1);
+            Marquee.DrawWrapped(b, this.Translations.Get("auto.tab-legend"), Game1.smallFont, new Vector2(grid.X, grid.Bottom + 70), grid.Width, Game1.textColor * 0.6f, maxLines: 2);
         }
 
         /// <summary>Draws the list of running jobs.</summary>
@@ -455,6 +548,7 @@ namespace StardewLogistics.Menus
                 {
                     Rectangle dust = GetDustBounds(grid, y);
                     drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), dust.X, dust.Y, dust.Width, dust.Height, job.UseFairyDust ? Color.Gold : Color.White * 0.8f, 2f, drawShadow: false);
+                    this.Fx.Control(b, dust);
                     this.FairyDustIcon ??= ItemRegistry.Create(Devices.JobRunner.FairyDustId);
                     this.FairyDustIcon.drawInMenu(b, new Vector2(dust.Center.X - 32, dust.Center.Y - 32), 0.55f, job.UseFairyDust ? 1f : 0.45f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
 
@@ -464,6 +558,7 @@ namespace StardewLogistics.Menus
 
                 Rectangle button = GetCancelBounds(grid, y);
                 drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), button.X, button.Y, button.Width, button.Height, Color.White, 2f, drawShadow: false);
+                this.Fx.Control(b, button);
 
                 string buttonLabel = this.Translations.Get(job.Status is JobStatus.Complete or JobStatus.Cancelled ? "jobs.clear" : "jobs.cancel");
                 Vector2 buttonSize = Game1.smallFont.MeasureString(buttonLabel);
@@ -507,26 +602,6 @@ namespace StardewLogistics.Menus
                     Game1.playSound("trashcan");
                 return;
             }
-        }
-
-        /// <summary>Draws a line of text, shortened if it would run past a width.</summary>
-        /// <remarks>
-        /// A footer legend is the kind of string that grows when reworded or translated, and it sits right on the
-        /// panel edge. Clamping it here means no wording can push it outside the frame.
-        /// </remarks>
-        private static void DrawClipped(SpriteBatch b, string text, Vector2 position, int maxWidth, Color colour)
-        {
-            if (string.IsNullOrEmpty(text))
-                return;
-
-            if (Game1.smallFont.MeasureString(text).X > maxWidth)
-            {
-                while (text.Length > 1 && Game1.smallFont.MeasureString(text + "...").X > maxWidth)
-                    text = text.Substring(0, text.Length - 1);
-                text += "...";
-            }
-
-            Utility.drawTextWithShadow(b, text, Game1.smallFont, position, colour);
         }
 
         /// <summary>Whether a job row offers the Fairy Dust toggle.</summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewLogistics.Framework;
@@ -47,26 +48,43 @@ namespace StardewLogistics.Menus
             if (entry == null)
                 return;
 
-            // Match the game's item tooltips: dialogueFont for the name, smallFont for everything under it.
-            string title = entry.DisplayName;
-            string category = entry.Output?.getCategoryName() ?? "";
-            Color categoryColour = entry.Output is SObject obj ? obj.getCategoryColor() : Game1.textColor;
-            string description = Game1.parseText(entry.Recipe.description ?? "", Game1.smallFont, MaxTextWidth);
-            string heading = translations.Get("ui.ingredients");
+            List<Section> sections = new() { new Section(translations.Get("ui.ingredients"), BuildIngredientLines(entry, stock)) };
+            DrawPanel(b, entry.DisplayName, entry.Output, entry.Recipe.description, sections, null, mouseX, mouseY);
+        }
 
-            List<Line> lines = BuildIngredientLines(entry, stock);
+        /// <summary>Draws a panel for an item: its name, category and description, then what it's made from.</summary>
+        /// <param name="b">The sprite batch.</param>
+        /// <param name="title">The item's name.</param>
+        /// <param name="output">The item, for its category.</param>
+        /// <param name="description">The item's description.</param>
+        /// <param name="sections">What it's made from, each way under its own heading.</param>
+        /// <param name="footer">A faint line at the foot, if any.</param>
+        /// <param name="mouseX">The cursor X position.</param>
+        /// <param name="mouseY">The cursor Y position.</param>
+        public static void DrawPanel(SpriteBatch b, string title, Item output, string description, IReadOnlyList<Section> sections, string footer, int mouseX, int mouseY)
+        {
+            // Match the game's item tooltips: dialogueFont for the name, smallFont for everything under it.
+            string category = output?.getCategoryName() ?? "";
+            Color categoryColour = output is SObject obj ? obj.getCategoryColor() : Game1.textColor;
+            description = Game1.parseText(description ?? "", Game1.smallFont, MaxTextWidth);
+            sections = sections.Where(section => section.Lines.Count > 0).ToList();
 
             // Measure everything before drawing any of it, so the frame can't be smaller than its contents.
             Vector2 titleSize = Game1.dialogueFont.MeasureString(title);
             Vector2 categorySize = category.Length > 0 ? Game1.smallFont.MeasureString(category) : Vector2.Zero;
             Vector2 descriptionSize = string.IsNullOrWhiteSpace(description) ? Vector2.Zero : Game1.smallFont.MeasureString(description);
-            Vector2 headingSize = Game1.smallFont.MeasureString(heading);
+            Vector2 footerSize = string.IsNullOrEmpty(footer) ? Vector2.Zero : Game1.smallFont.MeasureString(footer);
+            float headingHeight = Game1.smallFont.MeasureString("Ay").Y;
 
-            float contentWidth = Math.Max(titleSize.X, Math.Max(categorySize.X, Math.Max(descriptionSize.X, headingSize.X)));
-            foreach (Line line in lines)
-                contentWidth = Math.Max(contentWidth, IconSize + 12 + line.NameWidth + 40 + line.CountWidth);
+            float contentWidth = Math.Max(titleSize.X, Math.Max(categorySize.X, Math.Max(descriptionSize.X, footerSize.X)));
+            foreach (Section section in sections)
+            {
+                contentWidth = Math.Max(contentWidth, Game1.smallFont.MeasureString(section.Heading).X);
+                foreach (Line line in section.Lines)
+                    contentWidth = Math.Max(contentWidth, IconSize + 12 + line.NameWidth + 40 + line.CountWidth);
+            }
 
-            bool hasDivider = lines.Count > 0;
+            bool hasDivider = sections.Count > 0;
 
             int width = (int)contentWidth + (Padding * 2);
             int height = (int)(
@@ -74,7 +92,8 @@ namespace StardewLogistics.Menus
                 + (categorySize.Y > 0 ? categorySize.Y + 8 : 0)
                 + (descriptionSize.Y > 0 ? descriptionSize.Y + 12 : 0)
                 + (hasDivider ? 20 : 0)
-                + (lines.Count > 0 ? headingSize.Y + 6 + (lines.Count * RowHeight) : 0)
+                + sections.Sum(section => headingHeight + 6 + (section.Lines.Count * RowHeight) + 8)
+                + (footerSize.Y > 0 ? footerSize.Y + 4 : 0)
             ) + (Padding * 2);
 
             int x = mouseX + 32;
@@ -110,27 +129,44 @@ namespace StardewLogistics.Menus
                 textY += 20;
             }
 
-            if (lines.Count == 0)
-                return;
-
-            Utility.drawTextWithShadow(b, heading, Game1.smallFont, new Vector2(textX, textY), Game1.textColor);
-            textY += (int)headingSize.Y + 6;
-
-            foreach (Line line in lines)
+            foreach (Section section in sections)
             {
-                line.Icon?.drawInMenu(b, new Vector2(textX - 16, textY - 16), 0.5f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
-                Utility.drawTextWithShadow(b, line.Name, Game1.smallFont, new Vector2(textX + IconSize + 12, textY + 4), Game1.textColor);
+                Utility.drawTextWithShadow(b, section.Heading, Game1.smallFont, new Vector2(textX, textY), Game1.textColor);
+                textY += (int)headingHeight + 6;
 
-                Utility.drawTextWithShadow(
-                    b,
-                    line.Counts,
-                    Game1.smallFont,
-                    new Vector2(x + width - Padding - line.CountWidth, textY + 4),
-                    line.Enough ? Game1.textColor : UiTheme.Bad
-                );
-
-                textY += RowHeight;
+                foreach (Line line in section.Lines)
+                {
+                    line.Icon?.drawInMenu(b, new Vector2(textX - 16, textY - 16), 0.5f, 1f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
+                    Utility.drawTextWithShadow(b, line.Name, Game1.smallFont, new Vector2(textX + IconSize + 12, textY + 4), Game1.textColor);
+                    Utility.drawTextWithShadow(
+                        b,
+                        line.Counts,
+                        Game1.smallFont,
+                        new Vector2(x + width - Padding - line.CountWidth, textY + 4),
+                        line.Enough ? Game1.textColor : UiTheme.Bad
+                    );
+                    textY += RowHeight;
+                }
+                textY += 8;
             }
+
+            if (footerSize.Y > 0)
+                Utility.drawTextWithShadow(b, footer, Game1.smallFont, new Vector2(textX, textY), Game1.textColor * 0.6f);
+        }
+
+        /// <summary>One ingredient row: how many storage has against how many are needed.</summary>
+        public static Line Ingredient(Item icon, string name, long have, int need)
+        {
+            string counts = $"{NumberFormat.Abbreviate(have)} / {need}";
+            return new Line
+            {
+                Icon = icon,
+                Name = name,
+                Counts = counts,
+                Enough = have >= need,
+                NameWidth = Game1.smallFont.MeasureString(name).X,
+                CountWidth = Game1.smallFont.MeasureString(counts).X
+            };
         }
 
 
@@ -154,17 +190,7 @@ namespace StardewLogistics.Menus
             {
                 long have = entry.CountAvailable(ingredient.Key, stock, includePlayerInventory: true);
                 string name = entry.Recipe.getNameFromIndex(ingredient.Key) ?? ingredient.Key;
-                string counts = $"{NumberFormat.Abbreviate(have)} / {ingredient.Value}";
-
-                lines.Add(new Line
-                {
-                    Icon = entry.CreateIngredientIcon(ingredient.Key),
-                    Name = name,
-                    Counts = counts,
-                    Enough = have >= ingredient.Value,
-                    NameWidth = Game1.smallFont.MeasureString(name).X,
-                    CountWidth = Game1.smallFont.MeasureString(counts).X
-                });
+                lines.Add(Ingredient(entry.CreateIngredientIcon(ingredient.Key), name, have, ingredient.Value));
             }
 
             return lines;
@@ -174,8 +200,11 @@ namespace StardewLogistics.Menus
         /*********
         ** Nested types
         *********/
+        /// <summary>What an item's made from one way, under a heading.</summary>
+        public record Section(string Heading, List<Line> Lines);
+
         /// <summary>One measured ingredient row.</summary>
-        private class Line
+        public class Line
         {
             public Item Icon;
             public string Name;
