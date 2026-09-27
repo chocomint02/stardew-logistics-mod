@@ -442,7 +442,8 @@ For troubleshooting, in the SMAPI console:
 
 ## Compatibility
 
-- **Automate is not supported.** 
+- **Automate is not supported.**
+- Mods that add automation from machine input / extraction are not supported, and will break functionality in this mod. 
 
 ### Mods that change machines, crops or fertilizer
 
@@ -490,8 +491,6 @@ timing and prices**, on by default) and plans by that. No mod is special-cased.
   their own figures; a machine's own figures come before its kind's.
 - Learned figures are saved with the game, shared with farmhands, and shown on the **Network** tab.
   `logistics_calibration` prints them; `logistics_calibration reset` clears them.
-
-TL;DR: This mod should work with most, if not all, mods. 
 ---
 
 ## Known limitations
