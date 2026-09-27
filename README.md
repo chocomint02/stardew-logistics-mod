@@ -9,7 +9,7 @@ craft, automate production, farm, and sell from one terminal.
 - **Auto-Harvester** — tills, plants, fertilizes, waters and harvests a planned area into storage.
 - **Wireless** — link networks across locations, and carry a handheld terminal that works anywhere.
 - **Shipping and income** — sell from storage, forecast income, plan expenses, and track daily earnings.
-- **Multiplayer** — every player works on the same networks, kept in sync by the host.
+- **Multiplayer** — coded to work in Multiplayer sessions.
 
 Requires **Stardew Valley 1.6** and **SMAPI 4.0** or later. Built and tested on 1.6.15 / SMAPI 4.5.2.
 No other mods are required.
@@ -48,7 +48,7 @@ No other mods are required.
 
 ```
    [Chest][Chest][Chest]        chests on the cable
-   =====================        cable (a floor tile)
+   =====================        cable (floor tile)
    [Keg] [Keg] [Terminal]       machines and terminals on it too
 ```
 
@@ -69,7 +69,7 @@ Every connected cable tile, chest and machine forms one network. A network has n
 | Wireless Terminal | 2 Iridium Bar, 2 Battery Pack, 5 Refined Quartz | Mining 9 | Handheld Crafting Terminal, opened anywhere. |
 | Auto-Harvester | 5 Iron Bar, 2 Gold Bar, 1 Quality Sprinkler, 1 Battery Pack | Farming 6 | Farms a planned area. |
 
-All recipes are learned immediately while `UnlockAllRecipes` is on (the default).
+All recipes are learned immediately while `UnlockAllRecipes` is on (default).
 
 ---
 
@@ -86,16 +86,16 @@ The Crafting Terminal and Wireless Terminal add **Craft**, **Auto**, **Jobs** an
 | Auto | Plan and queue autocrafting jobs. |
 | Jobs | Monitor, speed up and cancel running jobs. |
 | Stock | Manage minimum-stock rules. |
-| Farm | Auto-Harvesters on the network and a live view of their fields. |
-| Storage | Chest priorities and filters; connected machines and their state. |
+| Farm | View Auto-Harvesters on the network and a live view of their fields. |
+| Storage | Configure priorities and filters, and view connected machines / storage. |
 | Network | Network statistics; channel control for the Wireless Terminal. |
 | Shipping | Sell stored items through a connected shipping bin. |
 | Income | Income forecast, history, expense planner and ledger. |
-| Settings | Colour scheme and animation speed. |
+| Settings | Color scheme and animation speed. |
 
 ### Appearance
 
-- **Colour schemes:** 17 schemes, each with a preview swatch. Light: Vanilla, Cream, Light, Forest, Sakura,
+- **Color schemes:** 17 schemes, each with a preview swatch. Light: Vanilla, Cream, Light, Forest, Sakura,
   Coral, Ocean, Glacier, Lavender, Citrus. Dark: Dark, Midnight, Eclipse (OLED black), Pine, Aurora, Amethyst,
   Ember. Applies to every window the mod opens, including its tooltips, text boxes and the inventory shown inside
   them. Other game menus are unaffected.
@@ -130,7 +130,7 @@ unnamespaced IDs report as "Unknown".
 ## Storage
 
 - Every **player chest** on or beside a cable is network storage, including Big Chests. Loot chests, Junimo
-  Chests and Mini-Shipping Bins are never used for storage.
+  Chests etc... are never used for storage.
 - Chests another player has open are skipped until they're closed.
 - **Items tab:** click to take a stack, right-click to take one, shift-click to fill your bag. Click an item in
   your bag to store it; shift-click to store every stack of it. **Deposit All** stores everything except tools.
@@ -140,24 +140,24 @@ unnamespaced IDs report as "Unknown".
 
 Configured per chest on the **Storage** tab.
 
-- **Priority:** higher-priority chests fill first and empty last.
+- **Priority:** higher-priority chests input first and extract last.
 - **Filter:** up to nine items in **Allow** or **Deny** mode. A chest with an Allow filter is dedicated
-  storage: matching items go there before any general chest, regardless of priority.
+  storage - matching items go there before any general chest, regardless of priority.
 
-Settings are stored on the chest, so they survive moving cable or rebuilding the network.
+Settings are stored on the chest, so they persist when moving network cables or rebuilding the network.
 
 ### Machines
 
 Any machine on or beside a cable is part of the network. Finished output is collected into storage
-automatically (`EnableMachineAutomation`), and anything that starts again on its own is restarted the way the
-game does it:
+automatically (`EnableMachineAutomation`), and anything that starts again on its own is restarted through expected
+normal behavior:
 
 - Machines whose rules restart on collection (Crystalariums, Worm Bins, Bee Houses) start their next batch.
 - Tappers set their tree producing again.
 - Crab Pots are rebaited from storage (cheapest bait first), unless their owner needs no bait.
 
 Machines are only emptied when storage has room for the whole output. When a machine holding items is
-removed, its inputs or finished output return to storage instead of being lost.
+removed, its inputs or finished output returns to storage instead of being lost.
 
 ---
 
@@ -167,7 +167,7 @@ The **Craft** tab lists every recipe you know, crafted from network storage.
 
 - Recipes you can't afford are dimmed. Hover a recipe to see each ingredient's have/need count.
 - Click crafts one, shift-click crafts five, right-click opens a quantity dialog.
-- The quantity box accepts arithmetic: `10*2`, `(3+4)*6`.
+- The quantity box accepts arithmetic expressions: `10*2`, `(3+4)*6`.
 - Crafted items go into storage; anything that doesn't fit goes to your bag.
 
 ---
@@ -185,14 +185,14 @@ Selecting an item opens the planner, which shows the complete production tree be
 - **Multi-step chains.** Ingredients are drawn from storage first, then crafted or processed as needed, down to
   `MaxCraftDepth` steps.
 - **Machine choice.** When several machines can make a step (e.g. Furnace and Heavy Furnace), the work is
-  split between them to minimize time. Click a step to choose a machine.
+  split between them to minimize time. Clicking on a step allows you to manually configure what machine(S) are used.
 - **Max machines.** Limits how many machines each step may occupy. Defaults to every available machine.
-- **Ingredient alternatives.** Recipes that accept more than one input (Duck Mayonnaise from a Duck Egg or a
+- **Ingredient alternatives.** Recipes that accept more than one input (eg. Duck Mayonnaise from a Duck Egg or a
   Golden Duck Egg) consider every option.
 - **Multiple inputs per step.** Machines that consume extra items, whether machine-wide (a Furnace's coal) or
-  per recipe through Extra Machine Config (used by Cornucopia and similar packs), plan, reserve and load every
+  per recipe through Extra Machine Config, plan, reserve and load every
   ingredient. Extra ingredients given as an item, a category ("any gem") or context tags are drawn from
-  storage. Where the product takes its flavour, color or price from the extra ingredient, each ingredient in
+  storage. Where the product takes its flavor, color or price from the extra ingredient, each ingredient in
   storage is its own recipe. A recipe shows as soon as its main ingredient is stored, even if an extra ingredient
   is short; the plan names what's missing. The exception is a product that takes its identity from the extra
   ingredient, which appears once a matching ingredient has been stored.
@@ -200,13 +200,13 @@ Selecting an item opens the planner, which shows the complete production tree be
   storage, cheapest first.
 - **Quality.** Lowest-quality ingredients are used first, unless a higher quality needs fewer inputs *and*
   fewer machine-hours. Ingredients drawn from storage are listed per quality.
-- **Flavoured goods.** Wine, juice, jelly, pickles, roe, honey and dried or smoked goods are planned by
+- **Flavored goods.** Wine, juice, jelly, pickles, roe, honey and dried or smoked goods are planned by
   ingredient: Starfruit Wine and Parsnip Juice are distinct items.
 - **Aging.** Items a Cask can age offer a target quality. The planner ages existing stock (best first) and
   produces the rest from scratch. Casks where aging isn't allowed are ignored.
 - **Fairy Dust.** Optionally applied to machines that accept it, using dust from storage.
 - **Crops.** Crops growing under Auto-Harvesters count as incoming stock and are reserved by the job. If a crop
-  isn't stored or growing, the planner books free **automation tiles** and plants it, optionally with a chosen
+  isn't stored or growing, the planner reserves free **automation tiles** and plants it, optionally with a chosen
   Speed-Gro.
 - **Summary.** Total time (including crop growth), value of the finished items, and gold per day.
 - **Shortfalls** name the missing item and why: not in storage, no machine on the network, no free automation
@@ -216,16 +216,16 @@ Selecting an item opens the planner, which shows the complete production tree be
 
 Queued jobs appear on the **Jobs** tab with progress, time remaining, value and current status.
 
-- **Ingredients are reserved on queue.** They leave storage immediately and can't be taken by anything else.
+- **Ingredients are reserved on queue.** Ingredients leave storage immediately and can't be taken by anything else.
 - **Machines are claimed** while in use, and held in advance when an earlier step is still producing their
   input.
 - **Waiting reasons** are specific: waiting for a free Keg, for an earlier step, or for crops to grow.
 - **Fairy Dust** can be switched on for a running job. The button is hidden when storage has none.
 - **Cancel** stops the job and returns its inputs from machines and its reserved items to storage.
 - **Casks.** Striking a Cask a job is using returns the item to the job; aging continues in another Cask with
-  progress kept. Casks placed after queuing are used as they appear.
+  progress kept. Casks placed after queuing are used as they appear on network.
 - **Broken machines.** The job recovers the machine's inputs and reruns the batch elsewhere. If no suitable
-  machine remains, the job cancels and refunds everything.
+  machine remains, the job cancels and refunds the input ingredient(s).
 - **Saved with the game.** Jobs, running batches, machine claims, crop reservations and pending plantings are
   written to the save and resume on load. Batches that finished overnight are collected on the first pass.
   A job that can't be restored (e.g. its recipe's mod was removed) returns its reserved items to storage.
@@ -234,7 +234,7 @@ Queued jobs appear on the **Jobs** tab with progress, time remaining, value and 
 
 ## Minimum stock
 
-Keep at least a set amount of an item in storage. Open an item on the **Auto** tab, set the quantity and
+Keeps at least a set amount of an item in storage. Open an item on the **Auto** tab, set the quantity and
 options, and select **Keep Stocked**.
 
 - Checked every 10 in-game minutes. When stock plus pending production falls below the minimum, a job is
@@ -258,7 +258,7 @@ the harvest goes into it.
 
 - 1×1 to 50×50 tiles, offset up to 50 tiles in any direction from the machine.
 - **Area Shown** outlines the area in the world while the menu is closed.
-- **Preview** shows what's currently growing; **Plan** opens the planning grid.
+- **Preview** shows what is currently growing; **Plan** opens the planning grid.
 
 ### Planning grid
 
@@ -309,7 +309,7 @@ A handheld Crafting Terminal.
 
 ## Shipping
 
-Connect a network to the farm's **Shipping Bin** (cable beside the building) or to a **Mini-Shipping Bin**.
+Connect a network to a **Shipping Bin** (cable beside the building) or to a **Mini-Shipping Bin**.
 
 - The **Shipping** tab lists stored items the shipping bin accepts. Items it doesn't accept are never exported.
 - Click an item to open the sale window:
@@ -317,8 +317,8 @@ Connect a network to the farm's **Shipping Bin** (cable beside the building) or 
   - Or enter a **Gold Target**: the quantity is calculated to reach it, rounded up. Targets above the stored
     value are flagged.
   - **Max Value** shows what the entire stock would sell for.
-- Switch to **Shipping Bin** to see what's waiting to sell; click an item to return it to storage.
-- Prices match the shipping bin exactly, including quality and professions such as Artisan.
+- Switch to **Shipping Bin** to see items reserved for sale; click an item to return it to storage.
+- Prices account for quality and profession modifiers.
 - Mini-Shipping Bins have limited slots; anything that doesn't fit stays in storage.
 
 ---
@@ -332,22 +332,20 @@ The **Income** tab shows **Net worth** (sale value of everything in storage), **
 
 Projected income from everything on the network that's producing:
 
-- **Machines:** output value ÷ processing time. A Keg making 3,150g Starfruit Wine every 7 days earns 450g/day.
+- **Machines:** output value ÷ processing time. 
 - **Autocrafting machines:** count the batches their job has left.
-- **Recurring machines:** any machine whose rules restart it each morning or on collection repeats
+- **Recurring machines:** Any machine whose rules restart it each morning or on collection repeats
   indefinitely, including while empty between batches, and including modded machines. Cycle times use the
-  game's per-item timing (a Crystalarium's rate depends on its gem); machines that restart each morning count
-  at most one batch a day; machines the game times itself, such as Solar Panels, use their observed countdown.
-  Tappers repeat at their tree's rate. Crab Pots repeat daily while baited, valued at their current or last
-  catch. Incubators hatch animals and aren't counted.
+  game's per-item timing; machines that restart each morning count at most one batch a day; machines the game times itself, such as Solar Panels, use their observed countdown.
+  Tappers repeat at their tree's rate. Crab Pots repeat daily while baited, valued at their current or last catch.
 - **Casks:** count only the value aging adds.
 - **Animals:** every adult animal living in a coop or barn with network cable inside (linked by a Wireless
   Receiver, or a network of its own) counts its produce at its current produce quality, every *days to
-  produce*. Golden Animal Crackers double it; deluxe produce is a chance and isn't counted; Pigs don't
+  produce*. Golden Animal Crackers are accounted for; deluxe produce is not counted; Pigs don't
   count in winter. Baby animals are listed as *(young)* and counted from the day they grow up: they add
   to the projection, but not to income per day until they're producing.
 - **Crops under Auto-Harvesters:** guaranteed yield ÷ growth time. Regrowing and replanted crops repeat until
-  their season ends; crops reserved by jobs are excluded.
+  their season ends; crops reserved by autocrafting jobs are excluded.
 
 Graph options: **Daily** bars or **Running Total** line; **7 / 28 / 112 Days**; **Linear / Log** scale;
 **By Source** stacks each producer in its own color, with a legend to show or hide individual sources. The graph
@@ -367,7 +365,7 @@ The same graph built from recorded earnings, split into shipping and other incom
 
 ### Ledger
 
-Each day's earnings, recorded overnight: shipping (itemized by item, quantity and gold) and other income
+Each day's earnings are recorded overnight: shipping (itemized by item, quantity and gold) and other income
 (quests, mail, shop sales). Shows 7-day and 28-day totals and the best day. Stored in the save.
 
 ---
@@ -424,26 +422,18 @@ For troubleshooting, in the SMAPI console:
 
 ## Compatibility
 
-- **Standalone.** No other mods are required.
-- **Generic Mod Config Menu** (optional) adds an in-game settings page.
-- **Even Better Artisan Good Icons** (optional) icons are used where installed.
+- **Generic Mod Config Menu** (optional)
+- **Even Better Artisan Good Icons** (optional)
 - **Extra Machine Config** (optional) recipes with extra ingredients, including those from content packs such as
   Cornucopia, are supported by autocrafting.
-- **Automate** is not supported. Both mods drive the same machines, which produces unexpected behavior; a
-  warning is logged if both are installed.
-- Modded machines and crops defined through the game's 1.6 data formats are supported.
+- **Automate is not supported.** 
+- Modded machines and crops defined through the game's 1.6 data formats should be supported.
 
 ---
 
 ## Known limitations
 
-- **Jobs are saved when the game saves** (at the end of the day). Quitting mid-day restores jobs as they were
-  that morning, like the rest of the save.
-- **Machine products come out at normal quality.** Input quality isn't carried through to machine output.
-- **Harvesting** grants Farming experience to the host.
-- **Farmhands** see stored items from their own copy of the world, which updates less often for locations
-  outside the farm and its buildings. All item changes still go through the host. Crafts made by farmhands
-  don't count toward their crafting stats.
+- **Multiplayer compatibility is not tested**. Use at your own risk. 
 
 ---
 
