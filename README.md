@@ -1,18 +1,8 @@
 # Stardew Logistics
 
-An advanced logistics mod for Stardew Valley. Connect chests and machines with cable, then store, search,
-craft, automate production, farm, and sell from one terminal.
-
-- **Storage network** — every connected chest acts as one searchable inventory.
-- **Autocrafting** — multi-step crafting and machine production, planned and run automatically.
-- **Minimum stock** — keep a set amount of any item in storage; production is queued when it drops below.
-- **Auto-Harvester** — tills, plants, fertilizes, waters and harvests a planned area into storage.
-- **Wireless** — link networks across locations, and carry a handheld terminal that works anywhere.
-- **Shipping and income** — sell from storage, forecast income, plan expenses, and track daily earnings.
-- **Multiplayer** — coded to work in Multiplayer sessions.
+An advanced logistics mod for Stardew Valley. 
 
 Requires **Stardew Valley 1.6** and **SMAPI 4.0** or later. Built and tested on 1.6.15 / SMAPI 4.5.2.
-No other mods are required.
 
 ---
 
@@ -42,19 +32,15 @@ No other mods are required.
 ## Installation
 
 1. Install [SMAPI](https://smapi.io/) 4.0 or later.
-2. Download [`StardewLogistics-0.1.0.zip`](release/StardewLogistics-0.1.0.zip) (open it and choose
-   **Download raw file**).
-3. Unzip it into your game's `Mods` folder, so the mod is at `Mods/StardewLogistics`.
+2. Download the latest [Release](https://github.com/chocomint02/stardew-logistics-mod/releases/tag/Release)
+3. Unzip it into your game's `Mods` folder.
 4. Launch the game through SMAPI.
-
-To update, delete the old `Mods/StardewLogistics` folder and unzip the new one in its place. Your settings are in
-`config.json` inside that folder: copy it out first to keep them.
 
 ---
 
 ## Getting started
 
-1. Craft **Logistics Cable** and lay it on the ground. Cable is a floor, so it can be walked on and objects can
+1. Craft **Logistics Cable** and lay it on the ground. Cables are a floor tile, so it can be walked on and objects can
    be placed on top of it.
 2. Place chests and machines **on** or **directly beside** the cable. They join the network automatically.
 3. Place a **Storage Terminal** or **Crafting Terminal** on or beside the cable and interact with it.
@@ -65,8 +51,8 @@ To update, delete the old `Mods/StardewLogistics` folder and unzip the new one i
    [Keg] [Keg] [Terminal]       machines and terminals on it too
 ```
 
-Every connected cable tile, chest and machine forms one network. A network has no power or device limits;
-`MaxNetworkSize` exists only as a safety cap.
+Every connected cable tile, chest and machine forms one network. A network has no power or device limits, except
+as governed by `MaxNetworkSize`.
 
 ---
 
@@ -120,7 +106,7 @@ The Crafting Terminal and Wireless Terminal add **Craft**, **Jobs** and **Stock*
   deleted ones float away) with a gliding caret, tooltips grow out from the cursor as they appear, shrink back as they go, and resize smoothly
   when the cursor moves from one thing to another, their frames
   carrying a soft streak of light travelling round the border, a new color scheme fades in over the old one, and planned expenses slide in and fade away as they're added
-  and removed. Speed is adjustable (0–300%), or off.
+  and removed. Speed is adjustable (0–300%), or can be disabled completely.
 - **Devices** play a boot sequence when placed, then run: terminals scroll stock or fill a crafting grid, the
   transmitter sends rings out and the receiver takes them in, and the Auto-Harvester's sprout sways under its grow
   light. Data pulses flow along cables. These follow the same speed setting; at 0% devices show their still sprite.
@@ -154,15 +140,14 @@ unnamespaced IDs report as "Unknown".
 - Chests another player has open are skipped until they're closed.
 - **Items tab:** click to take a stack, right-click to take one, shift-click to fill your bag. Click an item in
   your bag to store it; shift-click to store every stack of it. **Deposit All** stores everything except tools.
-- Counts are abbreviated in the grid (`12.3K`, `4.5M`). Hover an item for its description; what clicking does
-  is written under the grid.
+- Counts are abbreviated in the grid (`12.3K`, `4.5M`).
 
 ### Priorities and filters
 
 Configured per chest on the **Storage** tab.
 
 - **Priority:** higher-priority chests input first and extract last.
-- **Filter:** up to nine items in **Allow** or **Deny** mode. A chest with an Allow filter is dedicated
+- **Filter:** up to nine items in **Allow** or **Deny** mode. A chest with an `Allow` filter is dedicated
   storage - matching items go there before any general chest, regardless of priority.
 
 Settings are stored on the chest, so they persist when moving network cables or rebuilding the network.
@@ -457,12 +442,7 @@ For troubleshooting, in the SMAPI console:
 
 ## Compatibility
 
-- **Generic Mod Config Menu** (optional)
-- **Even Better Artisan Good Icons** (optional)
-- **Extra Machine Config** (optional) recipes with extra ingredients, including those from content packs such as
-  Cornucopia, are supported by autocrafting.
 - **Automate is not supported.** 
-- Modded machines and crops defined through the game's 1.6 data formats should be supported.
 
 ### Mods that change machines, crops or fertilizer
 
@@ -511,6 +491,7 @@ timing and prices**, on by default) and plans by that. No mod is special-cased.
 - Learned figures are saved with the game, shared with farmhands, and shown on the **Network** tab.
   `logistics_calibration` prints them; `logistics_calibration reset` clears them.
 
+TL;DR: This mod should work with most, if not all, mods. 
 ---
 
 ## Known limitations
