@@ -72,7 +72,7 @@ All recipes are learned immediately while `UnlockAllRecipes` is on (default).
 
 ---
 
-## The terminal
+## Terminal
 
 The Storage Terminal shows the **Items**, **Farm**, **Storage**, **Network**, **Shipping**, **Income** and
 **Settings** tabs.
