@@ -22,10 +22,24 @@ namespace StardewLogistics.Menus
         private const int RowHeight = 40;
         private const int MaxVisibleRows = 10;
 
+        /// <summary>How long the list takes to unfurl, and to fold away, at normal speed.</summary>
+        private const double OpenMs = 170;
+        private const double CloseMs = 110;
+
         private readonly List<Option> Options = new();
         private Rectangle Bounds;
         private int Scroll;
         private int HoverIndex = -1;
+
+        /// <summary>Whether the list hangs above its button, having no room below; it then unfurls upwards.</summary>
+        private bool OpensUp;
+
+        /// <summary>When the list opened, and when it started closing, for its animations.</summary>
+        private DateTime OpenedAt;
+        private DateTime? ClosedAt;
+
+        /// <summary>The highlight behind the row under the cursor, fading in and out.</summary>
+        private readonly HoverScales RowHover = new();
 
 
         /*********
@@ -58,6 +72,9 @@ namespace StardewLogistics.Menus
             this.Scroll = 0;
             this.HoverIndex = -1;
             this.IsOpen = true;
+            this.OpenedAt = DateTime.UtcNow;
+            this.ClosedAt = null;
+            this.OpensUp = false;
 
             int visible = Math.Min(this.Options.Count, MaxVisibleRows);
             int width = Math.Max(anchor.Width, this.MeasureWidth());
@@ -67,7 +84,10 @@ namespace StardewLogistics.Menus
 
             // Flip above the anchor if the list would run off the bottom of the screen.
             if (y + height > Game1.uiViewport.Height)
+            {
                 y = Math.Max(0, anchor.Y - height - 4);
+                this.OpensUp = true;
+            }
             if (x + width > Game1.uiViewport.Width)
                 x = Math.Max(0, Game1.uiViewport.Width - width);
 
@@ -75,10 +95,14 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>Closes the list without choosing anything.</summary>
+        /// <remarks>The list stops taking input at once, and folds away over the next few frames.</remarks>
         public void Close()
         {
+            if (!this.IsOpen)
+                return;
+
             this.IsOpen = false;
-            this.Options.Clear();
+            this.ClosedAt = DateTime.UtcNow;
         }
 
         /// <summary>Handles a click anywhere on screen while the list is open.</summary>
@@ -115,6 +139,7 @@ namespace StardewLogistics.Menus
         public void PerformHover(int x, int y)
         {
             this.HoverIndex = this.IsOpen ? this.GetRowAt(x, y) : -1;
+            this.RowHover.Hover(this.HoverIndex >= 0 ? this.HoverIndex : null);
         }
 
         /// <summary>Scrolls the list.</summary>
@@ -131,9 +156,53 @@ namespace StardewLogistics.Menus
         /// <summary>Draws the list. Call this last, so it sits above the rest of the menu.</summary>
         public void Draw(SpriteBatch b)
         {
-            if (!this.IsOpen)
-                return;
+            // Unfurling from the button as it opens; folding back into it once closed, then gone.
+            float shown;
+            if (this.IsOpen)
+                shown = UiAnimation.EaseOut(UiAnimation.Progress(this.OpenedAt, OpenMs));
+            else
+            {
+                float closing = this.ClosedAt is DateTime closedAt ? UiAnimation.Progress(closedAt, CloseMs) : 1f;
+                if (closing >= 1f)
+                {
+                    this.Options.Clear();
+                    this.ClosedAt = null;
+                    return;
+                }
+                shown = 1f - (closing * closing);
+            }
 
+            if (Game1.currentGameTime != null)
+                this.RowHover.Update(Game1.currentGameTime);
+
+            if (shown >= 1f)
+            {
+                this.DrawList(b);
+                return;
+            }
+
+            // Clipped to the part unfurled so far, with the list sliding out from under its button.
+            int height = (int)Math.Ceiling(this.Bounds.Height * shown) + 12;
+            Rectangle clip = this.OpensUp
+                ? new Rectangle(this.Bounds.X - 4, this.Bounds.Bottom - height + 12, this.Bounds.Width + 16, height)
+                : new Rectangle(this.Bounds.X - 4, this.Bounds.Y, this.Bounds.Width + 16, height);
+            Vector2 slide = new(0, (1f - shown) * 20 * (this.OpensUp ? 1 : -1));
+
+            if (!UiBatch.Push(b, clip, slide))
+                return;
+            try
+            {
+                this.DrawList(b);
+            }
+            finally
+            {
+                UiBatch.Pop(b);
+            }
+        }
+
+        /// <summary>Draws the list itself.</summary>
+        private void DrawList(SpriteBatch b)
+        {
             IClickableMenu.drawTextureBox(
                 b,
                 Game1.menuTexture,
@@ -155,8 +224,9 @@ namespace StardewLogistics.Menus
                     break;
 
                 Rectangle row = this.GetRowBounds(i);
-                if (index == this.HoverIndex)
-                    b.Draw(Game1.staminaRect, row, Color.Wheat * 0.55f);
+                float glow = (this.RowHover.Get(index) - 1f) / (HoverScales.MaxScale - 1f);
+                if (glow > 0)
+                    b.Draw(Game1.staminaRect, row, Color.Wheat * (0.55f * glow));
 
                 Option option = this.Options[index];
                 int textX = row.X + 12;

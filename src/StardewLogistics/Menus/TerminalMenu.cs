@@ -33,7 +33,8 @@ namespace StardewLogistics.Menus
         Farm,
         Stock,
         Shipping,
-        Income
+        Income,
+        Settings
     }
 
     /// <summary>The storage terminal: one searchable, sortable view of everything on the network.</summary>
@@ -148,6 +149,27 @@ namespace StardewLogistics.Menus
         private Item HoverItem;
         private int RefreshCounter;
 
+        /// <summary>A tooltip with colours of its own, shown instead of <see cref="HoverText"/> when set.</summary>
+        private RichTooltip HoverTooltip;
+
+        /// <summary>How long switching tabs takes to animate at normal speed.</summary>
+        private const double TabTransitionMs = 240;
+
+        /// <summary>How far a new tab's content slides in from.</summary>
+        private const int TabSlideDistance = 48;
+
+        /// <summary>When the tab last changed, for its transition.</summary>
+        private DateTime TabChangedAt = DateTime.MinValue;
+
+        /// <summary>Which way the new tab slides in from: 1 from the right, -1 from the left.</summary>
+        private int TabDirection;
+
+        /// <summary>Where the active-tab highlight started gliding from.</summary>
+        private Rectangle TabHighlightFrom;
+
+        /// <summary>How big each grid icon is drawn, for the hovered one growing like an inventory item.</summary>
+        private readonly HoverScales GridHover = new();
+
 
         /*********
         ** Public methods
@@ -190,7 +212,7 @@ namespace StardewLogistics.Menus
 
             this.SetUpComponents();
 
-            this.SearchBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
+            this.SearchBox = new TextBox(UiTheme.TextBoxTexture(), null, Game1.smallFont, UiTheme.TextColour)
             {
                 X = this.SearchBoxLeft,
                 Y = this.yPositionOnScreen + 16 + (2 * TabRowHeight) + 52,
@@ -209,6 +231,7 @@ namespace StardewLogistics.Menus
         public override void update(GameTime time)
         {
             base.update(time);
+            this.GridHover.Update(time);
 
             // TextBox has no "text changed" event, so poll it: re-filtering is a list pass over data we already hold.
             if (this.SearchBox.Text != this.LastSearch)
@@ -281,7 +304,7 @@ namespace StardewLogistics.Menus
                 if (!tab.containsPoint(x, y))
                     continue;
 
-                this.Tab = Enum.Parse<TerminalTab>(tab.name);
+                this.SwitchTab(Enum.Parse<TerminalTab>(tab.name));
                 if (this.Tab == TerminalTab.Income)
                     this.RestartGraphAnimation();
 
@@ -343,6 +366,12 @@ namespace StardewLogistics.Menus
             if (this.Tab == TerminalTab.Income)
             {
                 this.ReceiveClickOnIncome(x, y);
+                return;
+            }
+
+            if (this.Tab == TerminalTab.Settings)
+            {
+                this.ReceiveClickOnSettings(x, y);
                 return;
             }
 
@@ -432,7 +461,7 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            if (this.Tab is TerminalTab.Stock or TerminalTab.Shipping or TerminalTab.Income)
+            if (this.Tab is TerminalTab.Stock or TerminalTab.Shipping or TerminalTab.Income or TerminalTab.Settings)
                 return;
 
             if (this.Tab != TerminalTab.Items)
@@ -494,12 +523,18 @@ namespace StardewLogistics.Menus
         {
             this.HoverText = "";
             this.HoverItem = null;
+            this.HoverTooltip = null;
+            this.GridHover.Hover(null);
 
             if (this.Dropdown.IsOpen)
             {
                 this.Dropdown.PerformHover(x, y);
                 return;
             }
+
+            int gridIndex = this.GetGridIndexAt(x, y);
+            if (gridIndex >= 0)
+                this.GridHover.Hover(this.GridKey(gridIndex));
 
             this.DepositAllButton?.tryHover(x, y);
             this.CraftableOnlyButton?.tryHover(x, y);
@@ -559,6 +594,12 @@ namespace StardewLogistics.Menus
                 return;
             }
 
+            if (this.Tab == TerminalTab.Settings)
+            {
+                this.PerformHoverOnSettings(x, y);
+                return;
+            }
+
             if (this.Tab != TerminalTab.Items)
             {
                 this.PerformHoverOnTab(x, y);
@@ -604,10 +645,55 @@ namespace StardewLogistics.Menus
             // Dim the world behind the menu.
             b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.5f);
 
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White, 1f, drawShadow: true);
 
-            this.DrawHeader(b);
+            this.DrawTabs(b);
 
+            // A new tab's content slides in from the side it's on and fades up from the panel.
+            float transition = UiAnimation.EaseOut(UiAnimation.Progress(this.TabChangedAt, TabTransitionMs));
+            Rectangle content = this.GetContentBounds();
+            bool sliding = transition < 1f && UiBatch.Push(b, content, new Vector2((1f - transition) * TabSlideDistance * this.TabDirection, 0));
+            try
+            {
+                this.DrawHeader(b);
+                this.DrawTab(b);
+            }
+            finally
+            {
+                if (sliding)
+                    UiBatch.Pop(b);
+            }
+
+            if (transition < 1f)
+                this.DrawPanelOver(b, content, 1f - transition);
+
+            this.PlayerInventory.draw(b);
+            this.upperRightCloseButton?.draw(b);
+            this.Dropdown.Draw(b);
+
+            if (this.HoverTooltip != null)
+                this.HoverTooltip.Draw(b);
+            else if (this.HoverRecipe != null)
+                this.DrawRecipeTooltip(b);
+            else if (this.HoverItem != null)
+                drawToolTip(b, this.HoverText, this.HoverItem.DisplayName, this.HoverItem);
+            else if (!string.IsNullOrEmpty(this.HoverText))
+                drawHoverText(b, this.HoverText, Game1.smallFont);
+
+            this.drawMouse(b);
+        }
+
+        /// <summary>Draws the current tab's content.</summary>
+        private void DrawTab(SpriteBatch b)
+        {
             switch (this.Tab)
             {
                 case TerminalTab.Items:
@@ -640,21 +726,94 @@ namespace StardewLogistics.Menus
                 case TerminalTab.Income:
                     this.DrawIncomeTab(b);
                     break;
+                case TerminalTab.Settings:
+                    this.DrawSettingsTab(b);
+                    break;
             }
-
-            this.PlayerInventory.draw(b);
-            this.upperRightCloseButton?.draw(b);
-            this.Dropdown.Draw(b);
-
-            if (this.HoverRecipe != null)
-                this.DrawRecipeTooltip(b);
-            else if (this.HoverItem != null)
-                drawToolTip(b, this.HoverText, this.HoverItem.DisplayName, this.HoverItem);
-            else if (!string.IsNullOrEmpty(this.HoverText))
-                drawHoverText(b, this.HoverText, Game1.smallFont);
-
-            this.drawMouse(b);
         }
+
+        /// <summary>Draws the window's own panel over an area, partly see-through, for content fading in.</summary>
+        /// <remarks>The whole window box, clipped to the area, so the cover matches the panel beneath it exactly.</remarks>
+        private void DrawPanelOver(SpriteBatch b, Rectangle area, float opacity)
+        {
+            if (!UiBatch.Push(b, area, Vector2.Zero))
+                return;
+
+            try
+            {
+                drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White * opacity, 1f, drawShadow: false);
+            }
+            finally
+            {
+                UiBatch.Pop(b);
+            }
+        }
+
+        /// <summary>Changes tab, starting its transition.</summary>
+        private void SwitchTab(TerminalTab tab)
+        {
+            if (tab == this.Tab)
+                return;
+
+            int from = this.TabButtons.FindIndex(button => button.name == this.Tab.ToString());
+            int to = this.TabButtons.FindIndex(button => button.name == tab.ToString());
+
+            // From wherever the highlight is now, so clicking through tabs quickly doesn't make it jump.
+            this.TabHighlightFrom = this.GetTabHighlight();
+            this.TabDirection = Math.Sign(to - from);
+            this.TabChangedAt = DateTime.UtcNow;
+            this.Tab = tab;
+        }
+
+        /// <summary>Where the active-tab highlight is drawn: gliding from the last tab to this one.</summary>
+        private Rectangle GetTabHighlight()
+        {
+            Rectangle target = this.TabButtons.FirstOrDefault(button => button.name == this.Tab.ToString())?.bounds ?? Rectangle.Empty;
+            float t = UiAnimation.EaseOut(UiAnimation.Progress(this.TabChangedAt, TabTransitionMs));
+            if (t >= 1f || this.TabHighlightFrom.IsEmpty)
+                return target;
+
+            return new Rectangle(
+                (int)MathHelper.Lerp(this.TabHighlightFrom.X, target.X, t),
+                (int)MathHelper.Lerp(this.TabHighlightFrom.Y, target.Y, t),
+                (int)MathHelper.Lerp(this.TabHighlightFrom.Width, target.Width, t),
+                (int)MathHelper.Lerp(this.TabHighlightFrom.Height, target.Height, t)
+            );
+        }
+
+        /// <summary>The area a tab's content is drawn in: below the tabs and above the player's inventory.</summary>
+        private Rectangle GetContentBounds()
+        {
+            int top = this.yPositionOnScreen + 16 + (2 * TabRowHeight) - 4;
+            int bottom = this.GetGridBounds().Bottom + SummaryBand - 8;
+            return new Rectangle(this.xPositionOnScreen + 12, top, this.width - 24, bottom - top);
+        }
+
+        /// <summary>The index of the grid slot under a screen position on a tab with a grid, or -1.</summary>
+        private int GetGridIndexAt(int x, int y)
+        {
+            int count = this.Tab switch
+            {
+                TerminalTab.Items => this.VisibleStock.Count,
+                TerminalTab.Craft => this.VisibleRecipes.Count,
+                TerminalTab.Auto => this.VisibleTargets.Count,
+                TerminalTab.Shipping => this.ShippingItemCount,
+                _ => 0
+            };
+
+            Rectangle grid = this.GetGridBounds();
+            if (count == 0 || !grid.Contains(x, y))
+                return -1;
+
+            int index = ((this.ScrollOffset + ((y - grid.Y) / SlotSize)) * Columns) + ((x - grid.X) / SlotSize);
+            return index < count ? index : -1;
+        }
+
+        /// <summary>Identifies a grid slot on the current tab, for its hover size.</summary>
+        private int GridKey(int index) => ((int)this.Tab << 20) | index;
+
+        /// <summary>How big to draw the icon in a grid slot on the current tab.</summary>
+        private float GridScale(int index) => this.GridHover.Get(this.GridKey(index));
 
 
         /*********
@@ -760,7 +919,7 @@ namespace StardewLogistics.Menus
         private IEnumerable<string[]> GetTabRows()
         {
             yield return this.GetTabNames().ToArray();
-            yield return new[] { nameof(TerminalTab.Shipping), nameof(TerminalTab.Income) };
+            yield return new[] { nameof(TerminalTab.Shipping), nameof(TerminalTab.Income), nameof(TerminalTab.Settings) };
         }
 
         /// <summary>The first row of tabs, which depends on whether the terminal can craft.</summary>
@@ -850,6 +1009,9 @@ namespace StardewLogistics.Menus
 
                 case TerminalTab.Income:
                     return this.GetMaxIncomeScroll();
+
+                case TerminalTab.Settings:
+                    return this.GetMaxSettingsScroll();
 
                 default:
                     int totalRows = (int)Math.Ceiling(this.VisibleStock.Count / (double)Columns);

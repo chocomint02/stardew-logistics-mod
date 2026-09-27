@@ -117,6 +117,43 @@ namespace StardewLogistics.Menus
         private string HoverText = "";
         private bool Painting;
 
+        /// <summary>When the window opened, for it to grow into place.</summary>
+        private readonly DateTime OpenedAt = DateTime.UtcNow;
+
+        /// <summary>When the palette tab last changed, which way the new one slides in, and where its highlight glides from.</summary>
+        private DateTime ModeChangedAt = DateTime.MinValue;
+        private int ModeDirection;
+        private Rectangle ModeHighlightFrom;
+
+        /// <summary>When each tile was last painted, so what's put on it pops into place.</summary>
+        private readonly Dictionary<Point, DateTime> PaintedAt = new();
+
+        /// <summary>When the Force change confirmation opened, for it to pop up.</summary>
+        private DateTime ForceShownAt;
+
+        /// <summary>The outline on the tile under the cursor, and the size of each palette icon, fading as the cursor moves.</summary>
+        private readonly HoverScales CellHover = new();
+        private readonly HoverScales PaletteHover = new();
+
+        /// <summary>When Force change was last switched, for its switch animating.</summary>
+        private DateTime ForceToggledAt = DateTime.MinValue;
+
+        /// <summary>The growth stage crops were drawn at before the last change, when it changed, and which way.</summary>
+        private int PreviousStage;
+        private DateTime StageChangedAt = DateTime.MinValue;
+        private int StageDirection;
+
+        /// <summary>When each stage arrow was last pressed, so it nudges the way it points.</summary>
+        private readonly Dictionary<string, DateTime> ArrowPressedAt = new();
+
+        /// <summary>How long a growth stage change and the Force change switch take, at normal speed.</summary>
+        private const double StageTransitionMs = 280;
+        private const double ForceToggleMs = 320;
+
+        /// <summary>How long switching palette tabs and a painted tile popping in take, at normal speed.</summary>
+        private const double ModeTransitionMs = 240;
+        private const double PaintPopMs = 220;
+
 
         /*********
         ** Public methods
@@ -225,6 +262,8 @@ namespace StardewLogistics.Menus
         public override void update(GameTime time)
         {
             base.update(time);
+            this.CellHover.Update(time);
+            this.PaletteHover.Update(time);
 
             // Right-drag erases, the way left-drag paints. There's no held-right event, so it's read directly.
             if (!this.IsPreview && !this.ConfirmingForce && Game1.input.GetMouseState().RightButton == ButtonState.Pressed
@@ -241,6 +280,9 @@ namespace StardewLogistics.Menus
                 return;
 
             this.HoveredProblem = this.ProblemRows.FirstOrDefault(row => row.Bounds.Contains(x, y)).Problem;
+            this.CellHover.Hover(this.TryGetCell(x, y, out Point hoveredCell) ? (hoveredCell.Y * 10000) + hoveredCell.X : null);
+            int paletteIndex = this.GetPaletteIndexAt(x, y);
+            this.PaletteHover.Hover(paletteIndex >= 0 ? paletteIndex : null);
 
             if (this.Buttons.Any(button => button.Action == "force" && button.Bounds.Contains(x, y)))
             {
@@ -276,26 +318,46 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void draw(SpriteBatch b)
         {
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             if (this.ProblemsStale)
                 this.RecheckPlan();
 
             b.Draw(Game1.fadeToBlackRect, Game1.graphics.GraphicsDevice.Viewport.Bounds, Color.Black * 0.5f);
-            drawTextureBox(b, this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White);
 
-            string title = this.Translations.Get(this.IsPreview ? "plan.preview-title" : "plan.title", new { width = this.Settings.Width, height = this.Settings.Height });
-            Utility.drawTextWithShadow(b, title, Game1.dialogueFont, new Vector2(this.xPositionOnScreen + 32, this.yPositionOnScreen + 24), Game1.textColor);
-
-            this.DrawGrid(b);
-            if (this.IsPreview)
-                this.DrawPreviewPanel(b);
-            else
+            // The window grows into place as it opens.
+            bool growing = UiAnimation.PushOpening(b, this.OpenedAt, new Rectangle(this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height));
+            try
             {
-                this.DrawPalette(b);
-                this.DrawProblems(b);
-            }
-            this.DrawButtons(b);
+                drawTextureBox(b, this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White);
 
-            base.draw(b);
+                string title = this.Translations.Get(this.IsPreview ? "plan.preview-title" : "plan.title", new { width = this.Settings.Width, height = this.Settings.Height });
+                Utility.drawTextWithShadow(b, title, Game1.dialogueFont, new Vector2(this.xPositionOnScreen + 32, this.yPositionOnScreen + 24), Game1.textColor);
+
+                this.DrawGrid(b);
+                if (this.IsPreview)
+                    this.DrawPreviewPanel(b);
+                else
+                {
+                    this.DrawPaletteSliding(b);
+                    this.DrawProblems(b);
+                }
+                this.DrawButtons(b);
+
+                base.draw(b);
+            }
+            finally
+            {
+                if (growing)
+                    UiBatch.Pop(b);
+            }
+
             if (this.ConfirmingForce)
                 this.DrawForceConfirmation(b);
             else if (!string.IsNullOrEmpty(this.HoverText))
@@ -311,9 +373,27 @@ namespace StardewLogistics.Menus
             int width = 640;
             int height = 300;
             Rectangle box = new(this.xPositionOnScreen + ((this.width - width) / 2), this.yPositionOnScreen + ((this.height - height) / 2), width, height);
+
+            // Pops up, overshooting a touch, so it reads as a question that needs an answer.
+            float pop = UiAnimation.EaseOutBack(UiAnimation.Progress(this.ForceShownAt, 240));
+            bool popping = pop < 1f && UiBatch.Push(b, null, UiBatch.ScaleAbout(new Vector2(box.Center.X, box.Center.Y), 0.85f + (0.15f * pop), Vector2.Zero));
+            try
+            {
+                this.DrawForceBox(b, box);
+            }
+            finally
+            {
+                if (popping)
+                    UiBatch.Pop(b);
+            }
+        }
+
+        /// <summary>Draws the Force change confirmation's box and buttons.</summary>
+        private void DrawForceBox(SpriteBatch b, Rectangle box)
+        {
             drawTextureBox(b, box.X, box.Y, box.Width, box.Height, Color.White);
 
-            Utility.drawTextWithShadow(b, this.Translations.Get("plan.force-title"), Game1.dialogueFont, new Vector2(box.X + 32, box.Y + 28), Color.Firebrick);
+            Utility.drawTextWithShadow(b, this.Translations.Get("plan.force-title"), Game1.dialogueFont, new Vector2(box.X + 32, box.Y + 28), UiTheme.Bad);
 
             string body = this.ForceTiles.Count > 0
                 ? this.Translations.Get("plan.force-body", new { count = this.ForceTiles.Count })
@@ -325,7 +405,7 @@ namespace StardewLogistics.Menus
             this.ForceApply = new Rectangle(box.Right - 32 - 260, box.Bottom - 88, 260, 56);
             foreach ((Rectangle bounds, string key, Color tint) in new[] { (this.ForceBack, "plan.button-back", Color.White), (this.ForceApply, "plan.button-apply", new Color(255, 120, 110)) })
             {
-                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, tint, 2f, drawShadow: false);
+                UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), tint, 2f);
                 string label = this.Translations.Get(key);
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
@@ -337,7 +417,9 @@ namespace StardewLogistics.Menus
         ** Private methods: editing
         *********/
         /// <summary>Applies the current palette choice to a tile.</summary>
-        private void Paint(Point cell)
+        /// <param name="cell">The tile.</param>
+        /// <param name="delayMs">How long to wait before what's painted pops in, so a fill ripples out rather than landing at once.</param>
+        private void Paint(Point cell, double delayMs = 0)
         {
             if (this.IsPreview)
                 return;
@@ -374,6 +456,7 @@ namespace StardewLogistics.Menus
                 return;
 
             this.Settings.Tiles[cell] = plan;
+            this.PaintedAt[cell] = DateTime.UtcNow.AddMilliseconds(delayMs / Math.Max(0.01, UiAnimation.SpeedFactor));
             this.OnPlanChanged();
         }
 
@@ -404,16 +487,27 @@ namespace StardewLogistics.Menus
         {
             switch (action)
             {
-                case "tab-seeds": this.Mode = PaletteMode.Seeds; break;
-                case "tab-fertilizer": this.Mode = PaletteMode.Fertilizer; break;
-                case "tab-automation": this.Mode = PaletteMode.Automation; break;
-                case "stage-down": this.Stage = Math.Max(0, this.Stage - 1); break;
-                case "stage-up": this.Stage = Math.Min(this.MaxStage, this.Stage + 1); break;
+                case "tab-seeds": this.SwitchMode(PaletteMode.Seeds); break;
+                case "tab-fertilizer": this.SwitchMode(PaletteMode.Fertilizer); break;
+                case "tab-automation": this.SwitchMode(PaletteMode.Automation); break;
+                case "stage-down":
+                case "stage-up":
+                    int stage = Math.Clamp(this.Stage + (action == "stage-up" ? 1 : -1), 0, this.MaxStage);
+                    this.ArrowPressedAt[action] = DateTime.UtcNow;
+                    if (stage != this.Stage)
+                    {
+                        // From what's showing now, so pressing quickly doesn't jump.
+                        this.PreviousStage = this.StageTransitionProgress() < 1f ? this.PreviousStage : this.Stage;
+                        this.StageDirection = Math.Sign(stage - this.Stage);
+                        this.StageChangedAt = DateTime.UtcNow;
+                        this.Stage = stage;
+                    }
+                    break;
                 case "fill":
                     for (int y = 0; y < this.Settings.Height; y++)
                     {
                         for (int x = 0; x < this.Settings.Width; x++)
-                            this.Paint(new Point(x, y));
+                            this.Paint(new Point(x, y), (x + y) * 18);
                     }
                     break;
                 case "clear":
@@ -422,6 +516,7 @@ namespace StardewLogistics.Menus
                     break;
                 case "force":
                     this.Force = !this.Force;
+                    this.ForceToggledAt = DateTime.UtcNow;
                     this.ProblemsStale = true;
                     Game1.playSound(this.Force ? "trashcanlid" : "drumkit6");
                     return;
@@ -431,6 +526,7 @@ namespace StardewLogistics.Menus
                         // Say exactly what will be destroyed, and wait for a second yes.
                         this.RecheckPlan();
                         this.ConfirmingForce = true;
+                        this.ForceShownAt = DateTime.UtcNow;
                         Game1.playSound("bigSelect");
                         return;
                     }
@@ -584,14 +680,25 @@ namespace StardewLogistics.Menus
                     else
                         b.Draw(Game1.staminaRect, cell, this.GetGroundColour(tile, feature));
 
+                    // What's just been painted pops into place, overshooting a touch.
+                    Rectangle painted = cell;
+                    if (this.PaintedAt.TryGetValue(point, out DateTime paintedAt))
+                    {
+                        float pop = UiAnimation.Progress(paintedAt, PaintPopMs);
+                        if (pop >= 1f)
+                            this.PaintedAt.Remove(point);
+                        else
+                            painted = UiAnimation.Scale(cell, Math.Max(0f, UiAnimation.EaseOutBack(pop)));
+                    }
+
                     // Fertilizer, as its mark on the soil.
                     string fertilizer = this.IsPreview ? CropMath.FertilizerOf(soil) : plan?.FertilizerId ?? CropMath.FertilizerOf(soil);
                     if (!string.IsNullOrEmpty(fertilizer))
-                        this.DrawFertilizer(b, fertilizer, cell);
+                        this.DrawFertilizer(b, fertilizer, plan?.FertilizerId != null ? painted : cell);
 
                     // Set aside for automation: shaded gold, the colour of everything autocrafting has claimed.
                     if (plan?.Automation == true)
-                        b.Draw(Game1.staminaRect, cell, Color.Gold * 0.35f);
+                        b.Draw(Game1.staminaRect, painted, Color.Gold * 0.35f);
 
                     // The crop: what's growing in preview, what's planned when planning.
                     if (this.IsPreview)
@@ -600,7 +707,12 @@ namespace StardewLogistics.Menus
                             DrawRealCrop(b, soil.crop, cell, tile);
                     }
                     else if (plan?.SeedId != null)
-                        this.DrawPlannedCrop(b, plan.SeedId, cell);
+                        this.DrawPlannedCrop(b, plan.SeedId, painted);
+
+                    // The tile under the cursor, outlined softly.
+                    float hover = (this.CellHover.Get((y * 10000) + x) - 1f) / (HoverScales.MaxScale - 1f);
+                    if (hover > 0)
+                        this.DrawOutline(b, cell, Color.White * (0.7f * hover), 2);
 
                     if (tile == this.MachineTile)
                         this.DrawOutline(b, cell, Color.SteelBlue, 3);
@@ -680,8 +792,43 @@ namespace StardewLogistics.Menus
             if (crop == null)
                 return;
 
-            crop.currentPhase.Value = Math.Min(this.Stage, crop.phaseDays.Count - 1);
-            DrawCropSprite(b, crop, cell, 1);
+            int last = crop.phaseDays.Count - 1;
+            float t = this.StageTransitionProgress();
+            if (t >= 1f)
+            {
+                crop.currentPhase.Value = Math.Min(this.Stage, last);
+                DrawCropSprite(b, crop, cell, 1);
+                return;
+            }
+
+            // Changing stage: the old sprite fades as the new one grows up out of the soil into its place.
+            int from = Math.Min(this.PreviousStage, last);
+            int to = Math.Min(this.Stage, last);
+            if (from == to)
+            {
+                crop.currentPhase.Value = to;
+                DrawCropSprite(b, crop, cell, 1);
+                return;
+            }
+
+            float eased = UiAnimation.EaseOut(t);
+            crop.currentPhase.Value = from;
+            DrawCropSprite(b, crop, cell, 1, 1f - eased, 1f);
+            crop.currentPhase.Value = to;
+            DrawCropSprite(b, crop, cell, 1, eased, 0.75f + (0.25f * UiAnimation.EaseOutBack(t)));
+        }
+
+        /// <summary>How far through a growth stage change the grid is: 1 once it's done.</summary>
+        private float StageTransitionProgress() => UiAnimation.Progress(this.StageChangedAt, StageTransitionMs);
+
+        /// <summary>What a growth stage is called beside the arrows.</summary>
+        private string DescribeStage(int stage)
+        {
+            return stage == 0
+                ? this.Translations.Get("plan.stage-seed")
+                : stage >= this.MaxStage && this.MaxStage > 0
+                    ? this.Translations.Get("plan.stage-grown")
+                    : this.Translations.Get("plan.stage", new { stage });
         }
 
         /// <summary>Draws a crop that's really growing, as it is now.</summary>
@@ -691,7 +838,9 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>Draws a crop's current sprite fitted to a cell.</summary>
-        private static void DrawCropSprite(SpriteBatch b, Crop crop, Rectangle cell, int variation)
+        /// <param name="alpha">How opaque to draw it.</param>
+        /// <param name="scale">How big to draw it, standing on the bottom of the cell as it grows.</param>
+        private static void DrawCropSprite(SpriteBatch b, Crop crop, Rectangle cell, int variation, float alpha = 1f, float scale = 1f)
         {
             try
             {
@@ -699,9 +848,9 @@ namespace StardewLogistics.Menus
                 Texture2D texture = Game1.content.Load<Texture2D>(string.IsNullOrEmpty(data?.Texture) ? "TileSheets\\crops" : data.Texture);
 
                 // Crop sprites are 16x32 and stand on their tile: fit the height to the cell, bottom-aligned.
-                int height = cell.Height;
+                int height = (int)(cell.Height * scale);
                 int width = height / 2;
-                b.Draw(texture, new Rectangle(cell.Center.X - (width / 2), cell.Bottom - height, width, height), crop.getSourceRect(variation), Color.White);
+                b.Draw(texture, new Rectangle(cell.Center.X - (width / 2), cell.Bottom - height, width, height), crop.getSourceRect(variation), Color.White * alpha);
             }
             catch
             {
@@ -716,6 +865,92 @@ namespace StardewLogistics.Menus
             b.Draw(Game1.staminaRect, new Rectangle(area.X, area.Bottom - thickness, area.Width, thickness), colour);
             b.Draw(Game1.staminaRect, new Rectangle(area.X, area.Y, thickness, area.Height), colour);
             b.Draw(Game1.staminaRect, new Rectangle(area.Right - thickness, area.Y, thickness, area.Height), colour);
+        }
+
+        /// <summary>Draws the palette, sliding and fading in from the side of its tab when the tab changes.</summary>
+        private void DrawPaletteSliding(SpriteBatch b)
+        {
+            float t = UiAnimation.EaseOut(UiAnimation.Progress(this.ModeChangedAt, ModeTransitionMs));
+            if (t >= 1f)
+            {
+                this.DrawPalette(b);
+                return;
+            }
+
+            Rectangle area = new(this.PanelBounds.X - 8, this.PanelBounds.Y + 56, this.PanelBounds.Width + 16, this.ProblemsTop() - this.PanelBounds.Y - 60);
+            bool sliding = UiBatch.Push(b, area, new Vector2((1f - t) * 40 * this.ModeDirection, 0));
+            try
+            {
+                this.DrawPalette(b);
+            }
+            finally
+            {
+                if (sliding)
+                    UiBatch.Pop(b);
+            }
+
+            // The window's own panel over it, fading away, so the new tab fades up from the background.
+            if (UiBatch.Push(b, area, Vector2.Zero))
+            {
+                try
+                {
+                    // Without the window's drop shadow, which doesn't fade and would darken the panel until the end.
+                    drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White * (1f - t), 1f, drawShadow: false);
+                }
+                finally
+                {
+                    UiBatch.Pop(b);
+                }
+            }
+        }
+
+        /// <summary>Changes the palette tab, starting its transition.</summary>
+        private void SwitchMode(PaletteMode mode)
+        {
+            if (mode == this.Mode)
+                return;
+
+            this.ModeHighlightFrom = this.GetModeHighlight();
+            this.ModeDirection = Math.Sign((int)mode - (int)this.Mode);
+            this.ModeChangedAt = DateTime.UtcNow;
+            this.Mode = mode;
+        }
+
+        /// <summary>Where the active palette tab's highlight is drawn: gliding from the last tab to this one.</summary>
+        private Rectangle GetModeHighlight()
+        {
+            string action = this.Mode switch
+            {
+                PaletteMode.Fertilizer => "tab-fertilizer",
+                PaletteMode.Automation => "tab-automation",
+                _ => "tab-seeds"
+            };
+            Rectangle target = this.Buttons.FirstOrDefault(button => button.Action == action).Bounds;
+            float t = UiAnimation.EaseOut(UiAnimation.Progress(this.ModeChangedAt, ModeTransitionMs));
+            if (t >= 1f || this.ModeHighlightFrom.IsEmpty)
+                return target;
+
+            return new Rectangle(
+                (int)MathHelper.Lerp(this.ModeHighlightFrom.X, target.X, t),
+                (int)MathHelper.Lerp(this.ModeHighlightFrom.Y, target.Y, t),
+                (int)MathHelper.Lerp(this.ModeHighlightFrom.Width, target.Width, t),
+                (int)MathHelper.Lerp(this.ModeHighlightFrom.Height, target.Height, t)
+            );
+        }
+
+        /// <summary>The index of the palette cell under a screen position, or -1.</summary>
+        private int GetPaletteIndexAt(int x, int y)
+        {
+            if (this.IsPreview || this.Mode == PaletteMode.Automation)
+                return -1;
+
+            List<Item> items = this.PaletteItems;
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (this.GetPaletteCell(i).Contains(x, y))
+                    return i;
+            }
+            return -1;
         }
 
         /// <summary>Draws the palette, with how many of each storage holds, and the replant choices.</summary>
@@ -735,7 +970,7 @@ namespace StardewLogistics.Menus
                 Rectangle cell = this.GetPaletteCell(i);
                 bool isSelected = selected != null && items[i].QualifiedItemId == selected.QualifiedItemId;
                 b.Draw(Game1.staminaRect, cell, isSelected ? Color.Gold * 0.6f : Color.Wheat * 0.35f);
-                ItemIcon.Draw(b, items[i], new Rectangle(cell.X + 3, cell.Y + 3, cell.Width - 6, cell.Height - 6), 1f, showQuality: false);
+                ItemIcon.Draw(b, items[i], this.PaletteHover.Grow(i, new Rectangle(cell.X + 3, cell.Y + 3, cell.Width - 6, cell.Height - 6)), 1f, showQuality: false);
 
                 // The count storage holds; red when there's none the harvester could use.
                 long count = this.CountInStorage(items[i].QualifiedItemId);
@@ -778,7 +1013,7 @@ namespace StardewLogistics.Menus
                 ItemIcon.Draw(b, ItemRegistry.Create(seedId, allowNull: true), new Rectangle(row.X + 2, row.Y + 4, 32, 32), 1f, showQuality: false);
 
                 Rectangle pill = new(row.Right - 110, row.Y + 2, 110, 36);
-                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), pill.X, pill.Y, pill.Width, pill.Height, replant ? Color.LightGreen : Color.White, 2f, drawShadow: false);
+                UiTheme.DrawButton(b, new Rectangle(pill.X, pill.Y, pill.Width, pill.Height), replant ? Color.LightGreen : Color.White, 2f);
                 string state = this.Translations.Get(replant ? "plan.replant-yes" : "plan.replant-no");
                 Vector2 stateSize = Game1.smallFont.MeasureString(state);
                 Utility.drawTextWithShadow(b, state, Game1.smallFont, new Vector2(pill.Center.X - (stateSize.X / 2), pill.Center.Y - (stateSize.Y / 2)), Game1.textColor);
@@ -834,11 +1069,11 @@ namespace StardewLogistics.Menus
             this.ProblemRows.Clear();
             if (this.Problems.Count == 0)
             {
-                Marquee.Draw(b, this.Translations.Get("plan.no-problems"), Game1.smallFont, new Vector2(box.X + 10, box.Y + 10), box.Width - 20, new Color(40, 120, 40));
+                Marquee.Draw(b, this.Translations.Get("plan.no-problems"), Game1.smallFont, new Vector2(box.X + 10, box.Y + 10), box.Width - 20, UiTheme.Good);
                 return;
             }
 
-            Marquee.Draw(b, this.Translations.Get("plan.problems", new { count = this.Problems.Count }), Game1.smallFont, new Vector2(box.X + 10, box.Y + 8), box.Width - 20, Color.Firebrick);
+            Marquee.Draw(b, this.Translations.Get("plan.problems", new { count = this.Problems.Count }), Game1.smallFont, new Vector2(box.X + 10, box.Y + 8), box.Width - 20, UiTheme.Bad);
 
             int y = box.Y + 44;
             foreach (PlanProblem problem in this.Problems)
@@ -851,7 +1086,7 @@ namespace StardewLogistics.Menus
                 if (this.HoveredProblem == problem)
                     b.Draw(Game1.staminaRect, row, Color.Yellow * 0.25f);
 
-                b.Draw(Game1.staminaRect, new Rectangle(box.X + 10, y + 8, 12, 12), Color.Firebrick);
+                b.Draw(Game1.staminaRect, new Rectangle(box.X + 10, y + 8, 12, 12), UiTheme.Bad);
                 Marquee.Draw(b, problem.Message, Game1.smallFont, new Vector2(box.X + 30, y), box.Width - 40, Game1.textColor);
                 y += 36;
             }
@@ -906,29 +1141,63 @@ namespace StardewLogistics.Menus
                     // The game's own arrows: a "<" in this font would draw as a heart.
                     Rectangle arrow = action == "stage-down" ? new Rectangle(352, 495, 12, 11) : new Rectangle(365, 495, 12, 11);
                     bool enabled = action == "stage-down" ? this.Stage > 0 : this.Stage < this.MaxStage;
-                    b.Draw(Game1.mouseCursors, bounds, arrow, enabled ? Color.White : Color.White * 0.35f);
+
+                    // Pressed, it nudges the way it points and springs back.
+                    Rectangle drawn = bounds;
+                    if (this.ArrowPressedAt.TryGetValue(action, out DateTime pressed))
+                    {
+                        float nudge = UiAnimation.Progress(pressed, 200);
+                        drawn.X += (int)(Math.Sin(nudge * Math.PI) * 8 * (action == "stage-up" ? 1 : -1));
+                    }
+                    b.Draw(Game1.mouseCursors, drawn, arrow, enabled ? Color.White : Color.White * 0.35f);
                     continue;
                 }
 
                 if (action == "force")
                 {
-                    // A red-backed checkbox: this one destroys things.
-                    b.Draw(Game1.staminaRect, bounds, new Color(200, 50, 40) * (this.Force ? 0.55f : 0.2f));
-                    Rectangle box = new(bounds.X + 8, bounds.Center.Y - 18, 36, 36);
+                    // A red-backed checkbox: this one destroys things. Switching it animates: the backing deepens
+                    // or fades, the tick pops, and switching it on gives a short warning shake.
+                    float toggle = UiAnimation.Progress(this.ForceToggledAt, ForceToggleMs);
+                    float settled = UiAnimation.EaseOut(toggle);
+                    float on = this.Force ? settled : 1f - settled;
+                    Rectangle area = bounds;
+                    if (this.Force && toggle < 1f)
+                        area.X += (int)(Math.Sin(toggle * Math.PI * 6) * (1f - toggle) * 6);
+
+                    b.Draw(Game1.staminaRect, area, new Color(200, 50, 40) * MathHelper.Lerp(0.2f, 0.55f, on));
+                    Rectangle box = new(area.X + 8, area.Center.Y - 18, 36, 36);
+                    if (toggle < 1f)
+                        box = UiAnimation.Scale(box, 0.7f + (0.3f * UiAnimation.EaseOutBack(toggle)));
                     b.Draw(Game1.mouseCursors, box, this.Force ? OptionsCheckbox.sourceRectChecked : OptionsCheckbox.sourceRectUnchecked, Color.White);
-                    Marquee.Draw(b, this.Translations.Get("plan.force"), Game1.smallFont, new Vector2(box.Right + 10, bounds.Center.Y - 16), bounds.Right - box.Right - 14, this.Force ? Color.White : Color.Firebrick);
+                    int textX = area.X + 8 + 36 + 10;
+                    Marquee.Draw(b, this.Translations.Get("plan.force"), Game1.smallFont, new Vector2(textX, area.Center.Y - 16), area.Right - textX - 4, Color.Lerp(UiTheme.Bad, Color.White, on));
                     continue;
                 }
 
-                bool active = (action == "tab-seeds" && this.Mode == PaletteMode.Seeds)
-                    || (action == "tab-fertilizer" && this.Mode == PaletteMode.Fertilizer)
-                    || (action == "tab-automation" && this.Mode == PaletteMode.Automation);
-                Color tint = action == "confirm" ? (this.Force ? new Color(255, 120, 110) : Color.LightGreen) : active ? Color.Gold : Color.White;
-                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, tint, 2f, drawShadow: false);
+                Color tint = action == "confirm" ? (this.Force ? new Color(255, 120, 110) : Color.LightGreen) : Color.White;
+                UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), tint, 2f);
+
+                // Tab labels go on after the highlight, which glides beneath them.
+                if (action.StartsWith("tab-"))
+                    continue;
 
                 string label = this.Translations.Get("plan.button-" + action);
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
+            }
+
+            if (!this.IsPreview)
+            {
+                Rectangle highlight = this.GetModeHighlight();
+                if (!highlight.IsEmpty)
+                    UiTheme.DrawButton(b, new Rectangle(highlight.X, highlight.Y, highlight.Width, highlight.Height), Color.Gold, 2f);
+
+                foreach ((Rectangle bounds, string action) in this.Buttons.Where(button => button.Action.StartsWith("tab-")))
+                {
+                    string label = this.Translations.Get("plan.button-" + action);
+                    Vector2 size = Game1.smallFont.MeasureString(label);
+                    Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);
+                }
             }
 
             if (this.IsPreview)
@@ -937,14 +1206,35 @@ namespace StardewLogistics.Menus
             // What stage the crops are drawn at, in the space between the arrows.
             Rectangle down = this.Buttons.First(button => button.Action == "stage-down").Bounds;
             Rectangle up = this.Buttons.First(button => button.Action == "stage-up").Bounds;
-            string stage = this.Stage == 0
-                ? this.Translations.Get("plan.stage-seed")
-                : this.Stage >= this.MaxStage && this.MaxStage > 0
-                    ? this.Translations.Get("plan.stage-grown")
-                    : this.Translations.Get("plan.stage", new { stage = this.Stage });
-            Vector2 stageSize = Game1.smallFont.MeasureString(stage);
             int room = up.X - down.Right - 8;
-            Marquee.Draw(b, stage, Game1.smallFont, new Vector2(down.Right + 4 + Math.Max(0, (room - stageSize.X) / 2), down.Y + 10), room, Game1.textColor);
+            float t = UiAnimation.EaseOut(this.StageTransitionProgress());
+            if (t >= 1f)
+            {
+                this.DrawStageLabel(b, this.DescribeStage(this.Stage), down, room, 0, 1f);
+                return;
+            }
+
+            // Changing: the old label slides out as the new one slides in from the side the stage moved to.
+            Rectangle clip = new(down.Right + 4, down.Y, room, down.Height);
+            if (!UiBatch.Push(b, clip, Vector2.Zero))
+                return;
+            try
+            {
+                // The old label goes quickly, so it's gone before the new one settles.
+                this.DrawStageLabel(b, this.DescribeStage(this.PreviousStage), down, room, (int)(-t * 40 * this.StageDirection), (1f - t) * (1f - t));
+                this.DrawStageLabel(b, this.DescribeStage(this.Stage), down, room, (int)((1f - t) * 40 * this.StageDirection), t);
+            }
+            finally
+            {
+                UiBatch.Pop(b);
+            }
+        }
+
+        /// <summary>Draws a growth stage's name centred between the arrows.</summary>
+        private void DrawStageLabel(SpriteBatch b, string label, Rectangle down, int room, int offset, float alpha)
+        {
+            Vector2 size = Game1.smallFont.MeasureString(label);
+            Marquee.Draw(b, label, Game1.smallFont, new Vector2(down.Right + 4 + Math.Max(0, (room - size.X) / 2) + offset, down.Y + 10), room, Game1.textColor * alpha);
         }
 
 

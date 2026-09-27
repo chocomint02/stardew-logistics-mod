@@ -43,6 +43,15 @@ namespace StardewLogistics.Menus
         private const int LedgerLineHeight = 40;
 
         private IncomeView IncomeMode = IncomeView.Forecast;
+
+        /// <summary>When the Income view last changed, for its transition.</summary>
+        private DateTime IncomeViewChangedAt = DateTime.MinValue;
+
+        /// <summary>Which way the new view slides in from: 1 from the right, -1 from the left.</summary>
+        private int IncomeViewDirection;
+
+        /// <summary>Where the active view's highlight started gliding from.</summary>
+        private Rectangle IncomeHighlightFrom;
         private bool IncomeCumulative;
         private int IncomeRangeIndex = 1;
         private bool IncomeBySource;
@@ -189,8 +198,7 @@ namespace StardewLogistics.Menus
         /// <summary>How far the graph has drawn itself in, eased: 0 to 1.</summary>
         private float GraphProgress()
         {
-            double t = Math.Clamp((DateTime.UtcNow - this.GraphAnimationStart).TotalSeconds / GraphAnimationSeconds, 0, 1);
-            return (float)(1 - Math.Pow(1 - t, 3));
+            return UiAnimation.EaseOut(UiAnimation.Progress(this.GraphAnimationStart, GraphAnimationSeconds * 1000));
         }
 
 
@@ -230,6 +238,13 @@ namespace StardewLogistics.Menus
             {
                 if (!bounds.Contains(x, y))
                     continue;
+
+                if (view != this.IncomeMode)
+                {
+                    this.IncomeHighlightFrom = this.GetIncomeViewHighlight();
+                    this.IncomeViewDirection = Math.Sign((int)view - (int)this.IncomeMode);
+                    this.IncomeViewChangedAt = DateTime.UtcNow;
+                }
 
                 this.IncomeMode = view;
                 this.ScrollOffset = 0;
@@ -348,7 +363,7 @@ namespace StardewLogistics.Menus
             {
                 (Rectangle plot, _) = this.GetGraphLayout();
                 if (plot.Contains(x, y))
-                    this.HoverText = this.DescribeGraphDay(x, plot);
+                    this.HoverTooltip = this.DescribeGraphDay(x, plot);
             }
         }
 
@@ -370,7 +385,11 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>A day's figures, for hovering the graph.</summary>
-        private string DescribeGraphDay(int mouseX, Rectangle plot)
+        /// <remarks>
+        /// Coloured as the graph is: each source keyed and named in its legend colour, and each amount by the
+        /// same tiers as the headline figures, so the tooltip reads at a glance.
+        /// </remarks>
+        private RichTooltip DescribeGraphDay(int mouseX, Rectangle plot)
         {
             int days = IncomeRanges[this.IncomeRangeIndex];
             int day = Math.Clamp((int)((mouseX - plot.X) / (double)plot.Width * days), 0, days - 1);
@@ -378,11 +397,23 @@ namespace StardewLogistics.Menus
 
             double total = series.Sum(entry => entry.Daily[day]);
             double running = series.Sum(entry => entry.Daily.Take(day + 1).Sum());
-            List<string> lines = new() { this.GraphDayLabel(day, days) + ": " + Selling.Gold(total) };
+
+            RichTooltip tooltip = new RichTooltip()
+                .Line().Add(this.GraphDayLabel(day, days) + ": ").Add(Selling.Gold(total), MoneyColours.ForDaily(total));
+
             if (this.IncomeBySource)
-                lines.AddRange(series.Where(entry => entry.Daily[day] > 0).Select(entry => $"  {entry.Name}: {Selling.Gold(entry.Daily[day])}"));
-            lines.Add(this.Translations.Get("income.running", new { gold = Selling.Gold(running) }));
-            return string.Join("\n", lines);
+            {
+                foreach (GraphSeries entry in series.Where(entry => entry.Daily[day] > 0).OrderByDescending(entry => entry.Daily[day]))
+                {
+                    tooltip.Line(key: entry.Colour, icon: entry.Icon, indent: 8)
+                        .Add(entry.Name + ": ", UiTheme.Legible(entry.Colour))
+                        .Add(Selling.Gold(entry.Daily[day]), MoneyColours.ForDaily(entry.Daily[day]));
+                }
+            }
+
+            string runningLabel = this.Translations.Get("income.running", new { gold = "" }).ToString().TrimEnd();
+            tooltip.Line().Add(runningLabel + " ").Add(Selling.Gold(running), MoneyColours.ForWorth(running));
+            return tooltip;
         }
 
 
@@ -395,9 +426,17 @@ namespace StardewLogistics.Menus
             this.IncomeHotspots.Clear();
             Rectangle grid = this.GetGridBounds();
 
-            // The view buttons, on the header's control row.
+            // The view buttons, on the header's control row, with the active one's highlight gliding to it the way
+            // the tabs' does.
+            foreach ((Rectangle bounds, IncomeView _) in this.GetIncomeViewButtons())
+                DrawPlainButton(b, bounds, null, active: false);
+
+            Rectangle highlight = this.GetIncomeViewHighlight();
+            if (!highlight.IsEmpty)
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), highlight.X, highlight.Y, highlight.Width, highlight.Height, Color.Wheat, 3f, drawShadow: false);
+
             foreach ((Rectangle bounds, IncomeView view) in this.GetIncomeViewButtons())
-                DrawPlainButton(b, bounds, this.Translations.Get("income.view-" + view.ToString().ToLowerInvariant()), view == this.IncomeMode);
+                DrawPlainButton(b, bounds, this.Translations.Get("income.view-" + view.ToString().ToLowerInvariant()), active: false, drawBox: false);
 
             // The headline figures, on the header's search row, coloured by how good they are.
             if (this.Network != null)
@@ -412,7 +451,7 @@ namespace StardewLogistics.Menus
                 if (this.Expenses.ItemCosts.Count > 0)
                 {
                     position = DrawPart(b, "   " + this.Translations.Get("income.profit-label"), position, Game1.textColor);
-                    DrawPart(b, this.Translations.Get("income.a-day", new { gold = Selling.Gold(profit) }), position, profit < 0 ? Color.Firebrick : MoneyColours.ForDaily(profit));
+                    DrawPart(b, this.Translations.Get("income.a-day", new { gold = Selling.Gold(profit) }), position, profit < 0 ? UiTheme.Bad : MoneyColours.ForDaily(profit));
                 }
             }
 
@@ -422,19 +461,51 @@ namespace StardewLogistics.Menus
                 return;
             }
 
-            switch (this.IncomeMode)
+            // The view itself slides in and fades up, as a tab does; the headline figures above it stay put.
+            float transition = UiAnimation.EaseOut(UiAnimation.Progress(this.IncomeViewChangedAt, TabTransitionMs));
+            Rectangle content = this.GetContentBounds();
+            Rectangle viewArea = new(content.X, grid.Y - 8, content.Width, content.Bottom - (grid.Y - 8));
+            bool sliding = transition < 1f && UiBatch.Push(b, viewArea, new Vector2((1f - transition) * TabSlideDistance * this.IncomeViewDirection, 0));
+            try
             {
-                case IncomeView.Forecast:
-                case IncomeView.History:
-                    this.DrawIncomeGraphView(b);
-                    break;
-                case IncomeView.Expenses:
-                    this.DrawExpensesView(b);
-                    break;
-                case IncomeView.Ledger:
-                    this.DrawLedgerView(b);
-                    break;
+                switch (this.IncomeMode)
+                {
+                    case IncomeView.Forecast:
+                    case IncomeView.History:
+                        this.DrawIncomeGraphView(b);
+                        break;
+                    case IncomeView.Expenses:
+                        this.DrawExpensesView(b);
+                        break;
+                    case IncomeView.Ledger:
+                        this.DrawLedgerView(b);
+                        break;
+                }
             }
+            finally
+            {
+                if (sliding)
+                    UiBatch.Pop(b);
+            }
+
+            if (transition < 1f)
+                this.DrawPanelOver(b, viewArea, 1f - transition);
+        }
+
+        /// <summary>Where the active view's highlight is drawn: gliding from the last view to this one.</summary>
+        private Rectangle GetIncomeViewHighlight()
+        {
+            Rectangle target = this.GetIncomeViewButtons().FirstOrDefault(button => button.View == this.IncomeMode).Bounds;
+            float t = UiAnimation.EaseOut(UiAnimation.Progress(this.IncomeViewChangedAt, TabTransitionMs));
+            if (t >= 1f || this.IncomeHighlightFrom.IsEmpty)
+                return target;
+
+            return new Rectangle(
+                (int)MathHelper.Lerp(this.IncomeHighlightFrom.X, target.X, t),
+                (int)MathHelper.Lerp(this.IncomeHighlightFrom.Y, target.Y, t),
+                (int)MathHelper.Lerp(this.IncomeHighlightFrom.Width, target.Width, t),
+                (int)MathHelper.Lerp(this.IncomeHighlightFrom.Height, target.Height, t)
+            );
         }
 
         /// <summary>Draws text and returns where the next part goes.</summary>
@@ -452,9 +523,10 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>Draws a button with its label centred; lit when active.</summary>
-        private static void DrawPlainButton(SpriteBatch b, Rectangle bounds, string label, bool active)
+        private static void DrawPlainButton(SpriteBatch b, Rectangle bounds, string label, bool active, bool drawBox = true)
         {
-            drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, active ? Color.Wheat : Color.White, 3f, drawShadow: false);
+            if (drawBox)
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, active ? Color.Wheat : Color.White, 3f, drawShadow: false);
             if (string.IsNullOrEmpty(label))
                 return;
 
@@ -582,7 +654,8 @@ namespace StardewLogistics.Menus
             // Lines: the running total, one per source when broken down. They draw across as the graph comes in.
             if (this.IncomeCumulative)
             {
-                int reach = Math.Max(1, (int)Math.Ceiling(days * progress));
+                // How far along the line has drawn, in days: smooth, so a short range doesn't step a day at a time.
+                float reach = progress * (days - 1);
                 if (this.IncomeBySource)
                 {
                     for (int s = 0; s < series.Count; s++)
@@ -679,15 +752,25 @@ namespace StardewLogistics.Menus
         }
 
         /// <summary>Draws one line across the plot, up to a day, coloured segment by segment.</summary>
-        private void DrawSeriesLine(SpriteBatch b, Rectangle plot, double[] values, Func<double, double> scale, float slot, int reach, Func<double, Color> colour)
+        private void DrawSeriesLine(SpriteBatch b, Rectangle plot, double[] values, Func<double, double> scale, float slot, float reach, Func<double, Color> colour)
         {
-            Vector2? previous = null;
-            for (int day = 0; day < Math.Min(reach, values.Length); day++)
+            if (values.Length == 0)
+                return;
+
+            Vector2 PointAt(int day) => new(plot.X + ((day + 0.5f) * slot), plot.Bottom - (float)(scale(values[day]) * plot.Height));
+
+            // Whole segments up to the last day reached, then part of the next, ending wherever the line has got to.
+            int whole = Math.Min((int)reach, values.Length - 1);
+            for (int day = 1; day <= whole; day++)
+                DrawLine(b, PointAt(day - 1), PointAt(day), colour(values[day]), 3);
+
+            float part = reach - whole;
+            if (part > 0 && whole + 1 < values.Length)
             {
-                Vector2 point = new(plot.X + ((day + 0.5f) * slot), plot.Bottom - (float)(scale(values[day]) * plot.Height));
-                if (previous != null)
-                    DrawLine(b, previous.Value, point, colour(values[day]), 3);
-                previous = point;
+                Vector2 from = PointAt(whole);
+                Vector2 to = Vector2.Lerp(from, PointAt(whole + 1), part);
+                double value = values[whole] + ((values[whole + 1] - values[whole]) * part);
+                DrawLine(b, from, to, colour(value), 3);
             }
         }
 
@@ -821,7 +904,7 @@ namespace StardewLogistics.Menus
             else if (days == 0)
             {
                 outlook = this.Translations.Get("expense.outlook-covered", new { total = Selling.Gold(plan.Total) });
-                colour = new Color(40, 120, 40);
+                colour = UiTheme.Good;
             }
             else if (days != null)
             {
@@ -831,7 +914,7 @@ namespace StardewLogistics.Menus
             else
             {
                 outlook = this.Translations.Get("expense.outlook-never", new { total = Selling.Gold(plan.Total), needed = Selling.Gold(needed), days = ExpenseHorizon });
-                colour = Color.Firebrick;
+                colour = UiTheme.Bad;
             }
             Marquee.DrawWrapped(b, outlook, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 52), grid.Width, colour);
         }
@@ -981,7 +1064,8 @@ namespace StardewLogistics.Menus
         {
             Vector2 delta = to - from;
             float angle = (float)Math.Atan2(delta.Y, delta.X);
-            b.Draw(Game1.staminaRect, new Rectangle((int)from.X, (int)from.Y, (int)Math.Ceiling(delta.Length()), thickness), null, colour, angle, new Vector2(0, 0.5f), SpriteEffects.None, 0f);
+            // Positioned and sized in fractions of a pixel, so a line drawing itself in grows smoothly.
+            b.Draw(Game1.staminaRect, from, null, colour, angle, new Vector2(0, 0.5f), new Vector2(delta.Length(), thickness), SpriteEffects.None, 0f);
         }
 
         private static double[] RunningTotal(double[] daily)

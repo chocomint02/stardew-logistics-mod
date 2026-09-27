@@ -33,10 +33,10 @@ namespace StardewLogistics.Framework
         ** Public methods
         *********/
         /// <summary>The colour for gold made in a day, or a day's rate.</summary>
-        public static Color ForDaily(double gold) => Tiers[Tier(gold, DailySteps)];
+        public static Color ForDaily(double gold) => Menus.UiTheme.Legible(Tiers[Tier(gold, DailySteps)]);
 
         /// <summary>The colour for a total held, like net worth.</summary>
-        public static Color ForWorth(double gold) => Tiers[Tier(gold, WorthSteps)];
+        public static Color ForWorth(double gold) => Menus.UiTheme.Legible(Tiers[Tier(gold, WorthSteps)]);
 
         /// <summary>Which tier an amount falls in.</summary>
         public static int Tier(double gold, double[] steps)

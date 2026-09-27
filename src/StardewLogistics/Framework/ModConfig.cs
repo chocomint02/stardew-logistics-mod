@@ -39,6 +39,15 @@ namespace StardewLogistics.Framework
         /// <summary>The key that opens the equipped Wireless Terminal, anywhere.</summary>
         public KeybindList OpenWirelessTerminalKey { get; set; } = KeybindList.Parse("B");
 
+        /*********
+        ** Appearance
+        *********/
+        /// <summary>The colour scheme the mod's windows are drawn in: one of <see cref="Menus.UiTheme.Names"/>.</summary>
+        public string Theme { get; set; } = Menus.UiTheme.Vanilla;
+
+        /// <summary>How fast menu animations play, as a percentage of normal; zero turns them off.</summary>
+        public int AnimationSpeed { get; set; } = 100;
+
         /// <summary>Clamps every setting to a usable range, so a hand-edited config can't break the mod.</summary>
         public void Normalise()
         {
@@ -48,6 +57,16 @@ namespace StardewLogistics.Framework
             this.BusItemsPerRun = Clamp(this.BusItemsPerRun, 1, 999);
             this.OpenTerminalKey ??= new KeybindList();
             this.OpenWirelessTerminalKey ??= KeybindList.Parse("B");
+            this.AnimationSpeed = Clamp(this.AnimationSpeed, 0, 300);
+            if (!Menus.UiTheme.IsKnown(this.Theme))
+                this.Theme = Menus.UiTheme.Vanilla;
+        }
+
+        /// <summary>Puts the appearance settings into effect.</summary>
+        public void ApplyAppearance()
+        {
+            Menus.UiTheme.Current = this.Theme;
+            Menus.UiAnimation.SpeedPercent = this.AnimationSpeed;
         }
 
         private static int Clamp(int value, int min, int max)

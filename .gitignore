@@ -8,3 +8,5 @@ obj/
 
 # Derived preview from tools/make_sprites.py --preview
 tools/preview.png
+
+__pycache__/

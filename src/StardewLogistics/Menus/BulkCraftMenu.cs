@@ -71,7 +71,7 @@ namespace StardewLogistics.Menus
 
             // smallFont rather than dialogueFont: the larger face overflowed the box as soon as the value ran
             // past two digits, and an expression like "1+18" never fitted at all.
-            this.QuantityBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
+            this.QuantityBox = new TextBox(UiTheme.TextBoxTexture(), null, Game1.smallFont, UiTheme.TextColour)
             {
                 X = this.xPositionOnScreen + (this.width / 2) - (QuantityBoxWidth / 2),
                 Y = this.yPositionOnScreen + 336,
@@ -201,6 +201,14 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void draw(SpriteBatch b)
         {
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.5f);
             drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White, 1f, drawShadow: true);
 
@@ -300,7 +308,7 @@ namespace StardewLogistics.Menus
                 this.Translations.Get("bulk.craftable", new { count = this.Entry.CraftableCount }),
                 Game1.smallFont,
                 new Vector2(this.xPositionOnScreen + 116, y + 44),
-                this.Entry.CraftableCount > 0 ? Game1.textColor : Color.Firebrick
+                this.Entry.CraftableCount > 0 ? Game1.textColor : UiTheme.Bad
             );
         }
 
@@ -344,7 +352,7 @@ namespace StardewLogistics.Menus
                     counts,
                     Game1.smallFont,
                     new Vector2(x + columnWidth - size.X - 44, y),
-                    have >= needed ? Game1.textColor : Color.Firebrick
+                    have >= needed ? Game1.textColor : UiTheme.Bad
                 );
             }
         }

@@ -70,6 +70,23 @@ namespace StardewLogistics.Menus
 
         private CraftPlan Plan;
         private List<PlanNode> Rows = new();
+
+        /// <summary>How long a plan row takes to slide in, and the gap between one row starting and the next.</summary>
+        private const double RowInMs = 200;
+        private const double RowStaggerMs = 35;
+
+        /// <summary>When the window opened, for its opening animation.</summary>
+        private readonly DateTime OpenedAt = DateTime.UtcNow;
+
+        /// <summary>When each row of the plan first appeared, by its place in the tree, so only new rows animate in.</summary>
+        private Dictionary<string, DateTime> RowAppeared = new();
+
+        /// <summary>The highlight behind the row under the cursor, fading in and out.</summary>
+        private readonly HoverScales RowHover = new();
+
+        /// <summary>The totals under the plan, counting to each new figure.</summary>
+        private readonly AnimatedValue ShownMinutes = new();
+        private readonly AnimatedValue ShownValue = new();
         private int Quantity = 1;
         private int MaxMachines = 1;
 
@@ -163,7 +180,7 @@ namespace StardewLogistics.Menus
             if (this.ShowQuality && !machineRecipes.CanProduce(targetId) && crafting.FindByOutput(targetId) == null)
                 this.TargetQuality = StardewValley.Object.bestQuality;
 
-            this.QuantityBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
+            this.QuantityBox = new TextBox(UiTheme.TextBoxTexture(), null, Game1.smallFont, UiTheme.TextColour)
             {
                 X = this.xPositionOnScreen + 300,
                 Y = this.yPositionOnScreen + 84,
@@ -196,6 +213,7 @@ namespace StardewLogistics.Menus
         public override void update(GameTime time)
         {
             base.update(time);
+            this.RowHover.Update(time);
 
             if (this.QuantityBox.Text != this.LastText)
             {
@@ -342,6 +360,8 @@ namespace StardewLogistics.Menus
         public override void performHoverAction(int x, int y)
         {
             this.HoverText = "";
+            PlanNode hovered = this.Dropdown.IsOpen ? null : this.GetRowAt(x, y);
+            this.RowHover.Hover(hovered != null ? this.Rows.IndexOf(hovered) : null);
 
             if (this.Dropdown.IsOpen)
             {
@@ -402,15 +422,34 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void draw(SpriteBatch b)
         {
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.5f);
-            drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White, 1f, drawShadow: true);
 
-            this.DrawHeader(b);
-            this.DrawTree(b);
-            this.DrawFooter(b);
+            // The window grows into place as it opens, rising a little as it does.
+            bool growing = UiAnimation.PushOpening(b, this.OpenedAt, new Rectangle(this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height));
+            try
+            {
+                drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60), this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White, 1f, drawShadow: true);
 
-            this.upperRightCloseButton?.draw(b);
-            this.Dropdown.Draw(b);
+                this.DrawHeader(b);
+                this.DrawTree(b);
+                this.DrawFooter(b);
+
+                this.upperRightCloseButton?.draw(b);
+                this.Dropdown.Draw(b);
+            }
+            finally
+            {
+                if (growing)
+                    UiBatch.Pop(b);
+            }
 
             if (!string.IsNullOrEmpty(this.HoverText))
                 drawHoverText(b, this.HoverText, Game1.smallFont);
@@ -440,6 +479,7 @@ namespace StardewLogistics.Menus
 
             this.Rows = this.Plan.Root?.Walk().ToList() ?? new List<PlanNode>();
             this.Scroll = Math.Clamp(this.Scroll, 0, Math.Max(0, this.Rows.Count - this.GetVisibleRows()));
+            this.NoteNewRows();
 
             // The control's range comes from the plan, not from one machine type. A step split between a Heavy
             // Furnace and a plain one occupies the sum of both, and needs at least one of each to start at all.
@@ -470,6 +510,44 @@ namespace StardewLogistics.Menus
             if (!this.CanDust)
                 this.UseFairyDust = false;
             this.UpdateDustEstimate();
+        }
+
+        /// <summary>Notes which rows are new since the last plan, so they slide in one after another; the rest stay put.</summary>
+        /// <remarks>A row is known by its path down the tree, so raising the quantity doesn't replay rows that were already there.</remarks>
+        private void NoteNewRows()
+        {
+            Dictionary<string, DateTime> appeared = new();
+            Dictionary<string, int> seen = new();
+            DateTime now = DateTime.UtcNow;
+            int fresh = 0;
+
+            foreach (string key in this.Rows.Select(RowKey))
+            {
+                seen[key] = seen.TryGetValue(key, out int count) ? count + 1 : 0;
+                string unique = key + "#" + seen[key];
+
+                appeared[unique] = this.RowAppeared.TryGetValue(unique, out DateTime when)
+                    ? when
+                    : now.AddMilliseconds(fresh++ * RowStaggerMs / Math.Max(0.01, UiAnimation.SpeedFactor));
+            }
+
+            this.RowAppeared = appeared;
+        }
+
+        /// <summary>Identifies a row by what it is and how deep it sits.</summary>
+        private static string RowKey(PlanNode node) => $"{node.Depth}|{node.Kind}|{node.ItemId}|{node.RequiredQuality}";
+
+        /// <summary>How far a row has slid in: 0 before it starts, 1 once it's in place.</summary>
+        private float RowProgress(int index)
+        {
+            if (index < 0 || index >= this.Rows.Count)
+                return 1f;
+
+            string key = RowKey(this.Rows[index]);
+            int occurrence = this.Rows.Take(index).Count(row => RowKey(row) == key);
+            return this.RowAppeared.TryGetValue(key + "#" + occurrence, out DateTime start)
+                ? UiAnimation.EaseOut(UiAnimation.Progress(start, RowInMs))
+                : 1f;
         }
 
         /// <summary>Shows the Fairy Dust the job would set aside as its own row at the foot of the plan.</summary>
@@ -782,7 +860,7 @@ namespace StardewLogistics.Menus
                         this.FertilizerIcons[shown] = fertilizerIcon = ItemRegistry.Create(shown, allowNull: true);
 
                     bool on = this.FertilizerId != null;
-                    drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, on ? Color.Gold : Color.White, 2f, drawShadow: false);
+                    UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), on ? Color.Gold : Color.White, 2f);
                     fertilizerIcon?.drawInMenu(b, new Vector2(bounds.Center.X - 32, bounds.Center.Y - 32), 0.6f, on ? 1f : 0.4f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
 
                     string held = "x" + this.FertilizerAvailable;
@@ -795,7 +873,7 @@ namespace StardewLogistics.Menus
                 // how much storage holds beside it.
                 if (action == StepAction.FairyDust)
                 {
-                    drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, this.UseFairyDust ? Color.Gold : Color.White, 2f, drawShadow: false);
+                    UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), this.UseFairyDust ? Color.Gold : Color.White, 2f);
                     this.FairyDustIcon ??= ItemRegistry.Create(Devices.JobRunner.FairyDustId);
                     this.FairyDustIcon.drawInMenu(b, new Vector2(bounds.Center.X - 32, bounds.Center.Y - 32), 0.6f, this.UseFairyDust ? 1f : 0.4f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: false);
 
@@ -865,35 +943,45 @@ namespace StardewLogistics.Menus
 
                 PlanNode node = this.Rows[index];
                 Rectangle row = this.GetRowBounds(i);
-                int indent = 20 + (node.Depth * 28);
 
-                Color colour = node.Kind == PlanStepKind.Missing ? Color.Firebrick : Game1.textColor;
+                // A soft highlight behind the row under the cursor, in the text's colour so it suits any scheme.
+                float glow = (this.RowHover.Get(index) - 1f) / (HoverScales.MaxScale - 1f);
+                if (glow > 0)
+                    b.Draw(Game1.staminaRect, new Rectangle(row.X + 4, row.Y, row.Width - 8, row.Height - 2), Game1.textColor * (0.08f * glow));
+
+                // A new row slides in from the left as it fades up.
+                float shown = this.RowProgress(index);
+                if (shown <= 0f)
+                    continue;
+                int indent = 20 + (node.Depth * 28) - (int)((1f - shown) * 24);
+
+                Color colour = (node.Kind == PlanStepKind.Missing ? UiTheme.Bad : Game1.textColor) * shown;
 
                 // The branch marker makes depth readable without drawing connecting lines.
                 if (node.Depth > 0)
-                    Utility.drawTextWithShadow(b, "└", Game1.smallFont, new Vector2(row.X + indent - 20, row.Y + 6), Game1.textColor * 0.5f);
+                    Utility.drawTextWithShadow(b, "└", Game1.smallFont, new Vector2(row.X + indent - 20, row.Y + 6), Game1.textColor * (0.5f * shown), shadowIntensity: shown);
 
                 // Item icon, so the tree can be read at a glance rather than by reading every name.
                 // An ingredient others would stand in for turns through them all, starting with the one asked for.
                 string iconId = node.ItemId;
                 if (node.Substitutes.Count > 0)
                 {
-                    int shown = (int)(Game1.currentGameTime.TotalGameTime.TotalMilliseconds / SubstituteCycleMs) % (node.Substitutes.Count + 1);
-                    if (shown > 0)
-                        iconId = node.Substitutes[shown - 1];
+                    int cycle = (int)(Game1.currentGameTime.TotalGameTime.TotalMilliseconds / SubstituteCycleMs) % (node.Substitutes.Count + 1);
+                    if (cycle > 0)
+                        iconId = node.Substitutes[cycle - 1];
                 }
-                DrawIcon(b, GetIcon(iconId, node.RequiredQuality), row.X + indent, row.Y + 4, node.Kind == PlanStepKind.Missing ? 0.4f : 1f);
+                DrawIcon(b, GetIcon(iconId, node.RequiredQuality), row.X + indent, row.Y + 4, (node.Kind == PlanStepKind.Missing ? 0.4f : 1f) * shown);
 
                 string detail = this.DescribeStep(node);
                 Vector2 detailSize = Game1.smallFont.MeasureString(detail);
                 float detailX = row.Right - detailSize.X - 16;
-                Utility.drawTextWithShadow(b, detail, Game1.smallFont, new Vector2(detailX, row.Y + 6), colour * 0.85f);
+                Utility.drawTextWithShadow(b, detail, Game1.smallFont, new Vector2(detailX, row.Y + 6), colour * 0.85f, shadowIntensity: shown);
 
                 // And the machine's own icon next to its name, which is the quickest way to tell a Heavy
                 // Furnace step from a plain one.
                 bool hasMachineIcon = node.Kind == PlanStepKind.Process && node.MachineRecipe != null;
                 if (hasMachineIcon)
-                    DrawIcon(b, GetIcon(node.MachineRecipe.MachineId), (int)detailX - 40, row.Y + 4, 1f);
+                    DrawIcon(b, GetIcon(node.MachineRecipe.MachineId), (int)detailX - 40, row.Y + 4, shown);
 
                 // The item name gets whatever the step details leave; a deep, long-named row scrolls in that space.
                 int labelX = row.X + indent + 38;
@@ -917,7 +1005,8 @@ namespace StardewLogistics.Menus
             // How long it takes, and what the result sells for: in all, and a day over that time.
             if (this.Plan != null)
             {
-                int minutes = this.GetTotalMinutes();
+                this.ShownMinutes.Set(this.GetTotalMinutes());
+                int minutes = (int)Math.Round(this.ShownMinutes.Current);
                 string summary = this.Translations.Get("auto.time", new { time = FormatTotal(minutes) }) + "   ·   " + this.DescribeValue(minutes);
                 Marquee.Draw(b, summary, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 18), tree.Width - 8, Game1.textColor);
             }
@@ -925,7 +1014,7 @@ namespace StardewLogistics.Menus
             if (this.Plan?.IsSatisfied == false)
             {
                 string shortfall = this.Translations.Get("auto.shortfall", new { items = this.Plan.DescribeShortfalls(GetName, max: 3) });
-                Marquee.Draw(b, shortfall, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 50), tree.Width - 8, Color.Firebrick);
+                Marquee.Draw(b, shortfall, Game1.smallFont, new Vector2(tree.X + 4, tree.Bottom + 50), tree.Width - 8, UiTheme.Bad);
             }
 
             if (this.StartButton != null)
@@ -943,7 +1032,7 @@ namespace StardewLogistics.Menus
             if (this.KeepButton != null)
             {
                 Rectangle bounds = this.KeepButton.bounds;
-                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.LightGoldenrodYellow, 3f, drawShadow: false);
+                UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), Color.LightGoldenrodYellow, 3f);
 
                 string label = this.Translations.Get(this.EditingRule != null ? "auto.update-rule" : "auto.keep-stocked");
                 Vector2 size = Game1.smallFont.MeasureString(label);
@@ -963,7 +1052,8 @@ namespace StardewLogistics.Menus
             if (unit == null)
                 return this.Translations.Get("auto.value-none");
 
-            double value = unit.Value * (double)this.Quantity;
+            this.ShownValue.Set(unit.Value * (double)this.Quantity);
+            double value = Math.Round(this.ShownValue.Current);
             double days = Selling.Days(minutes);
             return days > 0
                 ? this.Translations.Get("auto.value", new { gold = Selling.Gold(value), rate = Selling.Gold(value / days) })

@@ -50,6 +50,9 @@ namespace StardewLogistics.Framework
         /// <summary>The spritesheet for the mod's 16x16 objects.</summary>
         public const string ItemsTexture = ModId + "/Items";
 
+        /// <summary>The asset name for the data pulses drawn over cables.</summary>
+        public const string CablePulseTexture = ModId + "/CablePulse";
+
         /// <summary>The global inventory holding a player's equipped Wireless Terminal, by player ID.</summary>
         public const string AccessoryInventoryPrefix = ModId + "/accessory/";
 

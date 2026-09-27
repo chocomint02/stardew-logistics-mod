@@ -34,6 +34,18 @@ namespace StardewLogistics.Menus
         /// <summary>The buttons, by what they change.</summary>
         private readonly List<(Rectangle Bounds, string Action, int Delta, string Label)> Buttons = new();
 
+        /// <summary>When the window opened, or was returned to from the grid, for it to grow into place.</summary>
+        private DateTime OpenedAt = DateTime.UtcNow;
+
+        /// <summary>The hover tint on each button, fading in and out.</summary>
+        private readonly HoverScales ButtonHover = new();
+
+        /// <summary>When each setting last changed, so its value pops as it does.</summary>
+        private readonly Dictionary<string, DateTime> ChangedAt = new();
+
+        /// <summary>How long a changed value takes to settle, at normal speed.</summary>
+        private const double PopMs = 260;
+
 
         /*********
         ** Accessors
@@ -107,9 +119,25 @@ namespace StardewLogistics.Menus
                 }
 
                 this.Settings.Write(this.Machine);
+                this.ChangedAt[action == "reset" ? "offset" : action] = DateTime.UtcNow;
                 Game1.playSound("drumkit6");
                 return;
             }
+        }
+
+        /// <inheritdoc />
+        public override void update(GameTime time)
+        {
+            base.update(time);
+            this.ButtonHover.Update(time);
+        }
+
+        /// <inheritdoc />
+        public override void performHoverAction(int x, int y)
+        {
+            base.performHoverAction(x, y);
+            int index = this.Buttons.FindIndex(button => button.Bounds.Contains(x, y));
+            this.ButtonHover.Hover(index >= 0 ? index : null);
         }
 
         /// <inheritdoc />
@@ -125,7 +153,34 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void draw(SpriteBatch b)
         {
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             b.Draw(Game1.fadeToBlackRect, Game1.graphics.GraphicsDevice.Viewport.Bounds, Color.Black * 0.4f);
+
+            // The window grows into place as it opens.
+            bool growing = UiAnimation.PushOpening(b, this.OpenedAt, new Rectangle(this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height));
+            try
+            {
+                this.DrawWindow(b);
+            }
+            finally
+            {
+                if (growing)
+                    UiBatch.Pop(b);
+            }
+
+            this.drawMouse(b);
+        }
+
+        /// <summary>Draws the window and everything in it.</summary>
+        private void DrawWindow(SpriteBatch b)
+        {
             drawTextureBox(b, this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White);
 
             int left = this.xPositionOnScreen + 40;
@@ -133,27 +188,37 @@ namespace StardewLogistics.Menus
             Vector2 titleSize = Game1.dialogueFont.MeasureString(title);
             Utility.drawTextWithShadow(b, title, Game1.dialogueFont, new Vector2(this.xPositionOnScreen + (this.width - titleSize.X) / 2, this.yPositionOnScreen + 28), Game1.textColor);
 
-            (string Label, string Value, int Row)[] rows =
+            (string Label, string Value, int Row, string Action)[] rows =
             {
-                (this.Translations.Get("harvester.width"), this.Settings.Width.ToString(), 0),
-                (this.Translations.Get("harvester.height"), this.Settings.Height.ToString(), 1),
-                (this.Translations.Get("harvester.north-south"), Signed(-this.Settings.OffsetY), 2),
-                (this.Translations.Get("harvester.west-east"), Signed(this.Settings.OffsetX), 3)
+                (this.Translations.Get("harvester.width"), this.Settings.Width.ToString(), 0, "width"),
+                (this.Translations.Get("harvester.height"), this.Settings.Height.ToString(), 1, "height"),
+                (this.Translations.Get("harvester.north-south"), Signed(-this.Settings.OffsetY), 2, "north"),
+                (this.Translations.Get("harvester.west-east"), Signed(this.Settings.OffsetX), 3, "east")
             };
 
-            foreach ((string label, string value, int row) in rows)
+            foreach ((string label, string value, int row, string action) in rows)
             {
                 int y = this.RowY(row);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(left, y + 10), Game1.textColor);
-                Vector2 size = Game1.smallFont.MeasureString(value);
-                Utility.drawTextWithShadow(b, value, Game1.smallFont, new Vector2(this.ValueCentreX() - (size.X / 2), y + 10), Game1.textColor);
+
+                // A value that's just changed pops, then settles.
+                float pop = 1f;
+                DateTime changed = this.ChangedAt.TryGetValue(action, out DateTime when) ? when : DateTime.MinValue;
+                if (action is "north" or "east" && this.ChangedAt.TryGetValue("offset", out DateTime reset) && reset > changed)
+                    changed = reset;
+                if (changed != DateTime.MinValue)
+                    pop = 1f + (0.35f * (1f - UiAnimation.EaseOut(UiAnimation.Progress(changed, PopMs))));
+
+                Vector2 size = Game1.smallFont.MeasureString(value) * pop;
+                Utility.drawTextWithShadow(b, value, Game1.smallFont, new Vector2(this.ValueCentreX() - (size.X / 2), y + 10 - ((size.Y - Game1.smallFont.MeasureString(value).Y) / 2)), Game1.textColor, pop);
             }
 
-            foreach ((Rectangle bounds, string action, int _, string label) in this.Buttons)
+            for (int i = 0; i < this.Buttons.Count; i++)
             {
+                (Rectangle bounds, string action, int _, string label) = this.Buttons[i];
                 bool active = action == "show" && this.Settings.ShowPreview;
-                bool hover = bounds.Contains(Game1.getMouseX(), Game1.getMouseY());
-                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, active ? Color.LightGreen : hover ? Color.Wheat : Color.White, 2f, drawShadow: false);
+                float hover = (this.ButtonHover.Get(i) - 1f) / (HoverScales.MaxScale - 1f);
+                UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), active ? Color.LightGreen : Color.Lerp(Color.White, Color.Wheat, hover), 2f);
 
                 string text = action == "show"
                     ? this.Translations.Get(this.Settings.ShowPreview ? "harvester.preview-on" : "harvester.preview-off")
@@ -172,10 +237,9 @@ namespace StardewLogistics.Menus
             string status = network == null
                 ? this.Translations.Get("harvester.not-connected")
                 : this.Translations.Get("harvester.status", new { planned });
-            Marquee.Draw(b, status, Game1.smallFont, new Vector2(left, infoY + 36), this.width - 80, network == null ? Color.Firebrick : Game1.textColor);
+            Marquee.Draw(b, status, Game1.smallFont, new Vector2(left, infoY + 36), this.width - 80, network == null ? UiTheme.Bad : Game1.textColor);
 
             base.draw(b);
-            this.drawMouse(b);
         }
 
 
@@ -211,6 +275,7 @@ namespace StardewLogistics.Menus
                 }
 
                 this.Settings = HarvesterSettings.Read(this.Machine);
+                this.OpenedAt = DateTime.UtcNow;
                 Game1.activeClickableMenu = this;
             }, this.ReservedBy);
         }

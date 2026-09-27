@@ -351,7 +351,7 @@ namespace StardewLogistics.Menus
 
                     // Dimmed rather than hidden, matching the Craft tab: the player can still see what exists
                     // and open it to find out what it is short of.
-                    target.Sample.drawInMenu(b, new Vector2(x, y), 1f, target.CanMake ? 1f : 0.3f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: target.CanMake);
+                    target.Sample.drawInMenu(b, new Vector2(x, y), this.GridScale(index), target.CanMake ? 1f : 0.3f, 0.9f, StackDrawType.Hide, Color.White, drawShadow: target.CanMake);
 
                     if (target.Count > 0)
                         DrawSlotCount(b, NumberFormat.Abbreviate(target.Count), x, y);
@@ -428,7 +428,7 @@ namespace StardewLogistics.Menus
                     status += $": {job.BlockedReason}";
 
                 Marquee.Draw(b, status, Game1.smallFont, new Vector2(textX, y + 44), textWidth,
-                    job.Status == JobStatus.Blocked ? Color.Firebrick : Game1.textColor * 0.65f);
+                    job.Status == JobStatus.Blocked ? UiTheme.Bad : Game1.textColor * 0.65f);
 
                 // What the job's product sells for, and what that comes to a day over the job's run.
                 Marquee.Draw(b, this.DescribeJobValue(job), Game1.smallFont, new Vector2(textX, y + 74), textWidth, new Color(150, 110, 20));

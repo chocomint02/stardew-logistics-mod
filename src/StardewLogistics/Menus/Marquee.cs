@@ -14,8 +14,8 @@ namespace StardewLogistics.Menus
     /// readable in turn, rather than being cut short with "...".
     ///
     /// Smooth movement needs the text clipped to its space, which a <see cref="SpriteBatch"/> can only do by
-    /// being restarted with a scissor rectangle. The batch is restarted with the settings the game draws menus
-    /// with, so nothing else on screen is affected; text that fits never restarts it at all.
+    /// being restarted with a scissor rectangle; <see cref="UiBatch"/> does that. Text that fits never restarts
+    /// it at all.
     /// </remarks>
     internal static class Marquee
     {
@@ -34,9 +34,6 @@ namespace StardewLogistics.Menus
         /// <summary>Extra room above and below the text so its shadow and descenders aren't clipped.</summary>
         private const int VerticalSlack = 6;
 
-        /// <summary>A rasterizer state with clipping on. Created once; building one per frame would churn the GPU state cache.</summary>
-        private static readonly RasterizerState Clipping = new() { ScissorTestEnable = true };
-
 
         /*********
         ** Public methods
@@ -53,37 +50,34 @@ namespace StardewLogistics.Menus
             if (string.IsNullOrEmpty(text) || maxWidth <= 0)
                 return;
 
+            // The game draws a text's shadow at full strength whatever the text's own transparency, so text fading
+            // in or out would leave its shadow behind. The shadow fades with it instead.
+            float shadow = colour.A / 255f;
+
             Vector2 size = font.MeasureString(text);
             if (size.X <= maxWidth)
             {
-                Utility.drawTextWithShadow(b, text, font, position, colour);
+                Utility.drawTextWithShadow(b, text, font, position, colour, shadowIntensity: shadow);
                 return;
             }
 
             float loop = size.X + Gap;
             float offset = GetOffset(loop);
 
+            // Clipped to its space through the shared batch helper, so text on a tab that's sliding in moves with it.
             Rectangle clip = new((int)position.X, (int)position.Y - VerticalSlack, maxWidth, (int)size.Y + (VerticalSlack * 2));
-            clip = Rectangle.Intersect(clip, b.GraphicsDevice.Viewport.Bounds);
-            if (clip.Width <= 0 || clip.Height <= 0)
+            if (!UiBatch.Push(b, clip, Vector2.Zero))
                 return;
 
-            Rectangle previous = b.GraphicsDevice.ScissorRectangle;
-
-            b.End();
-            b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, Clipping);
-            b.GraphicsDevice.ScissorRectangle = clip;
             try
             {
-                Utility.drawTextWithShadow(b, text, font, new Vector2(position.X - offset, position.Y), colour);
+                Utility.drawTextWithShadow(b, text, font, new Vector2(position.X - offset, position.Y), colour, shadowIntensity: shadow);
                 if (offset > loop - maxWidth)
-                    Utility.drawTextWithShadow(b, text, font, new Vector2(position.X - offset + loop, position.Y), colour);
+                    Utility.drawTextWithShadow(b, text, font, new Vector2(position.X - offset + loop, position.Y), colour, shadowIntensity: shadow);
             }
             finally
             {
-                b.End();
-                b.GraphicsDevice.ScissorRectangle = previous;
-                b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                UiBatch.Pop(b);
             }
         }
 

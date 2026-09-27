@@ -139,9 +139,9 @@ namespace StardewLogistics.Menus
             if (status.Coming > 0)
                 return (this.Translations.Get("stock.making", new { have, count = status.Coming }), Game1.textColor * 0.65f);
             if (status.Have >= row.Rule.Target)
-                return (this.Translations.Get("stock.stocked", new { have }), new Color(40, 120, 40));
+                return (this.Translations.Get("stock.stocked", new { have }), UiTheme.Good);
             if (status.Error != null)
-                return (this.Translations.Get("stock.error", new { have, reason = status.Error }), Color.Firebrick);
+                return (this.Translations.Get("stock.error", new { have, reason = status.Error }), UiTheme.Bad);
             return (this.Translations.Get("stock.checking", new { have }), Game1.textColor * 0.65f);
         }
 

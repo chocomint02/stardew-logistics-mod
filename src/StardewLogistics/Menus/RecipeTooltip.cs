@@ -126,7 +126,7 @@ namespace StardewLogistics.Menus
                     line.Counts,
                     Game1.smallFont,
                     new Vector2(x + width - Padding - line.CountWidth, textY + 4),
-                    line.Enough ? Game1.textColor : Color.Firebrick
+                    line.Enough ? Game1.textColor : UiTheme.Bad
                 );
 
                 textY += RowHeight;

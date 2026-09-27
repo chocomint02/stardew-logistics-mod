@@ -94,6 +94,14 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void draw(SpriteBatch b)
         {
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             b.Draw(Game1.fadeToBlackRect, Game1.graphics.GraphicsDevice.Viewport.Bounds, Color.Black * 0.4f);
             Game1.drawDialogueBox(this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, false, true);
 
@@ -126,7 +134,7 @@ namespace StardewLogistics.Menus
             // What the channel is doing
             foreach ((string text, bool isProblem) in this.Status)
             {
-                Marquee.Draw(b, text, Game1.smallFont, new Vector2(left, y), contentWidth, isProblem ? Color.Firebrick : Game1.textColor);
+                Marquee.Draw(b, text, Game1.smallFont, new Vector2(left, y), contentWidth, isProblem ? UiTheme.Bad : Game1.textColor);
                 y += 36;
             }
 

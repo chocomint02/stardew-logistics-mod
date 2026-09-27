@@ -248,13 +248,13 @@ namespace StardewLogistics.Menus
                     if (this.ShowingBin)
                     {
                         Item item = summary.BinItems[index];
-                        item.drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
+                        item.drawInMenu(b, new Vector2(x, y), this.GridScale(index), 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
                         DrawSlotCount(b, NumberFormat.Abbreviate(item.Stack), x, y);
                     }
                     else
                     {
                         NetworkItemStack entry = this.SellStock[index];
-                        (entry.Icon ?? entry.Sample).drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
+                        (entry.Icon ?? entry.Sample).drawInMenu(b, new Vector2(x, y), this.GridScale(index), 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
                         DrawSlotCount(b, NumberFormat.Abbreviate(entry.Count), x, y);
                     }
                 }
@@ -274,7 +274,7 @@ namespace StardewLogistics.Menus
             string bin = summary.HasBin
                 ? this.Translations.Get("shipping.bin", new { count = NumberFormat.Full(summary.BinItems.Sum(item => (long)item.Stack)), gold = Selling.Gold(summary.BinValue) })
                 : this.Translations.Get("shipping.no-bin");
-            Marquee.DrawWrapped(b, bin, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 52), grid.Width, summary.HasBin ? Game1.textColor * 0.8f : Color.Firebrick, maxLines: 1);
+            Marquee.DrawWrapped(b, bin, Game1.smallFont, new Vector2(grid.X, grid.Bottom + 52), grid.Width, summary.HasBin ? Game1.textColor * 0.8f : UiTheme.Bad, maxLines: 1);
 
             Marquee.DrawWrapped(b, this.Translations.Get(this.ShowingBin ? "shipping.hint-bin" : "shipping.hint-storage"), Game1.smallFont, new Vector2(grid.X, grid.Bottom + 84), grid.Width, Game1.textColor * 0.6f);
         }

@@ -72,9 +72,9 @@ namespace StardewLogistics.Menus
             this.xPositionOnScreen = (Game1.uiViewport.Width - this.width) / 2;
             this.yPositionOnScreen = (Game1.uiViewport.Height - this.height) / 2;
 
-            Texture2D textBox = Game1.content.Load<Texture2D>("LooseSprites\\textBox");
-            this.QuantityBox = new TextBox(textBox, null, Game1.smallFont, Game1.textColor) { Width = 220, Height = 44, Text = this.Quantity.ToString() };
-            this.GoldBox = new TextBox(textBox, null, Game1.smallFont, Game1.textColor) { Width = 220, Height = 44, Text = "" };
+            Texture2D textBox = UiTheme.TextBoxTexture();
+            this.QuantityBox = new TextBox(textBox, null, Game1.smallFont, UiTheme.TextColour) { Width = 220, Height = 44, Text = this.Quantity.ToString() };
+            this.GoldBox = new TextBox(textBox, null, Game1.smallFont, UiTheme.TextColour) { Width = 220, Height = 44, Text = "" };
             this.LastQuantityText = this.QuantityBox.Text;
 
             this.Layout();
@@ -106,7 +106,7 @@ namespace StardewLogistics.Menus
                 if (parsed && this.UnitPrice > 0)
                     this.SetQuantity((long)Math.Ceiling(gold / (double)this.UnitPrice), clearGold: false);
 
-                SetTextColour(this.GoldBox, parsed && gold > this.Stored * (long)this.UnitPrice ? Color.Red : Game1.textColor);
+                SetTextColour(this.GoldBox, parsed && gold > this.Stored * (long)this.UnitPrice ? UiTheme.Bad : UiTheme.TextColour);
             }
         }
 
@@ -179,6 +179,14 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void draw(SpriteBatch b)
         {
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.5f);
             drawTextureBox(b, this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White);
 
@@ -216,11 +224,11 @@ namespace StardewLogistics.Menus
             Utility.drawTextWithShadow(b, this.Translations.Get("sell.max-value", new { count = NumberFormat.Full(this.Stored), gold = Selling.Gold((double)this.Stored * this.UnitPrice) }), Game1.smallFont, new Vector2(left, y + 36), Game1.textColor * 0.75f);
 
             if (!this.HasBin)
-                Marquee.DrawWrapped(b, this.Translations.Get("sell.no-bin"), Game1.smallFont, new Vector2(left, y + 72), this.width - 64, Color.Firebrick, maxLines: 1);
+                Marquee.DrawWrapped(b, this.Translations.Get("sell.no-bin"), Game1.smallFont, new Vector2(left, y + 72), this.width - 64, UiTheme.Bad, maxLines: 1);
 
             bool canShip = this.HasBin && this.Quantity > 0;
             drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), this.CancelButton.X, this.CancelButton.Y, this.CancelButton.Width, this.CancelButton.Height, Color.White, 2f, drawShadow: false);
-            drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), this.ShipButton.X, this.ShipButton.Y, this.ShipButton.Width, this.ShipButton.Height, canShip ? Color.LightGreen : Color.Gray, 2f, drawShadow: false);
+            UiTheme.DrawButton(b, new Rectangle(this.ShipButton.X, this.ShipButton.Y, this.ShipButton.Width, this.ShipButton.Height), canShip ? Color.LightGreen : Color.Gray, 2f);
             foreach ((Rectangle bounds, string key, bool enabled) in new[] { (this.CancelButton, "sell.cancel", true), (this.ShipButton, "sell.ship", canShip) })
             {
                 string label = this.Translations.Get(key);

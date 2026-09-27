@@ -237,7 +237,7 @@ namespace StardewLogistics.Menus
                     entry.Output.drawInMenu(
                         b,
                         new Vector2(x, y),
-                        1f,
+                        this.GridScale(index),
                         entry.CanCraft ? 1f : 0.3f,
                         0.9f,
                         StackDrawType.Hide,

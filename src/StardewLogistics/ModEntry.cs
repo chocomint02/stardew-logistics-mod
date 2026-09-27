@@ -49,6 +49,10 @@ namespace StardewLogistics
         {
             this.Config = helper.ReadConfig<ModConfig>();
             this.Config.Normalise();
+            this.Config.ApplyAppearance();
+
+            // The terminal's Settings tab changes appearance too, and saves it here.
+            TerminalMenu.SaveConfig = config => this.Helper.WriteConfig(config);
 
             Log.Initialise(this.Monitor);
             ItemSource.Initialise(helper.ModRegistry);
@@ -63,6 +67,7 @@ namespace StardewLogistics
 
             HarmonyLib.Harmony harmony = new(this.ModManifest.UniqueID);
             CaskPatches.Apply(harmony, this.Jobs.ReclaimFromCask);
+            DeviceAnimations.Apply(harmony);
             this.Harvesters = new HarvesterRunner(this.Networks, helper.Translation);
             SoilPatches.Apply(harmony, this.Harvesters.IsProtected);
             AccessorySlot.Apply(harmony, helper.Translation, () => this.Config.OpenWirelessTerminalKey.ToString());
@@ -137,6 +142,8 @@ namespace StardewLogistics
                 e.LoadFromModFile<Texture2D>("assets/cable-floor.png", AssetLoadPriority.Medium);
             else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.UiIconsTexture))
                 e.LoadFromModFile<Texture2D>("assets/ui-icons.png", AssetLoadPriority.Medium);
+            else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.CablePulseTexture))
+                e.LoadFromModFile<Texture2D>("assets/cable-pulse.png", AssetLoadPriority.Medium);
             else if (e.NameWithoutLocale.IsEquivalentTo(ModIds.ItemsTexture))
                 e.LoadFromModFile<Texture2D>("assets/items.png", AssetLoadPriority.Medium);
         }
@@ -161,10 +168,12 @@ namespace StardewLogistics
                 {
                     this.Config = new ModConfig();
                     this.Config.Normalise();
+                    this.Config.ApplyAppearance();
                 },
                 save: () =>
                 {
                     this.Config.Normalise();
+                    this.Config.ApplyAppearance();
                     this.Helper.WriteConfig(this.Config);
                     this.Networks.InvalidateAll();
                 }
@@ -179,6 +188,10 @@ namespace StardewLogistics
             api.AddBoolOption(this.ModManifest, () => this.Config.UnlockAllRecipes, value => this.Config.UnlockAllRecipes = value, () => i18n.Get("config.recipes.name"), () => i18n.Get("config.recipes.tooltip"));
             api.AddKeybindList(this.ModManifest, () => this.Config.OpenTerminalKey, value => this.Config.OpenTerminalKey = value, () => i18n.Get("config.terminal-key.name"), () => i18n.Get("config.terminal-key.tooltip"));
             api.AddKeybindList(this.ModManifest, () => this.Config.OpenWirelessTerminalKey, value => this.Config.OpenWirelessTerminalKey = value, () => i18n.Get("config.wireless-key.name"), () => i18n.Get("config.wireless-key.tooltip"));
+
+            api.AddSectionTitle(this.ModManifest, () => i18n.Get("config.section.appearance"));
+            new ThemePicker(() => this.Config, i18n).Register(api, this.ModManifest);
+            api.AddNumberOption(this.ModManifest, () => this.Config.AnimationSpeed, value => this.Config.AnimationSpeed = value, () => i18n.Get("config.animation-speed.name"), () => i18n.Get("config.animation-speed.tooltip"), 0, 300, 10, value => value == 0 ? i18n.Get("config.animation-speed.off") : value + "%");
         }
 
         /// <summary>Clears cached networks when a save is loaded.</summary>
@@ -233,6 +246,7 @@ namespace StardewLogistics
 
             // Jobs belong to the save that queued them; carried into the next save they'd drive its machines.
             this.Jobs.Reset();
+            DeviceAnimations.Reset();
             this.Stock.Reset();
             this.Ledger.Reset();
             this.Sync.Reset();
@@ -265,6 +279,13 @@ namespace StardewLogistics
             }
 
             this.Networks.Invalidate(e.Location);
+
+            // A device just put down plays its boot sequence.
+            foreach (KeyValuePair<Vector2, SObject> added in e.Added)
+            {
+                if (DeviceAnimations.IsAnimated(added.Value))
+                    DeviceAnimations.Placed(e.Location, added.Key);
+            }
 
             // Where the wireless devices are is worked out across the whole world, so only placing or removing
             // one of them makes that search run again.

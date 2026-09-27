@@ -1,244 +1,422 @@
 #!/usr/bin/env python3
-"""Generates the mod's big-craftable spritesheet.
+"""Generates the mod's big-craftable spritesheet, animation frames included.
 
-The sheet is 128x32: six 16x32 sprites laid out left to right, indexed by the
-``SpriteIndex`` values in ``Integrations/ContentInjector.cs``:
+The sheet is 128 pixels wide: eight 16x32 sprites to a row, indexed by the ``SpriteIndex`` values in
+``Integrations/ContentInjector.cs`` and ``Integrations/DeviceAnimations.cs``.
 
-    0 auto-harvester   1 (unused)   2 terminal   3 crafting terminal   4 wireless transmitter   5 wireless receiver
+    row 0      the still sprites, shown in menus and the inventory:
+               0 auto-harvester   1 (unused)   2 storage terminal   3 crafting terminal
+               4 wireless transmitter   5 wireless receiver
+    rows 1-10  two rows per device, in the order below: its boot sequence, played once when it's placed,
+               then its running loop. Eight frames each.
 
-Edit the drawing calls below and re-run. Uses only the standard library, so it
-needs no Pillow or other image dependency.
+Every device shares one design: a graphite casing 12 pixels wide with a dark outline and rounded corners, lit
+along its top edge, standing on the same plinth with a status light in its middle. Each is symmetric about its
+centre -- the drawing helpers mirror everything -- and has one accent colour of its own.
 
 Usage:
-    python3 tools/make_sprites.py              # write src/StardewLogistics/assets/craftables.png
-    python3 tools/make_sprites.py --preview    # also write an 8x preview to tools/preview.png
+    python tools/make_sprites.py              # write src/StardewLogistics/assets/craftables.png
+    python tools/make_sprites.py --preview    # also write enlarged previews to tools/
 """
 
+import math
 import os
 import sys
 
-# Write relative to the repo root, wherever the script is run from.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pixelkit import *  # noqa: E402,F401,F403
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHEET_PATH = os.path.join(ROOT, "src", "StardewLogistics", "assets", "craftables.png")
 
-import zlib
-import struct
+SW, SH = 16, 32
+COLUMNS = 8
+FRAMES = 8
 
-W, H = 128, 32
-px = [[(0,0,0,0) for _ in range(W)] for _ in range(H)]
+# The order devices' animation rows come in. Must match DeviceAnimations.cs.
+DEVICES = ["harvester", "terminal", "crafting", "transmitter", "receiver"]
+STILL_INDEX = {"harvester": 0, "terminal": 2, "crafting": 3, "transmitter": 4, "receiver": 5}
 
-OUT   = (34, 30, 44, 255)
-LIGHT = (156, 162, 178, 255)
-MID   = (108, 115, 136, 255)
-DARK  = (72, 78, 96, 255)
-CYAN  = (92, 222, 240, 255)
-CYAND = (44, 140, 168, 255)
-AMBER = (246, 192, 92, 255)
-AMBRD = (196, 132, 44, 255)
-GREEN = (112, 220, 124, 255)
-ORANGE= (242, 150, 68, 255)
-SCREEN= (26, 42, 60, 255)
-COPPER= (196, 124, 72, 255)
-
-def p(ox, x, y, c):
-    X = ox + x
-    if 0 <= X < W and 0 <= y < H:
-        px[y][X] = c
-
-def rect(ox, x0, y0, x1, y1, c):
-    for y in range(y0, y1 + 1):
-        for x in range(x0, x1 + 1):
-            p(ox, x, y, c)
-
-def box(ox, x0, y0, x1, y1, fill, light, dark):
-    """A bevelled metal panel with an outline."""
-    rect(ox, x0, y0, x1, y1, OUT)
-    rect(ox, x0 + 1, y0 + 1, x1 - 1, y1 - 1, fill)
-    rect(ox, x0 + 1, y0 + 1, x1 - 1, y0 + 1, light)
-    rect(ox, x0 + 1, y0 + 1, x0 + 1, y1 - 1, light)
-    rect(ox, x0 + 1, y1 - 1, x1 - 1, y1 - 1, dark)
-    rect(ox, x1 - 1, y0 + 1, x1 - 1, y1 - 1, dark)
-
-# ---- 0: Auto-Harvester -------------------------------------------------
-o = 0
-LEAF  = (84, 176, 72, 255)
-LEAFD = (52, 120, 52, 255)
-# cabinet
-box(o, 1, 17, 14, 31, MID, LIGHT, DARK)
-rect(o, 3, 31, 12, 31, OUT)
-# window with a sprout growing in it
-rect(o, 3, 20, 12, 28, OUT)
-rect(o, 4, 21, 11, 27, SCREEN)
-rect(o, 4, 26, 11, 27, (96, 64, 40, 255))          # soil
-rect(o, 7, 22, 8, 25, LEAFD)                        # stem
-rect(o, 5, 22, 6, 23, LEAF)                         # left leaf
-rect(o, 9, 21, 10, 22, LEAF)                        # right leaf
-# seed hopper on top
-box(o, 3, 10, 11, 17, COPPER, LIGHT, DARK)
-rect(o, 5, 12, 9, 13, (60, 40, 24, 255))            # hopper mouth
-p(o, 6, 12, AMBER)
-p(o, 8, 13, AMBER)
-# scythe arm rising from the right shoulder
-rect(o, 12, 6, 13, 17, OUT)
-rect(o, 12, 7, 12, 16, LIGHT)
-# curved blade sweeping left over the hopper
-for (x, y) in ((13, 4), (12, 3), (11, 3), (10, 3), (9, 3), (8, 4), (7, 4), (6, 5), (5, 6)):
-    p(o, x, y, OUT)
-for (x, y) in ((12, 4), (11, 4), (10, 4), (9, 4), (8, 5), (7, 5), (6, 6)):
-    p(o, x, y, (214, 220, 232, 255))
-# status light
-p(o, 2, 29, GREEN)
-
-# ---- 1: Logistics Controller -------------------------------------------
-o = 16
-box(o, 1, 6, 14, 31, MID, LIGHT, DARK)
-# recessed core
-rect(o, 4, 11, 11, 22, OUT)
-rect(o, 5, 12, 10, 21, CYAND)
-rect(o, 6, 13, 9, 20, CYAN)
-rect(o, 7, 15, 8, 18, (230, 252, 255, 255))
-# vents
-for vy in (25, 27, 29):
-    rect(o, 3, vy, 12, vy, DARK)
-# corner bolts
-for bx, by in ((3, 8), (12, 8)):
-    p(o, bx, by, LIGHT)
-
-# ---- 2: Storage Terminal ------------------------------------------------
-o = 32
-# pedestal
-box(o, 3, 24, 12, 31, MID, LIGHT, DARK)
-rect(o, 5, 31, 10, 31, OUT)
-# angled screen housing
-box(o, 1, 7, 14, 25, MID, LIGHT, DARK)
-rect(o, 3, 9, 12, 21, OUT)
-rect(o, 4, 10, 11, 20, SCREEN)
-# rows of "items" on the screen
-for ry in (12, 15, 18):
-    for rx in (5, 7, 9):
-        rect(o, rx, ry, rx + 1, ry + 1, CYAN)
-# status light
-p(o, 13, 23, CYAN)
-
-# ---- 3: Crafting Terminal ----------------------------------------------
-o = 48
-box(o, 3, 24, 12, 31, MID, LIGHT, DARK)
-rect(o, 5, 31, 10, 31, OUT)
-box(o, 1, 7, 14, 25, MID, LIGHT, DARK)
-rect(o, 3, 9, 12, 21, OUT)
-rect(o, 4, 10, 11, 20, SCREEN)
-# a crafting grid rather than a stock list
-for ry in (11, 14, 17):
-    for rx in (5, 8):
-        rect(o, rx, ry, rx + 1, ry + 1, AMBER)
-rect(o, 5, 20, 10, 20, AMBRD)
-p(o, 13, 23, AMBER)
-
-# ---- 4: Wireless Transmitter -----------------------------------------
-o = 64
-# cabinet
-box(o, 2, 20, 13, 31, MID, LIGHT, DARK)
-rect(o, 4, 23, 11, 27, OUT)
-rect(o, 5, 24, 10, 26, SCREEN)
-rect(o, 6, 25, 9, 25, CYAN)
-rect(o, 4, 31, 11, 31, OUT)
-# mast
-rect(o, 7, 7, 8, 20, OUT)
-rect(o, 7, 8, 7, 19, LIGHT)
-rect(o, 8, 8, 8, 19, DARK)
-# cross braces
-for by in (12, 16):
-    rect(o, 6, by, 9, by, OUT)
-# beacon
-rect(o, 6, 3, 9, 6, OUT)
-rect(o, 7, 4, 8, 5, AMBER)
-p(o, 7, 4, (255, 236, 170, 255))
-# broadcast arcs either side of the beacon
-for (x, y) in ((4, 3), (3, 4), (3, 5), (4, 6)):
-    p(o, x, y, CYAN)
-for (x, y) in ((11, 3), (12, 4), (12, 5), (11, 6)):
-    p(o, x, y, CYAN)
-for (x, y) in ((2, 2), (1, 3), (1, 4), (1, 5), (1, 6), (2, 7)):
-    p(o, x, y, CYAND)
-for (x, y) in ((13, 2), (14, 3), (14, 4), (14, 5), (14, 6), (13, 7)):
-    p(o, x, y, CYAND)
-
-# ---- 5: Wireless Receiver -----------------------------------------------
-o = 80
-# cabinet
-box(o, 2, 20, 13, 31, MID, LIGHT, DARK)
-rect(o, 4, 23, 11, 27, OUT)
-rect(o, 5, 24, 10, 26, SCREEN)
-rect(o, 6, 25, 9, 25, GREEN)
-rect(o, 4, 31, 11, 31, OUT)
-# post
-rect(o, 7, 13, 8, 20, OUT)
-rect(o, 7, 14, 7, 19, LIGHT)
-# dish: a bowl opening upward, the region between two ellipses below the rim line
-def in_ellipse(x, y, cx, cy, rx, ry):
-    return ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1.0
-bowl = set()
-for y in range(4, 14):
-    for x in range(0, 16):
-        if y >= 6 and in_ellipse(x, y, 8, 5, 7.3, 8.0) and not in_ellipse(x, y, 8, 3.0, 5.0, 6.0):
-            bowl.add((x, y))
-for (x, y) in bowl:
-    edge = any((x + dx, y + dy) not in bowl for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
-    p(o, x, y, OUT if edge else (LIGHT if y < 10 else MID))
-# rim glints
-p(o, 1, 6, (214, 220, 232, 255))
-p(o, 14, 6, (214, 220, 232, 255))
-# feed arm rising from the bowl to the focal point, with a receiving light
-rect(o, 7, 5, 8, 10, DARK)
-rect(o, 6, 2, 9, 4, OUT)
-rect(o, 7, 3, 8, 3, GREEN)
-p(o, 7, 3, (190, 255, 196, 255))
-
-# ---- encode -------------------------------------------------------------
-raw = b"".join(
-    b"\x00" + b"".join(struct.pack("BBBB", *px[y][x]) for x in range(W))
-    for y in range(H)
-)
-
-def chunk(tag, data):
-    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff)
-
-png = (b"\x89PNG\r\n\x1a\n"
-       + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 6, 0, 0, 0))
-       + chunk(b"IDAT", zlib.compress(raw, 9))
-       + chunk(b"IEND", b""))
-
-os.makedirs(os.path.dirname(SHEET_PATH), exist_ok=True)
-with open(SHEET_PATH, "wb") as handle:
-    handle.write(png)
-print("wrote", os.path.relpath(SHEET_PATH, ROOT), "-", len(png), "bytes")
+# Which running frame each still sprite shows: the one that says best what the device does.
+STILL_FRAME = {"crafting": 4, "transmitter": 2, "receiver": 6}
 
 
-# ---- optional preview ---------------------------------------------------
-if "--preview" in sys.argv:
-    SCALE = 8
-    ow, oh = W * SCALE, H * SCALE
-    rows = []
-    for y in range(oh):
-        line = []
-        for x in range(ow):
-            r, g, b, a = px[y // SCALE][x // SCALE]
-            # checkerboard behind the sprites so transparency is visible
-            shade = (60, 60, 70) if ((x // SCALE // 2) + (y // SCALE // 2)) % 2 == 0 else (85, 85, 95)
-            f = a / 255.0
-            line.append(tuple(int(c * f + s * (1 - f)) for c, s in zip((r, g, b), shade)))
-        rows.append(line)
+# ---- shared parts ---------------------------------------------------------------------------------------------
+def plinth(s, led):
+    """The foot every device stands on, with its status light."""
+    s.prect(3, 28, 7, 31, OUT)
+    s.prect(4, 28, 7, 30, CASE_D)
+    s.prect(4, 28, 7, 28, CASE_DD)  # shadow under the body
+    s.pair(3, 31, CLEAR)            # rounded foot
+    s.prect(7, 29, 7, 29, led)
 
-    raw_preview = b"".join(
-        b"\x00" + b"".join(struct.pack("BBB", *pixel) for pixel in row)
-        for row in rows
-    )
-    png_preview = (b"\x89PNG\r\n\x1a\n"
-                   + chunk(b"IHDR", struct.pack(">IIBBBBB", ow, oh, 8, 2, 0, 0, 0))
-                   + chunk(b"IDAT", zlib.compress(raw_preview, 9))
-                   + chunk(b"IEND", b""))
 
-    preview_path = os.path.join(ROOT, "tools", "preview.png")
-    with open(preview_path, "wb") as handle:
-        handle.write(png_preview)
-    print("wrote", os.path.relpath(preview_path, ROOT))
+def body(s, top, bottom, x0=2):
+    """A casing panel: outline with rounded corners, lit top edge, darker base."""
+    s.prect(x0 + 1, top, 7, top, OUT)
+    s.prect(x0 + 1, bottom, 7, bottom, OUT)
+    s.prect(x0, top + 1, x0, bottom - 1, OUT)
+    s.prect(x0 + 1, top + 1, 7, bottom - 1, CASE)
+    s.prect(x0 + 1, top + 1, 7, top + 1, CASE_L)
+    s.pair(x0 + 1, top + 1, CASE_HI)
+    s.prect(x0 + 1, bottom - 1, 7, bottom - 1, CASE_D)
+
+
+def screen(s, x0, y0, x1, y1, glass):
+    """A recessed screen: a dark bezel line round a pane of glass."""
+    s.rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1, OUT)
+    s.rect(x0, y0, x1, y1, glass)
+
+
+def ring(s, cx, cy, radius, colour, width=0.55, keep=None):
+    """A circle of pixels at a radius; ``keep`` decides which of them to draw."""
+    for y in range(SH):
+        for x in range(SW):
+            d = math.hypot(x + 0.5 - cx, y + 0.5 - cy)
+            if abs(d - radius) < width and (keep is None or keep(x + 0.5 - cx, y + 0.5 - cy)):
+                s.set(x, y, colour)
+
+
+def crt(s, x0, y0, x1, y1, stage, lit, dim, glow):
+    """The first frames of a screen powering on: dark, a line across the middle, the line opening, a flash."""
+    mid = (y0 + y1) // 2
+    if stage == 0:
+        return
+    if stage == 1:
+        s.rect(x0 + 2, mid, x1 - 2, mid + 1, lit)
+        return
+    if stage == 2:
+        s.rect(x0, mid - 2, x1, mid + 3, glow)
+        s.rect(x0, mid, x1, mid + 1, lit)
+        return
+    s.rect(x0, y0, x1, y1, dim)
+    s.rect(x0 + 1, y0 + 1, x1 - 1, y1 - 1, lit)
+
+
+# ---- storage terminal: a console with a list of stock scrolling up its screen --------------------------------
+def terminal(boot=None, frame=0):
+    s = Canvas(SW, SH)
+    body(s, 7, 27)
+    plinth(s, GREEN if boot is None or boot >= 7 else (AMBER if boot % 2 else CASE_DD))
+
+    # Crest: a rounded cap with a light bar, lit once it's running.
+    s.prect(5, 3, 7, 3, OUT)
+    s.prect(4, 4, 4, 6, OUT)
+    s.prect(5, 4, 7, 6, CASE)
+    s.prect(5, 4, 7, 4, CASE_L)
+    s.prect(6, 5, 7, 5, CYAN if boot is None or boot >= 3 else CASE_DD)
+
+    # Speaker grille under the screen.
+    for x in (4, 6):
+        s.pair(x, 24, CASE_D)
+        s.pair(x, 25, CASE_DD)
+
+    x0, y0, x1, y1 = 4, 10, 11, 21
+    if boot is not None and boot < 4:
+        screen(s, x0, y0, x1, y1, GLASS)
+        crt(s, x0, y0, x1, y1, boot, CYAN_HI, CYAN_D, alpha(CYAN, 0.35))
+        return s
+
+    screen(s, x0, y0, x1, y1, CYAN_G)
+    if boot is not None:
+        # The network's mark -- three linked nodes -- then a loading bar.
+        s.prect(7, 12, 7, 13, CYAN)
+        s.prect(4, 17, 5, 18, CYAN)
+        s.prect(6, 14, 6, 16, CYAN_D)
+        s.prect(6, 18, 7, 18, CYAN_D)
+        if boot >= 5:
+            s.prect(5, 20, 7, 20, CYAN_D)
+            fill = {5: 1, 6: 2, 7: 3}[boot]
+            s.prect(8 - fill, 20, 7, 20, CYAN_HI)
+        return s
+
+    # Running: a header, and rows of stock scrolling up a pixel a frame.
+    s.prect(4, 10, 7, 10, CYAN)
+    pattern = [(5, CYAN), (5, CYAN_D), None, (6, CYAN_D), None, (4, CYAN), (4, CYAN_D), None]
+    for y in range(12, 22):
+        row = pattern[(y - 12 + frame) % 8]
+        if row:
+            s.prect(row[0], y, 7, y, row[1])
+    return s
+
+
+def cog(s, cx, cy, hub):
+    """A small cog: a disc with eight teeth, outlined, with a lit hub."""
+    shape = set()
+    for y in range(SH):
+        for x in range(SW):
+            dx, dy = x + 0.5 - cx, y + 0.5 - cy
+            d = math.hypot(dx, dy)
+            angle = math.atan2(dy, dx) % (math.pi / 4)
+            tooth = min(angle, math.pi / 4 - angle) < 0.22
+            if d <= 2.6 or (tooth and d <= 3.7):
+                shape.add((x, y))
+    for (x, y) in shape:
+        edge = any((x + dx, y + dy) not in shape for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+        s.set(x, y, OUT if edge else (CASE_L if y < cy else CASE))
+    s.prect(7, int(cy) - 1, 7, int(cy), hub)
+
+
+# ---- crafting terminal: a crafting grid filling in, then its product ------------------------------------------
+def crafting(boot=None, frame=0):
+    s = Canvas(SW, SH)
+    body(s, 7, 27)
+    plinth(s, GREEN if boot is None or boot >= 7 else (AMBER if boot % 2 else CASE_DD))
+
+    # Crest: a cog, eight teeth round a lit hub.
+    lit = boot is None or boot >= 3
+    cog(s, 8, 4.0, AMBER if lit else CASE_DD)
+
+    for x in (4, 6):
+        s.pair(x, 24, CASE_D)
+        s.pair(x, 25, CASE_DD)
+
+    x0, y0, x1, y1 = 4, 10, 11, 21
+    if boot is not None and boot < 4:
+        screen(s, x0, y0, x1, y1, GLASS)
+        crt(s, x0, y0, x1, y1, boot, AMBER_HI, AMBER_D, alpha(AMBER, 0.35))
+        return s
+
+    screen(s, x0, y0, x1, y1, GLASS)
+    empty = AMBER_G
+    cells = {(cx, cy): empty for cx in (4, 7, 10) for cy in (11, 14, 17)}
+
+    if boot is not None:
+        # Boot: the grid draws itself in, row by row, then the output slot.
+        rows = {4: [11], 5: [11, 14], 6: [11, 14, 17], 7: [11, 14, 17]}[boot]
+        for (cx, cy) in cells:
+            if cy in rows:
+                s.rect(cx, cy, cx + 1, cy + 1, empty)
+        if boot == 7:
+            s.prect(6, 20, 7, 21, empty)
+        return s
+
+    # Running: ingredients go in from the centre outwards, the product appears, and the grid clears.
+    order = [[], [(7, 14)], [(7, 11), (7, 17)], [(4, 14), (10, 14)], [(4, 11), (10, 11), (4, 17), (10, 17)]]
+    filled = set()
+    for step in order[:min(frame, 4) + 1]:
+        filled.update(step)
+    if frame >= 6:
+        filled = set()
+    for (cx, cy), colour in cells.items():
+        on = (cx, cy) in filled
+        s.rect(cx, cy, cx + 1, cy + 1, (AMBER_HI if frame == 5 else AMBER) if on else colour)
+
+    s.prect(7, 19, 7, 19, AMBER_D if frame >= 5 else empty)
+    output = {5: AMBER, 6: AMBER_HI, 7: AMBER}.get(frame, empty)
+    s.prect(6, 20, 7, 21, output)
+    return s
+
+
+# ---- the wireless pair's shared cabinet ----------------------------------------------------------------------
+def cabinet(s, boot, accent, accent_dim, glass, frame):
+    body(s, 18, 27)
+    plinth(s, GREEN if boot is None or boot >= 7 else (AMBER if boot % 2 else CASE_DD))
+    screen(s, 5, 21, 10, 24, GLASS if boot is not None and boot < 1 else glass)
+
+    # A signal meter: bars from the middle out, rising and falling.
+    if boot is not None and boot < 1:
+        return
+    heights = [2, 3, 4, 3, 2, 3, 4, 3] if boot is None else [1, 1, 2, 2, 3, 3, 4, 4]
+    level = heights[frame % 8] if boot is None else heights[boot]
+    for i, x in enumerate((7, 6, 5)):
+        h = max(0, level - i)
+        if h:
+            s.prect(x, 25 - h, x, 24, accent if i == 0 else accent_dim)
+
+
+# ---- wireless transmitter: a mast with a beacon, sending rings out ---------------------------------------------
+def transmitter(boot=None, frame=0):
+    s = Canvas(SW, SH)
+    cabinet(s, boot, CYAN, CYAN_D, CYAN_G, frame)
+
+    # Mast and struts.
+    s.prect(6, 8, 6, 17, OUT)
+    s.prect(7, 8, 7, 17, CASE_L)
+    for i, y in enumerate(range(12, 18)):
+        x = 5 - (i // 2)
+        s.pair(x, y, OUT)
+    s.prect(6, 11, 7, 11, OUT)
+    s.prect(6, 14, 7, 14, OUT)
+
+    # Lights up the mast, climbing as it boots.
+    if boot is not None and 2 <= boot:
+        for y in [16, 13, 10][:boot - 1]:
+            s.prect(7, y, 7, y, CYAN)
+
+    # Beacon.
+    s.prect(6, 3, 7, 3, OUT)
+    s.prect(5, 4, 5, 6, OUT)
+    s.prect(6, 7, 7, 7, OUT)
+    on = boot is None or boot >= 5
+    pulse = boot is None and frame in (0, 1)
+    s.prect(6, 4, 7, 6, (AMBER_HI if pulse else AMBER) if on else CASE_D)
+    s.pair(6, 4, AMBER_HI if on else CASE_L)
+
+    # Rings going out from the beacon, each fading as it widens; two at a time, so the signal never stops.
+    if boot is None:
+        for r in (2.5 + (frame % 8) * 0.9, 2.5 + ((frame + 4) % 8) * 0.9):
+            fade = max(0.0, 1.0 - (r - 2.5) / 7.5)
+            if fade > 0.05:
+                ring(s, 8, 5, r, alpha(CYAN, fade), keep=lambda dx, dy: abs(dy) <= abs(dx) * 0.9 and abs(dx) > 2)
+    elif boot >= 6:
+        ring(s, 8, 5, 2.5 + (boot - 6) * 1.2, CYAN, keep=lambda dx, dy: abs(dy) <= abs(dx) * 0.9 and abs(dx) > 2)
+    return s
+
+
+# ---- wireless receiver: a dish, with rings arriving at its feed ------------------------------------------------
+def receiver(boot=None, frame=0):
+    s = Canvas(SW, SH)
+    cabinet(s, boot, GREEN, GREEN_D, GREEN_G, frame)
+
+    # Post.
+    s.prect(6, 13, 6, 17, OUT)
+    s.prect(7, 13, 7, 17, CASE)
+
+    # The dish: a shallow bowl seen a little from above, its dark inner face showing inside a lit rim.
+    s.prect(2, 7, 7, 7, OUT)
+    s.pair(1, 8, OUT)
+    s.prect(2, 8, 7, 8, CASE_HI if boot is None or boot >= 3 else CASE_L)
+    s.pair(1, 9, OUT)
+    s.prect(2, 9, 7, 9, CASE_DD)
+    s.pair(2, 10, OUT)
+    s.prect(3, 10, 7, 10, CASE_L)
+    s.pair(3, 11, OUT)
+    s.prect(4, 11, 7, 11, CASE)
+    s.prect(4, 12, 7, 12, OUT)
+    s.prect(6, 12, 7, 12, CASE_D)
+
+    # Two struts from the rim up to the feed, and its receiving light.
+    for x, y in ((3, 7), (4, 6), (5, 5)):
+        s.pair(x, y, OUT)
+    s.prect(6, 2, 7, 2, OUT)
+    s.pair(5, 3, OUT)
+    s.prect(6, 4, 7, 4, OUT)
+    lit = boot is None or boot >= 4
+    arriving = boot is None and frame == 7
+    s.prect(6, 3, 7, 3, (GREEN_HI if arriving or boot == 7 else GREEN) if lit else CASE_DD)
+
+    # Rings closing in on the feed from above, brightening as they arrive.
+    if boot is None:
+        r = 8.5 - frame * 0.85
+        ring(s, 8, 3.5, r, alpha(GREEN, 0.25 + 0.75 * (1 - r / 8.5)), keep=lambda dx, dy: dy < 0 and abs(dx) > 1.5)
+    elif boot >= 5:
+        r = 7.5 - (boot - 5) * 2.2
+        ring(s, 8, 3.5, r, GREEN, keep=lambda dx, dy: dy < 0 and abs(dx) > 1.5)
+    return s
+
+
+# ---- auto-harvester: a seed hopper over a grow window ----------------------------------------------------------
+def harvester(boot=None, frame=0):
+    s = Canvas(SW, SH)
+    body(s, 15, 27)
+    plinth(s, GREEN if boot is None or boot >= 7 else (AMBER if boot % 2 else CASE_DD))
+
+    # Hopper: a funnel full of seed, narrowing into a chute.
+    s.prect(2, 4, 7, 4, OUT)
+    s.prect(2, 5, 2, 6, OUT)
+    s.prect(3, 5, 7, 5, CASE_L)
+    s.pair(3, 5, CASE_HI)
+    for y, x in ((6, 3), (7, 3), (8, 4), (9, 4), (10, 5), (11, 5)):
+        s.pair(x - 1 if y > 6 else 2, y, OUT) if y > 6 else None
+        s.prect(x, y, 7, y, CASE)
+        s.pair(x, y, CASE_L)
+    s.prect(2, 6, 2, 6, OUT)
+    s.pair(2, 7, OUT)
+    s.prect(4, 6, 7, 6, SEED)
+    s.prect(5, 6, 5, 6, SOIL)
+    s.prect(6, 12, 7, 14, CASE_D)
+    s.pair(5, 12, OUT)
+    s.pair(5, 13, OUT)
+    s.pair(5, 14, OUT)
+
+    # A seed dropping down the chute while it runs.
+    if boot is None and frame in (1, 2, 3):
+        s.prect(7, 11 + frame, 7, 11 + frame, SEED)
+
+    # Grow window.
+    x0, y0, x1, y1 = 4, 18, 11, 25
+    screen(s, x0, y0, x1, y1, GLASS if boot is not None and boot < 1 else GREEN_G)
+    if boot is not None and boot < 1:
+        return s
+
+    # The grow light along its top, gently pulsing.
+    glow = 0.55 + 0.45 * (0.5 + 0.5 * math.cos(frame / 8 * 2 * math.pi)) if boot is None else (1.0 if boot >= 2 else 0.5)
+    s.prect(4, 18, 7, 18, mix(GREEN_D, GREEN_HI, glow))
+    for y in range(19, 22):
+        s.prect(4, y, 7, y, alpha(GREEN, 0.10 * glow * (22 - y)))
+
+    # Soil.
+    if boot is None or boot >= 2:
+        s.prect(4, 24, 7, 25, SOIL)
+        s.prect(4, 25, 7, 25, SOIL_D)
+        s.pair(5, 24, SOIL_D)
+
+    # The sprout: planted, growing, then swaying as it runs.
+    growth = 5 if boot is None else max(0, boot - 2)
+    if growth >= 1:
+        s.prect(7, 23, 7, 23, SEED)
+    if growth >= 2:
+        s.prect(7, 22, 7, 23, LEAF_D)
+    if growth >= 3:
+        s.prect(7, 21, 7, 23, LEAF_D)
+    if growth >= 4:
+        # Leaves out to either side; while it runs, their tips lift and settle as if in a breeze.
+        s.prect(5, 20, 6, 20, LEAF)
+        s.pair(5, 21, LEAF_D)
+        s.prect(7, 20, 7, 20, LEAF)
+        tip = 19 if boot is None and frame in (2, 3, 4) else 20
+        s.pair(4, tip, LEAF)
+    if growth >= 5:
+        s.prect(6, 19, 7, 19, LEAF)
+    return s
+
+
+DRAW = {"terminal": terminal, "crafting": crafting, "transmitter": transmitter, "receiver": receiver, "harvester": harvester}
+
+
+def build_sheet():
+    rows = 1 + len(DEVICES) * 2
+    sheet = Canvas(SW * COLUMNS, SH * rows)
+
+    for name, index in STILL_INDEX.items():
+        still = DRAW[name](frame=STILL_FRAME.get(name, 0))
+        sheet.paste(still, (index % COLUMNS) * SW, (index // COLUMNS) * SH)
+
+    for d, name in enumerate(DEVICES):
+        for f in range(FRAMES):
+            sheet.paste(DRAW[name](boot=f), f * SW, (1 + (d * 2)) * SH)
+            sheet.paste(DRAW[name](frame=f), f * SW, (2 + (d * 2)) * SH)
+
+    return sheet
+
+
+def check_symmetry():
+    """Every still sprite and every frame must be symmetric; the drawing helpers are meant to guarantee it."""
+    problems = []
+    for name in DEVICES:
+        for f in range(FRAMES):
+            for kind, sprite in (("still" if f == 0 else "run", DRAW[name](frame=f)), ("boot", DRAW[name](boot=f))):
+                if not sprite.is_symmetric():
+                    problems.append(f"{name} {kind} frame {f}")
+    return problems
+
+
+if __name__ == "__main__":
+    sheet = build_sheet()
+    write_png(SHEET_PATH, sheet)
+    print("wrote", os.path.relpath(SHEET_PATH, ROOT), f"({sheet.w}x{sheet.h})")
+
+    asymmetric = check_symmetry()
+    if asymmetric:
+        print("NOT SYMMETRIC:", ", ".join(asymmetric))
+
+    if "--preview" in sys.argv:
+        write_preview(os.path.join(ROOT, "tools", "preview.png"), sheet, scale=6)
+
+        # The still sprites side by side, as they'd stand in a row on the farm.
+        row = Canvas(SW * len(DEVICES) + 4 * (len(DEVICES) - 1), SH)
+        for i, name in enumerate(["terminal", "crafting", "transmitter", "receiver", "harvester"]):
+            row.paste(DRAW[name](frame=STILL_FRAME.get(name, 0)), i * (SW + 4), 0)
+        write_preview(os.path.join(ROOT, "tools", "preview-still.png"), row, scale=10)
+        print("wrote tools/preview.png and tools/preview-still.png")

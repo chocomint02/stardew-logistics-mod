@@ -62,9 +62,9 @@ namespace StardewLogistics.Menus
             this.xPositionOnScreen = (Game1.uiViewport.Width - this.width) / 2;
             this.yPositionOnScreen = (Game1.uiViewport.Height - this.height) / 2;
 
-            Texture2D textBox = Game1.content.Load<Texture2D>("LooseSprites\\textBox");
-            this.NameBox = new TextBox(textBox, null, Game1.smallFont, Game1.textColor) { X = this.xPositionOnScreen + 220, Y = this.yPositionOnScreen + 110, Width = 460, Height = 44 };
-            this.AmountBox = new TextBox(textBox, null, Game1.smallFont, Game1.textColor) { X = this.xPositionOnScreen + 220, Y = this.yPositionOnScreen + 180, Width = 260, Height = 44 };
+            Texture2D textBox = UiTheme.TextBoxTexture();
+            this.NameBox = new TextBox(textBox, null, Game1.smallFont, UiTheme.TextColour) { X = this.xPositionOnScreen + 220, Y = this.yPositionOnScreen + 110, Width = 460, Height = 44 };
+            this.AmountBox = new TextBox(textBox, null, Game1.smallFont, UiTheme.TextColour) { X = this.xPositionOnScreen + 220, Y = this.yPositionOnScreen + 180, Width = 260, Height = 44 };
             this.NameBounds = new Rectangle(this.NameBox.X, this.NameBox.Y, this.NameBox.Width, this.NameBox.Height);
             this.AmountBounds = new Rectangle(this.AmountBox.X, this.AmountBox.Y, this.AmountBox.Width, this.AmountBox.Height);
 
@@ -175,6 +175,14 @@ namespace StardewLogistics.Menus
         /// <inheritdoc />
         public override void draw(SpriteBatch b)
         {
+            // In the chosen colour scheme, tooltips included.
+            using (UiTheme.Apply())
+                this.DrawThemed(b);
+        }
+
+        /// <summary>Draws the menu, with the colour scheme in effect.</summary>
+        private void DrawThemed(SpriteBatch b)
+        {
             b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.5f);
             drawTextureBox(b, this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White);
 
@@ -230,7 +238,7 @@ namespace StardewLogistics.Menus
             bool canSave = this.TryGetEntry(out _, out _);
             foreach ((Rectangle bounds, string key, Color tint) in new[] { (this.CancelButton, "sell.cancel", Color.White), (this.SaveButton, "expense.save", canSave ? Color.LightGreen : Color.Gray) })
             {
-                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), bounds.X, bounds.Y, bounds.Width, bounds.Height, tint, 2f, drawShadow: false);
+                UiTheme.DrawButton(b, new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height), tint, 2f);
                 string label = this.Translations.Get(key);
                 Vector2 size = Game1.smallFont.MeasureString(label);
                 Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(bounds.Center.X - (size.X / 2), bounds.Center.Y - (size.Y / 2)), Game1.textColor);

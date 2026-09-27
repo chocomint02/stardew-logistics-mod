@@ -66,26 +66,19 @@ namespace StardewLogistics.Menus
         /*********
         ** Private methods: shared chrome
         *********/
-        /// <summary>Draws the title, tabs, search box and the Items-tab toolbar.</summary>
-        private void DrawHeader(SpriteBatch b)
+        /// <summary>Draws the tabs, with the active one's highlight gliding to it when the tab changes.</summary>
+        private void DrawTabs(SpriteBatch b)
         {
+            foreach (ClickableComponent tab in this.TabButtons)
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), tab.bounds.X, tab.bounds.Y, tab.bounds.Width, tab.bounds.Height, Color.White * 0.65f, 3f, drawShadow: false);
+
+            Rectangle highlight = this.GetTabHighlight();
+            if (!highlight.IsEmpty)
+                drawTextureBox(b, Game1.mouseCursors, new Rectangle(384, 396, 15, 15), highlight.X, highlight.Y, highlight.Width, highlight.Height, Color.White, 3f, drawShadow: false);
+
             foreach (ClickableComponent tab in this.TabButtons)
             {
                 bool active = this.Tab.ToString() == tab.name;
-
-                drawTextureBox(
-                    b,
-                    Game1.mouseCursors,
-                    new Rectangle(384, 396, 15, 15),
-                    tab.bounds.X,
-                    tab.bounds.Y,
-                    tab.bounds.Width,
-                    tab.bounds.Height,
-                    active ? Color.White : Color.White * 0.65f,
-                    3f,
-                    drawShadow: false
-                );
-
                 Utility.drawTextWithShadow(
                     b,
                     this.GetTabLabel(tab.name),
@@ -94,7 +87,11 @@ namespace StardewLogistics.Menus
                     active ? Game1.textColor : Game1.textColor * 0.7f
                 );
             }
+        }
 
+        /// <summary>Draws the search box and toolbar, on the tabs that have them.</summary>
+        private void DrawHeader(SpriteBatch b)
+        {
             if (!this.TabHasSearch)
                 return;
 
@@ -212,7 +209,7 @@ namespace StardewLogistics.Menus
                     NetworkItemStack entry = this.VisibleStock[index];
                     // The count is drawn separately on its own plate; the game still draws the quality star, which is
                     // the only way to tell a gold stack from a normal one.
-                    (entry.Icon ?? entry.Sample).drawInMenu(b, new Vector2(x, y), 1f, 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
+                    (entry.Icon ?? entry.Sample).drawInMenu(b, new Vector2(x, y), this.GridScale(index), 1f, 0.9f, StackDrawType.HideButShowQuality, Color.White, drawShadow: true);
 
                     // Vanilla stack numbers max out long before a network does, so draw the count ourselves.
                     DrawSlotCount(b, NumberFormat.Abbreviate(entry.Count), x, y);
@@ -556,7 +553,7 @@ namespace StardewLogistics.Menus
             string status = transmitter != null
                 ? this.Translations.Get("wireless-terminal.linked", new { location = transmitter.Location?.GetDisplayName() ?? transmitter.Location?.Name, x = (int)transmitter.Tile.X, y = (int)transmitter.Tile.Y })
                 : this.Translations.Get("wireless-terminal.unlinked", new { channel = this.WirelessChannel });
-            Marquee.DrawWrapped(b, status, Game1.smallFont, new Vector2(grid.X + 16, minus.Bottom + 12), grid.Width - 32, transmitter != null ? new Color(40, 120, 40) : Color.Firebrick, maxLines: 1);
+            Marquee.DrawWrapped(b, status, Game1.smallFont, new Vector2(grid.X + 16, minus.Bottom + 12), grid.Width - 32, transmitter != null ? UiTheme.Good : UiTheme.Bad, maxLines: 1);
         }
 
         /// <summary>Handles a click on the Wireless Terminal's channel buttons.</summary>
