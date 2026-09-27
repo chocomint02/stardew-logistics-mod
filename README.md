@@ -11,7 +11,7 @@ Requires **Stardew Valley 1.6** and **SMAPI 4.0** or later. Built and tested on 
 - [Installation](#installation)
 - [Getting started](#getting-started)
 - [Items](#items)
-- [The terminal](#the-terminal)
+- [Terminal](#the-terminal)
 - [Storage](#storage)
 - [Autocrafting](#autocrafting)
 - [Minimum stock](#minimum-stock)
@@ -21,11 +21,11 @@ Requires **Stardew Valley 1.6** and **SMAPI 4.0** or later. Built and tested on 
 - [Income](#income)
 - [Multiplayer](#multiplayer)
 - [Configuration](#configuration)
-- [Console commands](#console-commands)
+- [Console Commands](#console-commands)
 - [Compatibility](#compatibility)
-- [Known limitations](#known-limitations)
+- [Known Limitations](#known-limitations)
 - [Building](#building)
-- [Project layout](#project-layout)
+- [Project Layout](#project-layout)
 
 ---
 
